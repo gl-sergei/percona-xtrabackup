@@ -2386,7 +2386,7 @@ swift_parse_keystone_response_v3(char *response, size_t response_length,
 }
 
 /*********************************************************************//**
-Captures X-Subject-Ton header. */
+Captures X-Subject-Token header. */
 static
 size_t keystone_v3_header_cb(char *ptr, size_t size, size_t nmemb, void *data)
 {
