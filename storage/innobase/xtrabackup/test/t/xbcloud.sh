@@ -14,6 +14,8 @@
 
 . inc/common.sh
 
+[ $[1 + $[ RANDOM % 5 ]] == 1 ] || skip_test "Skipping"
+
 [ "${XBCLOUD_CREDENTIALS:-unset}" == "unset" ] && \
 	skip_test "Requires XBCLOUD_CREDENTIALS"
 
