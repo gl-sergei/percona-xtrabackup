@@ -2599,7 +2599,7 @@ int main(int argc, char **argv)
 			 opt_swift_storage_url);
 	}
 
-	fprintf(stderr, "Object sore URL: %s\n", info.url);
+	fprintf(stderr, "Object store URL: %s\n", info.url);
 
 	if (opt_mode == MODE_PUT) {
 
