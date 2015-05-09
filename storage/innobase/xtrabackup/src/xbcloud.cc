@@ -1797,7 +1797,7 @@ swift_list(swift_auth_info *auth, const char *container, const char *path)
 
 		/* download the list in json format */
 		snprintf(url, array_elements(url),
-			 "%s/%s?format=json&limit=10%s%s%s%s",
+			 "%s/%s?format=json&limit=1000%s%s%s%s",
 			 auth->url, container, path ? "&prefix=" : "",
 			 path ? path : "", list->idx > 0 ? "&marker=" : "",
 			 list->idx > 0 ?
