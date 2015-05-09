@@ -105,6 +105,7 @@ struct connection_info_struct {
 	size_t filled_size;
 	size_t upload_size;
 	bool chunk_uploaded;
+	bool chunk_acked;
 	char error[CURL_ERROR_SIZE];
 	struct curl_slist *slist;
 	char *name;
@@ -731,9 +732,7 @@ static int conn_upload_init(connection_info *conn);
 static void conn_buffer_updated(connection_info *conn);
 static connection_info *conn_new(global_io_info *global, ulong global_idx);
 static void conn_cleanup(connection_info *conn);
-#if !(OLD_CURL_MULTI)
 static void conn_upload_retry(connection_info *conn);
-#endif
 
 /* Check for completed transfers, and remove their easy handles */
 static void check_multi_info(global_io_info *g)
@@ -753,6 +752,18 @@ static void check_multi_info(global_io_info *g)
 			curl_multi_remove_handle(g->multi, easy);
 			curl_easy_cleanup(easy);
 			conn->easy = NULL;
+			if (conn->chunk_acked) {
+				conn->chunk_uploaded = true;
+			} else {
+				fprintf(stderr, "error: chunk %zu '%s' %s "
+					"is not uploaded, but socket closed "
+					"(%zu bytes left to upload)\n",
+					conn->chunk_no,
+					conn->name,
+					conn->hash,
+					conn->chunk_size - conn->upload_size);
+				conn_upload_retry(conn);
+			}
 		}
 	}
 }
@@ -870,25 +881,6 @@ static int sock_cb(CURL *easy, curl_socket_t s, int what, void *cbp,
 	socket_info *fdp = (socket_info*)(sockp);
 
 	if (what == CURL_POLL_REMOVE) {
-#if !(OLD_CURL_MULTI)
-		connection_info *conn;
-		uint i;
-
-		for (i = 0; i < opt_parallel; i++) {
-			conn = global->connections[i];
-			if (conn->easy == easy && !conn->chunk_uploaded) {
-				fprintf(stderr, "error: chunk %zu '%s' %s "
-					"is not uploaded, but socket closed "
-					"(%zu bytes left to upload)\n",
-					conn->chunk_no,
-					conn->name,
-					conn->hash,
-					conn->chunk_size - conn->upload_size);
-				conn_upload_retry(conn);
-			}
-		}
-#endif
-
 		remsock(s, fdp, global);
 	} else {
 		if (!fdp) {
@@ -1028,7 +1020,7 @@ size_t upload_header_read_cb(char *ptr, size_t size, size_t nmemb,
 			exit(EXIT_FAILURE);
 		}
 		fprintf(stderr, "acked chunk %s\n", etag);
-		conn->chunk_uploaded = true;
+		conn->chunk_acked = true;
 	}
 
 	return nmemb * size;
@@ -1038,7 +1030,8 @@ static int conn_upload_init(connection_info *conn)
 {
 	conn->filled_size = 0;
 	conn->upload_size = 0;
-	conn->chunk_uploaded = 0;
+	conn->chunk_uploaded = false;
+	conn->chunk_acked = false;
 	conn->chunk_size = CHUNK_HEADER_CONSTANT_LEN;
 	conn->magic_verified = false;
 	conn->chunk_path_len = 0;
@@ -1135,8 +1128,8 @@ static int conn_upload_start(connection_info *conn)
 
 #if (OLD_CURL_MULTI)
 	do {
-		rc = curl_multi_socket_all(conn->global->multi,
-					   &conn->global->still_running);
+		rc = curl_multi_socket_all(global->multi,
+					   &global->still_running);
 	} while(rc == CURLM_CALL_MULTI_PERFORM);
 #endif
 
@@ -1162,7 +1155,6 @@ static void conn_cleanup(connection_info *conn)
 	free(conn);
 }
 
-#if !(OLD_CURL_MULTI)
 static void conn_upload_retry(connection_info *conn)
 {
 	/* already closed by cURL */
@@ -1185,7 +1177,6 @@ static void conn_upload_retry(connection_info *conn)
 
 	conn_upload_start(conn);
 }
-#endif
 
 static connection_info *conn_new(global_io_info *global, ulong global_idx)
 {
@@ -1368,6 +1359,7 @@ int swift_upload_parts(swift_auth_info *auth, const char *container,
 	curl_multi_setopt(io_global.multi, CURLMOPT_SOCKETFUNCTION, sock_cb);
 	curl_multi_setopt(io_global.multi, CURLMOPT_SOCKETDATA, &io_global);
 #if !(OLD_CURL_MULTI)
+	curl_multi_setopt(io_global.multi, CURLMOPT_PIPELINING, true);
 	curl_multi_setopt(io_global.multi, CURLMOPT_TIMERFUNCTION, multi_timer_cb);
 	curl_multi_setopt(io_global.multi, CURLMOPT_TIMERDATA, &io_global);
 	do {
