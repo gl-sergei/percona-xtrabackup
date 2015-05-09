@@ -162,7 +162,7 @@ static const char *opt_swift_domain_id = NULL;
 static const char *opt_swift_region = NULL; 
 static const char *opt_swift_container = NULL;
 static const char *opt_swift_storage_url = NULL;
-static const char *opt_swift_url = NULL;
+static const char *opt_swift_auth_url = NULL;
 static const char *opt_swift_key = NULL;
 static const char *opt_swift_auth_version = NULL;
 static const char *opt_name = NULL;
@@ -180,7 +180,7 @@ TYPELIB storage_typelib =
 enum {
 	OPT_STORAGE = 256,
 	OPT_SWIFT_CONTAINER,
-	OPT_SWIFT_URL,
+	OPT_SWIFT_AUTH_URL,
 	OPT_SWIFT_KEY,
 	OPT_SWIFT_USER,
 	OPT_SWIFT_USER_ID,
@@ -232,9 +232,10 @@ static struct my_option my_long_options[] =
 	 &opt_swift_user_id, &opt_swift_user_id, 0, GET_STR_ALLOC, REQUIRED_ARG,
 	 0, 0, 0, 0, 0, 0},
 
-	{"swift-url", OPT_SWIFT_URL,
+	{"swift-auth-url", OPT_SWIFT_AUTH_URL,
 	 "Base URL of SWIFT authentication service.",
-	 &opt_swift_url, &opt_swift_url, 0, GET_STR_ALLOC, REQUIRED_ARG,
+	 &opt_swift_auth_url, &opt_swift_auth_url, 0,
+	 GET_STR_ALLOC, REQUIRED_ARG,
 	 0, 0, 0, 0, 0, 0},
 
 	{"swift-storage-url", OPT_SWIFT_STORAGE_URL,
@@ -400,7 +401,7 @@ int parse_args(int argc, char **argv)
 
 	/* make sure name is specified */
 	if (argc < 1) {
-		fprintf(stderr, "object name is required argument\n");
+		fprintf(stderr, "Backup name is required argument\n");
 		exit(EXIT_FAILURE);
 	}
 	opt_name = argv[0];
@@ -409,16 +410,16 @@ int parse_args(int argc, char **argv)
 	/* validate arguments */
 	if (opt_storage == SWIFT) {
 		if (opt_swift_user == NULL) {
-			fprintf(stderr, "user for Swift is not specified\n");
+			fprintf(stderr, "Swift user is not specified\n");
 			exit(EXIT_FAILURE);
 		}
 		if (opt_swift_container == NULL) {
 			fprintf(stderr,
-				"container for Swift is not specified\n");
+				"Swift container is not specified\n");
 			exit(EXIT_FAILURE);
 		}
-		if (opt_swift_url == NULL) {
-			fprintf(stderr, "URL for Swift is not specified\n");
+		if (opt_swift_auth_url == NULL) {
+			fprintf(stderr, "Swift auth URL is not specified\n");
 			exit(EXIT_FAILURE);
 		}
 	} else {
@@ -818,7 +819,7 @@ static void event_cb(EV_P_ struct ev_io *w, int revents)
 				       &global->still_running);
 	} while (rc == CURLM_CALL_MULTI_PERFORM);
 #endif
-	mcode_or_die("event_cb: curl_multi_socket_action", rc);
+	mcode_or_die("error: event_cb: curl_multi_socket_action", rc);
 	check_multi_info(global);
 	if (global->still_running <= 0) {
 		ev_timer_stop(global->loop, &global->timer_event);
@@ -1023,7 +1024,7 @@ size_t upload_header_read_cb(char *ptr, size_t size, size_t nmemb,
 
 	if (get_http_header("Etag: ", ptr, etag, array_elements(etag))) {
 		if (strcmp(conn->hash, etag) != 0) {
-			fprintf(stderr, "etag mismatch\n");
+			fprintf(stderr, "erorr: etag mismatch\n");
 			exit(EXIT_FAILURE);
 		}
 		fprintf(stderr, "acked chunk %s\n", etag);
@@ -1106,7 +1107,7 @@ static int conn_upload_start(connection_info *conn)
 
 	conn->easy = curl_easy_init();
 	if (!conn->easy) {
-		fprintf(stderr, "curl_easy_init() failed\n");
+		fprintf(stderr, "error: curl_easy_init() failed\n");
 		return 1;
 	}
 	curl_easy_setopt(conn->easy, CURLOPT_URL, object_url);
@@ -1210,7 +1211,7 @@ error:
 		conn_cleanup(conn);
 	}
 
-	fprintf(stderr, "out of memory\n");
+	fprintf(stderr, "error: out of memory\n");
 	exit(EXIT_FAILURE);
 
 	return NULL;
@@ -1392,7 +1393,7 @@ int swift_upload_parts(swift_auth_info *auth, const char *container,
 	for (i = 0; i < opt_parallel; i++) {
 		connection_info *conn = io_global.connections[i];
 		if (conn && conn->upload_size != conn->filled_size) {
-			fprintf(stderr, "upload failed: %lu bytes left "
+			fprintf(stderr, "error: upload failed: %lu bytes left "
 				"in the buffer %s (uploaded = %d)\n",
 				(ulong)(conn->filled_size - conn->upload_size),
 				conn->name, conn->chunk_uploaded);
@@ -1960,7 +1961,7 @@ bool swift_backup_exists(swift_auth_info *auth, const char *container,
 	container_list *list;
 
 	if ((list = swift_list(auth, container, backup_name)) == NULL) {
-		fprintf(stderr, "Error: unable to list container %s\n",
+		fprintf(stderr, "error: unable to list container %s\n",
 			container);
 		exit(EXIT_FAILURE);
 	}
@@ -2564,31 +2565,31 @@ int main(int argc, char **argv)
 	if (opt_swift_auth_version == NULL || *opt_swift_auth_version == '1') {
 		/* TempAuth */
 		snprintf(auth_url, SWIFT_MAX_URL_SIZE, "%sauth/v%s/",
-			 opt_swift_url, opt_swift_auth_version ?
+			 opt_swift_auth_url, opt_swift_auth_version ?
 			 			opt_swift_auth_version : "1.0");
 
 		if (!swift_temp_auth(auth_url, &info)) {
-			fprintf(stderr, "failed to authenticate\n");
+			fprintf(stderr, "error: failed to authenticate\n");
 			return(EXIT_FAILURE);
 		}
 
 	} else if (*opt_swift_auth_version == '2') {
 		/* Keystone v2 */
 		snprintf(auth_url, SWIFT_MAX_URL_SIZE, "%sv%s/tokens",
-			 opt_swift_url, opt_swift_auth_version);
+			 opt_swift_auth_url, opt_swift_auth_version);
 
 		if (!swift_keystone_auth_v2(auth_url, &info)) {
-			fprintf(stderr, "failed to authenticate\n");
+			fprintf(stderr, "error: failed to authenticate\n");
 			return(EXIT_FAILURE);
 		}
 
 	} else if (*opt_swift_auth_version == '3') {
 		/* Keystone v3 */
 		snprintf(auth_url, SWIFT_MAX_URL_SIZE, "%sv%s/auth/tokens",
-			 opt_swift_url, opt_swift_auth_version);
+			 opt_swift_auth_url, opt_swift_auth_version);
 
 		if (!swift_keystone_auth_v3(auth_url, &info)) {
-			fprintf(stderr, "failed to authenticate\n");
+			fprintf(stderr, "error: failed to authenticate\n");
 			exit(EXIT_FAILURE);
 		}
 
@@ -2604,20 +2605,22 @@ int main(int argc, char **argv)
 	if (opt_mode == MODE_PUT) {
 
 		if (swift_create_container(&info, opt_swift_container) != 0) {
-			fprintf(stderr, "failed to create container %s\n",
+			fprintf(stderr, "error: failed to create "
+				"container %s\n",
 				opt_swift_container);
 			return(EXIT_FAILURE);
 		}
 
 		if (swift_backup_exists(&info, opt_swift_container, opt_name)) {
-			fprintf(stderr, "backup named '%s' already exists!\n",
+			fprintf(stderr, "error: backup named '%s' "
+				"already exists!\n",
 				opt_name);
 			return(EXIT_FAILURE);
 		}
 
 		if (swift_upload_parts(&info, opt_swift_container,
 					opt_name) != 0) {
-			fprintf(stderr, "upload failed\n");
+			fprintf(stderr, "error: upload failed\n");
 			return(EXIT_FAILURE);
 		}
 
@@ -2625,7 +2628,7 @@ int main(int argc, char **argv)
 
 		if (swift_download(&info, opt_swift_container, opt_name)
 				   != CURLE_OK) {
-			fprintf(stderr, "download failed\n");
+			fprintf(stderr, "error: download failed\n");
 			return(EXIT_FAILURE);
 		}
 
@@ -2633,7 +2636,7 @@ int main(int argc, char **argv)
 
 		if (swift_delete(&info, opt_swift_container, opt_name)
 				   != CURLE_OK) {
-			fprintf(stderr, "delete failed\n");
+			fprintf(stderr, "error: delete failed\n");
 			return(EXIT_FAILURE);
 		}
 
