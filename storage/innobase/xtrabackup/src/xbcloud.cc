@@ -758,11 +758,12 @@ static void check_multi_info(global_io_info *g)
 			} else {
 				fprintf(stderr, "error: chunk %zu '%s' %s "
 					"is not uploaded, but socket closed "
-					"(%zu bytes left to upload)\n",
+					"(%zu bytes of %zu left to upload)\n",
 					conn->chunk_no,
 					conn->name,
 					conn->hash,
-					conn->chunk_size - conn->upload_size);
+					conn->chunk_size - conn->upload_size,
+					conn->chunk_size);
 				conn_upload_retry(conn);
 			}
 		}
@@ -1070,7 +1071,7 @@ static int conn_upload_start(connection_info *conn)
 {
 	char token_header[SWIFT_MAX_HDR_SIZE];
 	char object_url[SWIFT_MAX_URL_SIZE];
-	char content_len[200];
+	char content_len[200], etag[200];
 	global_io_info *global;
 	CURLMcode rc;
 
@@ -1088,6 +1089,8 @@ static int conn_upload_start(connection_info *conn)
 	snprintf(content_len, sizeof(content_len), "Content-Length: %lu",
 		(ulong)(conn->chunk_size));
 
+	snprintf(etag, sizeof(etag), "ETag: %s", conn->hash);
+
 	snprintf(token_header, array_elements(token_header),
 		 "X-Auth-Token: %s", global->token);
 
@@ -1098,6 +1101,7 @@ static int conn_upload_start(connection_info *conn)
 					"Content-Type: "
 					"application/octet-stream");
 	conn->slist = curl_slist_append(conn->slist, content_len);
+	conn->slist = curl_slist_append(conn->slist, etag);
 
 	conn->easy = curl_easy_init();
 	if (!conn->easy) {
@@ -1112,7 +1116,7 @@ static int conn_upload_start(connection_info *conn)
 	curl_easy_setopt(conn->easy, CURLOPT_ERRORBUFFER, conn->error);
 	curl_easy_setopt(conn->easy, CURLOPT_PRIVATE, conn);
 	curl_easy_setopt(conn->easy, CURLOPT_NOPROGRESS, 1L);
-	curl_easy_setopt(conn->easy, CURLOPT_LOW_SPEED_TIME, 1L);
+	curl_easy_setopt(conn->easy, CURLOPT_LOW_SPEED_TIME, 5L);
 	curl_easy_setopt(conn->easy, CURLOPT_LOW_SPEED_LIMIT, 1024L);
 	curl_easy_setopt(conn->easy, CURLOPT_PUT, 1L);
 	curl_easy_setopt(conn->easy, CURLOPT_HTTPHEADER, conn->slist);
