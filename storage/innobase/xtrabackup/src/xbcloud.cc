@@ -754,6 +754,7 @@ static void check_multi_info(global_io_info *g)
 			conn->easy = NULL;
 			if (conn->chunk_acked) {
 				conn->chunk_uploaded = true;
+				fprintf(stderr, "%s is done\n", conn->hash);
 			} else {
 				fprintf(stderr, "error: chunk %zu '%s' %s "
 					"is not uploaded, but socket closed "
@@ -1111,8 +1112,8 @@ static int conn_upload_start(connection_info *conn)
 	curl_easy_setopt(conn->easy, CURLOPT_ERRORBUFFER, conn->error);
 	curl_easy_setopt(conn->easy, CURLOPT_PRIVATE, conn);
 	curl_easy_setopt(conn->easy, CURLOPT_NOPROGRESS, 1L);
-	curl_easy_setopt(conn->easy, CURLOPT_LOW_SPEED_TIME, 3L);
-	curl_easy_setopt(conn->easy, CURLOPT_LOW_SPEED_LIMIT, 10L);
+	curl_easy_setopt(conn->easy, CURLOPT_LOW_SPEED_TIME, 1L);
+	curl_easy_setopt(conn->easy, CURLOPT_LOW_SPEED_LIMIT, 1024L);
 	curl_easy_setopt(conn->easy, CURLOPT_PUT, 1L);
 	curl_easy_setopt(conn->easy, CURLOPT_HTTPHEADER, conn->slist);
 	curl_easy_setopt(conn->easy, CURLOPT_HEADERFUNCTION,
@@ -1317,7 +1318,7 @@ static int multi_timer_cb(CURLM *multi, long timeout_ms, global_io_info *global)
 {
 	ev_timer_stop(global->loop, &global->timer_event);
 	if (timeout_ms > 0) {
-		double  t = timeout_ms / 1000;
+		double  t = timeout_ms / 1000.0;
 		ev_timer_init(&global->timer_event, timer_cb, t, 0.);
 		ev_timer_start(global->loop, &global->timer_event);
 	} else {
@@ -1359,7 +1360,6 @@ int swift_upload_parts(swift_auth_info *auth, const char *container,
 	curl_multi_setopt(io_global.multi, CURLMOPT_SOCKETFUNCTION, sock_cb);
 	curl_multi_setopt(io_global.multi, CURLMOPT_SOCKETDATA, &io_global);
 #if !(OLD_CURL_MULTI)
-	curl_multi_setopt(io_global.multi, CURLMOPT_PIPELINING, true);
 	curl_multi_setopt(io_global.multi, CURLMOPT_TIMERFUNCTION, multi_timer_cb);
 	curl_multi_setopt(io_global.multi, CURLMOPT_TIMERDATA, &io_global);
 	do {
