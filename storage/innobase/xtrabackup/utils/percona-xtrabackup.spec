@@ -6,7 +6,7 @@
 %define xb_revision       @@XB_REVISION@@
 
 #####################################
-Name:           percona-xtrabackup
+Name:           percona-xtrabackup-23
 Version:        %{xb_version_major}.%{xb_version_minor}.%{xb_version_patch}
 Release:        %{xb_rpm_version_extra}%{?dist}
 Summary:        XtraBackup online backup for MySQL / InnoDB
@@ -16,26 +16,32 @@ License:        GPLv2
 URL:            http://www.percona.com/software/percona-xtrabackup
 Source:         percona-xtrabackup-%{version}%{xb_version_extra}.tar.gz
 
-BuildRequires:  cmake, libaio-devel, libgcrypt-devel, ncurses-devel, readline-devel, zlib-devel
-%if 0%{?rhel} > 6
-BuildRequires:  python-sphinx >= 1.0.1, python-docutils >= 0.6
+BuildRequires:  cmake, libaio-devel, libgcrypt-devel, ncurses-devel, readline-devel, zlib-devel, libev-devel
+%if 0%{?rhel} > 5
+BuildRequires:  libcurl-devel
 %else
-BuildRequires:  python-sphinx10 >= 1.0.1, python-docutils >= 0.6
+BuildRequires:  curl-devel
 %endif
+%if 0%{?rhel} > 6 
+BuildRequires:  python-sphinx >= 1.0.1, python-docutils >= 0.6 
+%else
+BuildRequires:  python-sphinx10 >= 1.0.1, python-docutils >= 0.6 
+%endif
+Conflicts:      percona-xtrabackup, percona-xtrabackup-21
 Requires:       perl(DBD::mysql), rsync
 BuildRoot:      %{_tmppath}/%{name}-%{version}-root
 
 %description
 Percona XtraBackup is OpenSource online (non-blockable) backup solution for InnoDB and XtraDB engines
 
-%package -n percona-xtrabackup-test
+%package -n percona-xtrabackup-test-23
 Summary:        Test suite for Percona XtraBackup
 Group:          Applications/Databases
-Requires:       percona-xtrabackup = %{version}-%{release}
+Requires:       percona-xtrabackup-23 = %{version}-%{release}
 Requires:       /usr/bin/mysql
 AutoReqProv:    no
 
-%description -n percona-xtrabackup-test
+%description -n percona-xtrabackup-test-23
 This package contains the test suite for Percona XtraBackup %{version}
 
 %prep
@@ -50,6 +56,7 @@ This package contains the test suite for Percona XtraBackup %{version}
 echo 'main() { return 300; }' | gcc -x c - -o storage/innobase/xtrabackup/src/xtrabackup
 echo 'main() { return 300; }' | gcc -x c - -o storage/innobase/xtrabackup/src/xbstream
 echo 'main() { return 300; }' | gcc -x c - -o storage/innobase/xtrabackup/src/xbcrypt
+echo 'main() { return 300; }' | gcc -x c - -o storage/innobase/xtrabackup/src/xbcloud
 #
 %else
 #
@@ -78,10 +85,11 @@ rm -rf $RPM_BUILD_ROOT
 %{_bindir}/xtrabackup
 %{_bindir}/xbstream
 %{_bindir}/xbcrypt
+%{_bindir}/xbcloud
 %doc COPYING
 %doc %{_mandir}/man1/*.1.gz
 
-%files -n percona-xtrabackup-test
+%files -n percona-xtrabackup-test-23
 %defattr(-,root,root,-)
 %{_datadir}/percona-xtrabackup-test
 
