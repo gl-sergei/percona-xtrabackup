@@ -100,7 +100,7 @@ explain extended select * from t1 where a in (select t10.pk from t10, t12 where 
 # TODO: psergey: check if case conversions like those are ok (it broke on  windows)
 --replace_result a A b B
 explain extended
-select * from t1 left join (t2 A, t2 B) on ( A.a= t1.a and B.a in (select pk from t10));
+select * from t1 left join (t2 a, t2 b) on ( a.a= t1.a and b.a in (select pk from t10));
 
 # TODO: psergey: check if case conversions like those are ok (it broke on  windows)
 --echo t2 should be wrapped into OJ-nest, so we have "t1 LJ (t2 J t10)"
@@ -379,8 +379,8 @@ create table t1(a int);
 insert into t1 values (0),(1);
 
 explain 
-select (select max(Y.a) from t1 Y where a in (select a from t1 Z) and a < X.a) as subq from t1 X;
-select (select max(Y.a) from t1 Y where a in (select a from t1 Z) and a < X.a) as subq from t1 X;
+select (select max(y.a) from t1 y where a in (select a from t1 z) and a < x.a) as subq from t1 x;
+select (select max(y.a) from t1 y where a in (select a from t1 z) and a < x.a) as subq from t1 x;
 
 drop table t1;
 
@@ -448,17 +448,17 @@ set @@max_heap_table_size= 16384;
 --echo # and optimizer_join_cache_level equals 1 and 0, respectively.
 --echo # Finally execute a test that does not overflow the heap table.
 explain
-select count(*) from t0 A, t0 B, t0 C
-where C.a in (select a from t1 D);
+select count(*) from t0 a, t0 b, t0 c
+where c.a in (select a from t1 d);
 flush status;
-select count(*) from t0 A, t0 B, t0 C
-where C.a in (select a from t1 D);
+select count(*) from t0 a, t0 b, t0 c
+where c.a in (select a from t1 d);
 show status like 'Created_tmp_disk_tables';
 
 set @@max_heap_table_size= @save_max_heap_table_size;
 flush status;
-select count(*) from t0 A, t0 B, t0 C
-where C.a in (select a from t1 D);
+select count(*) from t0 a, t0 b, t0 c
+where c.a in (select a from t1 d);
 show status like 'Created_tmp_disk_tables';
 
 drop table t0, t1;
@@ -506,16 +506,17 @@ create table t2 as select * from t1;
 create table t3 (a int, b int, filler char(100), key(a));
 insert into t3 select A.a + 10*B.a, A.a + 10*B.a, 'filler' from t1 A, t1 B, t1 C;
 explain select * from t1, t3 where t3.a in (select a from t2) and (t3.a < 10 or t3.a >30) and t1.a =3;
+--replace_regex /"rows_produced_per_join": 792/"rows_produced_per_join": 793/
 explain format=json select * from t1, t3 where t3.a in (select a from t2) and (t3.a < 10 or t3.a >30) and t1.a =3;
 
 #
 # Verify that straight_join modifier in parent or child prevents flattening
 #
-explain select straight_join * from t1 A, t1 B where A.a in (select a from t2);
-explain select * from t2 where a in (select straight_join A.a from t1 A, t1 B);
-explain select * from t2 where a in (select straight_join A.a from t1 A, t1 B);
-explain select straight_join * from t2 X, t2 Y 
-where X.a in (select straight_join A.a from t1 A, t1 B);
+explain select straight_join * from t1 a, t1 b where a.a in (select a from t2);
+explain select * from t2 where a in (select straight_join a.a from t1 a, t1 b);
+explain select * from t2 where a in (select straight_join a.a from t1 a, t1 b);
+explain select straight_join * from t2 x, t2 y 
+where x.a in (select straight_join a.a from t1 a, t1 b);
 
 #
 # SJ-Materialization scan + first table being system const table
@@ -553,6 +554,44 @@ explain select * from t1 where (a,b) in (select a,b from t2);
 
 drop table t0, t1, t2;
 
+--echo #
+--echo # Bug#19695490: CRASH IN CREATE_REF_FOR_KEY ON SELECT + JOIN + UTF8 COLUMN
+--echo #                + DATETIME INDEX.
+--echo #
+
+CREATE TABLE t1 (
+  field1 varchar(255) CHARACTER SET utf8,
+  field2 varchar(255) CHARACTER SET utf8
+);
+
+INSERT INTO t1 VALUES
+  ('time','time'),
+  ('lpjdzvkp','lpjdzvkp'),
+  ('dzvkpai', 'dzvkpai');
+
+CREATE TABLE t2 ( col_varchar varchar(10));
+
+CREATE TABLE t3 (
+  pk int(11) NOT NULL,
+  col_varchar_255_utf8_key varchar(255) CHARACTER SET utf8,
+  col_varchar_10_utf8_key varchar(10) CHARACTER SET utf8,
+  PRIMARY KEY (pk)
+);
+
+INSERT INTO t3 VALUES (22,'come','h'),
+ (23,'time','aaa'),
+ (24,'lpjdzvkp','ababa'),
+ (25,'d','GGDD');
+
+SELECT * FROM t1 WHERE (field1, field2) IN (
+  SELECT table1.col_varchar_255_utf8_key AS field1,
+         table1.col_varchar_255_utf8_key AS field2
+  FROM t3 AS table1 LEFT JOIN t2 AS table2
+       ON table1.col_varchar_10_utf8_key <=
+          table2.col_varchar
+  WHERE table1.pk >= 6);
+
+DROP TABLE t1,t2,t3;
 
 #
 # Primitive SJ-Materialization tests for DECIMAL and DATE
@@ -583,7 +622,7 @@ create table t1 as select a as a, a as b, a as c from t0 where a < 3;
 create table t2 as select a as a, a as b from t0 where a < 3;
 insert into t2 select * from t2;
 
-explain select * from t1 where (a,b,c) in (select X.a, Y.a, Z.a from t2 X, t2 Y, t2 Z where X.b=33);
+explain select * from t1 where (a,b,c) in (select x.a, y.a, z.a from t2 x, t2 y, t2 z where x.b=33);
 
 drop table t0,t1,t2;
 
@@ -611,11 +650,11 @@ insert into t2 values (3, 'duplicate ok', 'duplicate ok');
 insert into t2 values (19, 'duplicate ok', 'duplicate ok');
 
 explain select 
- a, mid(filler1, 1,10), length(filler1)=length(filler2) as Z 
+ a, mid(filler1, 1,10), length(filler1)=length(filler2) as z 
 from t1 ot where a in (select a from t2 it);
 --sorted_result
 select 
- a, mid(filler1, 1,10), length(filler1)=length(filler2) as Z 
+ a, mid(filler1, 1,10), length(filler1)=length(filler2) as z 
 from t1 ot where a in (select a from t2 it);
 
 explain select 
@@ -631,11 +670,11 @@ insert into t1 select a+20, 'filler123456', 'filler123456' from t0;
 insert into t1 select a+20, 'filler123456', 'filler123456' from t0;
 
 explain select 
- a, mid(filler1, 1,10), length(filler1)=length(filler2) as Z 
+ a, mid(filler1, 1,10), length(filler1)=length(filler2) as z 
 from t1 ot where a in (select a from t2 it);
 --sorted_result
 select 
- a, mid(filler1, 1,10), length(filler1)=length(filler2) as Z 
+ a, mid(filler1, 1,10), length(filler1)=length(filler2) as z 
 from t1 ot where a in (select a from t2 it);
 
 explain select 
@@ -1592,7 +1631,8 @@ CREATE TABLE t1 (
   KEY time_key (time_key),
   KEY datetime_key (datetime_key),
   KEY varchar_key (varchar_key)
-);
+) ENGINE=MyISaM;
+
 INSERT INTO t1 VALUES 
 (1,0, '00:16:10','2008-09-03 14:25:40','2008-09-03 14:25:40','h','h'),
 (2,7, '00:00:00','2001-01-13 00:00:00','2001-01-13 00:00:00','',''),
@@ -1628,7 +1668,7 @@ CREATE TABLE t2 (
   KEY datetime_key (datetime_key),
   KEY varchar_key (varchar_key)
 );
-INSERT INTO t2 VALUES 
+INSERT IGNORE INTO t2 VALUES 
 (10,0,'19:39:13','0000-00-00 00:00:00','0000-00-00 00:00:00','g','g'),
 (11,8,'03:43:53','0000-00-00 00:00:00','0000-00-00 00:00:00','b','b');
 SELECT OUTR.datetime_nokey AS X FROM t1 AS OUTR 
@@ -1712,12 +1752,6 @@ DROP TABLE t0;
 
 --echo # End of bug#46556
 
-
-# The following test case fails when executed with subquery materialization
-# (Bug#54281).  Hence, skip it if semijoin=off and materialization=on
-if (`select (locate('materialization', @@optimizer_switch) = 0) OR locate('semijoin=on', @@optimizer_switch) + locate('materialization=off', @@optimizer_switch) > 0`) 
-{
-
 --echo
 --echo Bug#48834: Procedure with view + subquery + semijoin=on 
 --echo            crashes on second call.
@@ -1756,8 +1790,6 @@ DROP VIEW v1,v2;
 DROP PROCEDURE p1;
 
 --echo # End of BUG#48834
-}
-
 
 --echo #
 --echo # Bug#46692 "Crash occurring on queries with nested FROM subqueries 
@@ -1829,8 +1861,8 @@ INSERT INTO t1 VALUES (10,7,5,'2009-06-16','2002-04-10 14:25:30','w'),
 		      (15,6,5,'2001-11-12','0000-00-00 00:00:00',''), 
 		      (16,2,9,'0000-00-00','0000-00-00 00:00:00','j'), 
 		      (29,9,1,'0000-00-00','2003-08-11 00:00:00','m');
-INSERT INTO t3 VALUES (1,9,'0000-00-00','b','b'),
-                      (2,2,'2002-09-17','h','h');
+INSERT IGNORE INTO t3 VALUES (1,9,'0000-00-00','b','b'),
+                             (2,2,'2002-09-17','h','h');
 
 SELECT t1.varchar_nokey FROM t1 JOIN t3 ON t1.datetime_nokey
 WHERE t1.varchar_nokey 
@@ -1858,7 +1890,7 @@ CREATE TABLE t1 (
   KEY datetime_key (datetime_key),
   KEY varchar_key (varchar_key)
 );
-INSERT INTO t1 VALUES
+INSERT IGNORE INTO t1 VALUES
 (1,9,'0000-00-00 00:00:00','p'),(2,0,'2002-02-09 07:38:13','v'),
 (3,8,'2001-05-03 12:08:14','t'),(4,3,'0000-00-00 00:00:00','u'),
 (5,7,'2009-07-28 03:43:30','n'),(6,0,'2009-08-04 00:00:00','l'),
@@ -2328,57 +2360,57 @@ DROP TABLE t1;
 --echo #
 --echo # Bug#45191: Incorrectly initialized semi-join led to a wrong result.
 --echo #
-CREATE TABLE STAFF (EMPNUM   CHAR(3) NOT NULL,
+CREATE TABLE staff (EMPNUM   CHAR(3) NOT NULL,
     EMPNAME  CHAR(20), GRADE DECIMAL(4), CITY CHAR(15));
 
-CREATE TABLE PROJ (PNUM CHAR(3) NOT NULL,
+CREATE TABLE proj (PNUM CHAR(3) NOT NULL,
     PNAME    CHAR(20), PTYPE CHAR(6),
     BUDGET   DECIMAL(9),
     CITY     CHAR(15));
 
-CREATE TABLE WORKS (EMPNUM CHAR(3) NOT NULL,
+CREATE TABLE works (EMPNUM CHAR(3) NOT NULL,
     PNUM CHAR(3) NOT NULL, HOURS DECIMAL(5));
-INSERT INTO STAFF VALUES ('E1','Alice',12,'Deale');
-INSERT INTO STAFF VALUES ('E2','Betty',10,'Vienna');
-INSERT INTO STAFF VALUES ('E3','Carmen',13,'Vienna');
-INSERT INTO STAFF VALUES ('E4','Don',12,'Deale');
-INSERT INTO STAFF VALUES ('E5','Ed',13,'Akron');
+INSERT INTO staff VALUES ('E1','Alice',12,'Deale');
+INSERT INTO staff VALUES ('E2','Betty',10,'Vienna');
+INSERT INTO staff VALUES ('E3','Carmen',13,'Vienna');
+INSERT INTO staff VALUES ('E4','Don',12,'Deale');
+INSERT INTO staff VALUES ('E5','Ed',13,'Akron');
 
-INSERT INTO PROJ VALUES  ('P1','MXSS','Design',10000,'Deale');
-INSERT INTO PROJ VALUES  ('P2','CALM','Code',30000,'Vienna');
-INSERT INTO PROJ VALUES  ('P3','SDP','Test',30000,'Tampa');
-INSERT INTO PROJ VALUES  ('P4','SDP','Design',20000,'Deale');
-INSERT INTO PROJ VALUES  ('P5','IRM','Test',10000,'Vienna');
-INSERT INTO PROJ VALUES  ('P6','PAYR','Design',50000,'Deale');
+INSERT INTO proj VALUES  ('P1','MXSS','Design',10000,'Deale');
+INSERT INTO proj VALUES  ('P2','CALM','Code',30000,'Vienna');
+INSERT INTO proj VALUES  ('P3','SDP','Test',30000,'Tampa');
+INSERT INTO proj VALUES  ('P4','SDP','Design',20000,'Deale');
+INSERT INTO proj VALUES  ('P5','IRM','Test',10000,'Vienna');
+INSERT INTO proj VALUES  ('P6','PAYR','Design',50000,'Deale');
 
-INSERT INTO WORKS VALUES  ('E1','P1',40);
-INSERT INTO WORKS VALUES  ('E1','P2',20);
-INSERT INTO WORKS VALUES  ('E1','P3',80);
-INSERT INTO WORKS VALUES  ('E1','P4',20);
-INSERT INTO WORKS VALUES  ('E1','P5',12);
-INSERT INTO WORKS VALUES  ('E1','P6',12);
-INSERT INTO WORKS VALUES  ('E2','P1',40);
-INSERT INTO WORKS VALUES  ('E2','P2',80);
-INSERT INTO WORKS VALUES  ('E3','P2',20);
-INSERT INTO WORKS VALUES  ('E4','P2',20);
-INSERT INTO WORKS VALUES  ('E4','P4',40);
-INSERT INTO WORKS VALUES  ('E4','P5',80);
+INSERT INTO works VALUES  ('E1','P1',40);
+INSERT INTO works VALUES  ('E1','P2',20);
+INSERT INTO works VALUES  ('E1','P3',80);
+INSERT INTO works VALUES  ('E1','P4',20);
+INSERT INTO works VALUES  ('E1','P5',12);
+INSERT INTO works VALUES  ('E1','P6',12);
+INSERT INTO works VALUES  ('E2','P1',40);
+INSERT INTO works VALUES  ('E2','P2',80);
+INSERT INTO works VALUES  ('E3','P2',20);
+INSERT INTO works VALUES  ('E4','P2',20);
+INSERT INTO works VALUES  ('E4','P4',40);
+INSERT INTO works VALUES  ('E4','P5',80);
 
 explain SELECT EMPNUM, EMPNAME
-FROM STAFF
+FROM staff
 WHERE EMPNUM IN
-  (SELECT EMPNUM  FROM WORKS
+  (SELECT EMPNUM  FROM works
    WHERE PNUM IN
-     (SELECT PNUM  FROM PROJ));
+     (SELECT PNUM  FROM proj));
 
 SELECT EMPNUM, EMPNAME
-FROM STAFF
+FROM staff
 WHERE EMPNUM IN
-  (SELECT EMPNUM  FROM WORKS
+  (SELECT EMPNUM  FROM works
    WHERE PNUM IN
-     (SELECT PNUM  FROM PROJ));
+     (SELECT PNUM  FROM proj));
 
-drop table STAFF,WORKS,PROJ;
+drop table staff,works,proj;
 
 --echo # End of bug#45191
 
@@ -3535,10 +3567,10 @@ CREATE TABLE t1 (
   PRIMARY KEY (pk)
 );
 
-INSERT INTO t1 VALUES (1,'o','ffff','ffff','ffoo','ffff','ffff','ffff','ffff','ffff','ffff',GeomFromText('POLYGON((0 0, 0 2, 2 2, 2 0, 0 0))')), (2,'f','ffff','ffff','ffff', 'ffff','ffff','ffff','ffff','ffff','ffff',GeomFromText('POLYGON((0 0, 0 2, 2 2, 2 0, 0 0))'));
+INSERT INTO t1 VALUES (1,'o','ffff','ffff','ffoo','ffff','ffff','ffff','ffff','ffff','ffff',ST_GeomFromText('POLYGON((0 0, 0 2, 2 2, 2 0, 0 0))')), (2,'f','ffff','ffff','ffff', 'ffff','ffff','ffff','ffff','ffff','ffff',ST_GeomFromText('POLYGON((0 0, 0 2, 2 2, 2 0, 0 0))'));
 
 CREATE TABLE t2 LIKE t1;
-INSERT INTO t2 VALUES (1,'i','iiii','iiii','iiii','iiii','ffff','ffff','ffff','ffff','ffff',GeomFromText('POLYGON((0 0, 0 2, 2 2, 2 0, 0 0))')), (2,'f','ffff','ffff','ffff','ffff','ffff','ffff','ffff','ffff','ffff',GeomFromText('POLYGON((0 0, 0 2, 2 2, 2 0, 0 0))'));
+INSERT INTO t2 VALUES (1,'i','iiii','iiii','iiii','iiii','ffff','ffff','ffff','ffff','ffff',ST_GeomFromText('POLYGON((0 0, 0 2, 2 2, 2 0, 0 0))')), (2,'f','ffff','ffff','ffff','ffff','ffff','ffff','ffff','ffff','ffff',ST_GeomFromText('POLYGON((0 0, 0 2, 2 2, 2 0, 0 0))'));
 
 # Test that materialization is skipped for semijoins where materialized
 # table would contain GEOMETRY or different kinds of BLOB/TEXT columns
@@ -4179,7 +4211,8 @@ INSERT INTO t1 VALUES
 (15,2,'a','x'),
 (16,1,'d','d'),
 (17,8,'y','y'),
-(18,6,'t','u');
+(18,6,'t','u'),
+(19,6,'t','u');
 
 CREATE TABLE t2 (
   pk int NOT NULL,
@@ -5057,9 +5090,9 @@ WHERE
   IN
   (
     SELECT
-      SQ2_alias2.col_varchar_nokey, SQ2_alias1.col_varchar_key
+      sq2_alias2.col_varchar_nokey, sq2_alias1.col_varchar_key
     FROM
-      t1 AS SQ2_alias1, t1 AS SQ2_alias2
+      t1 AS sq2_alias1, t1 AS sq2_alias2
   )
 ;
 
@@ -5217,10 +5250,10 @@ CREATE TABLE t3 (
 
 INSERT INTO t3 VALUES ('k','k');
 
-let $query=SELECT GP1.id
-FROM t1 AS GP1 JOIN t3 AS GP2
-     ON GP2.col_varchar_key <> GP1.col_varchar_nokey
-WHERE (GP1.col_varchar_nokey, GP1.col_varchar_nokey)
+let $query=SELECT gp1.id
+FROM t1 AS gp1 JOIN t3 AS gp2
+     ON gp2.col_varchar_key <> gp1.col_varchar_nokey
+WHERE (gp1.col_varchar_nokey, gp1.col_varchar_nokey)
       IN (
            SELECT col_varchar_nokey, col_varchar_nokey
            FROM t1
@@ -5389,6 +5422,8 @@ CREATE TABLE t2 (
 
 INSERT INTO t2 VALUES (7,'2003-08-21 00:00:00','b','b');
 
+ANALYZE TABLE t1, t2;
+
 SET @old_depth=@@optimizer_search_depth;
 SET optimizer_search_depth=4;
 
@@ -5440,9 +5475,12 @@ HAVING (1, 2) IN (
     ON t2.col_varchar_key = t1_inner.col_varchar_key
 );
 
+--source include/turn_off_only_full_group_by.inc
 
 --eval explain $query
 --eval $query
+
+--source include/restore_sql_mode_after_turn_off_only_full_group_by.inc
 
 DROP TABLE t1,t2;
 
@@ -5495,6 +5533,15 @@ FROM t2 AS table1
     )
 ;
 
+--disable_query_log
+--disable_result_log
+ANALYZE TABLE t1;
+ANALYZE TABLE t2;
+ANALYZE TABLE t3;
+--enable_result_log
+--enable_query_log
+
+--replace_result 20.00 25.00
 eval EXPLAIN $query;
 eval $query;
 
@@ -5518,58 +5565,6 @@ eval $query;
 DROP TABLE t1;
 
 --echo # End of test for bug#13838810.
-
---echo #
---echo # BUG#13685026 ASSERTION CUR_SJ_INNER_TABLES == 0 IN
---echo # --OPTIMIZE_TABLE_ORDER::CHOOSE_TABLE_ORDER
---echo #
-
-CREATE TABLE t1 (
-  col_int_key INT(11) NOT NULL,
-  col_datetime_key DATETIME NOT NULL,
-  col_varchar_key VARCHAR(1) NOT NULL,
-  col_varchar_nokey VARCHAR(1) NOT NULL,
-  KEY col_int_key (col_int_key),
-  KEY col_datetime_key (col_datetime_key),
-  KEY col_varchar_key (col_varchar_key,col_int_key)
-);
-
-INSERT INTO t1 VALUES (0,'2002-02-13 17:30:06','j','j');
-INSERT INTO t1 VALUES (8,'2008-09-27 00:34:58','v','v');
-
-CREATE TABLE t2 (
-  col_int_key INT(11) NOT NULL,
-  col_datetime_key DATETIME NOT NULL,
-  col_varchar_key VARCHAR(1) NOT NULL,
-  col_varchar_nokey VARCHAR(1) NOT NULL,
-  KEY col_int_key (col_int_key),
-  KEY col_datetime_key (col_datetime_key),
-  KEY col_varchar_key (col_varchar_key,col_int_key)
-);
-
-INSERT INTO t2 VALUES (7,'2003-08-21 00:00:00','b','b');
-
-SET @old_depth=@@optimizer_search_depth;
-SET optimizer_search_depth=4;
-
-let $query=SELECT col_datetime_key
-FROM t1 as outr
-WHERE col_datetime_key IN (
-  SELECT alias1.col_datetime_key
-  FROM t1 AS alias1
-    LEFT JOIN t1 as alias3
-      STRAIGHT_JOIN ( t2 AS alias4
-        JOIN t1 AS alias5
-        ON alias5.col_varchar_key <= alias4.col_varchar_nokey )
-      ON alias5.col_int_key < alias4.col_int_key
-    ON alias5.col_varchar_key = alias4.col_varchar_key
-);
-
-eval EXPLAIN $query;
-eval $query;
-
-DROP TABLE t1,t2;
-SET @@optimizer_search_depth=@old_depth;
 
 --echo #
 --echo # Bug#13845930: Segfault in st_join_table::and_with_condition
@@ -6013,6 +6008,9 @@ FROM t3 AS sq2_alias1 LEFT OUTER JOIN t3 AS sq2_alias2
 CREATE VIEW view_inline_2 AS
 SELECT 'p', 'p' UNION SELECT 'k', 's';
 
+SET @optimizer_switch_saved= @@optimizer_switch;
+SET @@optimizer_switch="derived_merge=off";
+
 let $query=
 SELECT SUM(alias1.col_varchar_nokey) AS field2
 FROM t2 AS alias2
@@ -6027,6 +6025,8 @@ WHERE (alias1.col_varchar_key, alias1.col_varchar_nokey) IN
 
 eval explain $query;
 eval $query;
+
+SET @@optimizer_switch= @optimizer_switch_saved;
 
 DROP VIEW view_inline_0, view_inline_1, view_inline_2;
 DROP TABLE t1, t2, t3;
@@ -6129,6 +6129,9 @@ CREATE TABLE t3 (
   i INT
 );
 
+SET @optimizer_switch_saved= @@optimizer_switch;
+SET @@optimizer_switch="derived_merge=off";
+
 let $query=
 SELECT table1.pk AS field1
 FROM ( SELECT subquery1_t1. *
@@ -6145,6 +6148,8 @@ WHERE table1.col_varchar_nokey IN
 
 eval explain $query;
 eval $query;
+
+SET @@optimizer_switch= @optimizer_switch_saved;
 
 DROP TABLE t1, t2, t3;
 
@@ -6310,6 +6315,9 @@ CREATE TABLE t2 (
 INSERT INTO t2 VALUES
  ('j','j'), ('v','v'), ('c','c'), ('m','m'), ('d','d'), ('d','d'), ('y','y');
 
+SET @optimizer_switch_saved= @@optimizer_switch;
+SET @@optimizer_switch="derived_merge=off";
+
 let $query=
 SELECT *
 FROM (SELECT * FROM t2) AS derived1
@@ -6322,6 +6330,8 @@ WHERE (col_varchar_nokey, col_varchar_nokey) IN
 
 eval explain format=json $query;
 eval $query;
+
+SET @@optimizer_switch= @optimizer_switch_saved;
 
 DROP TABLE t1, t2;
 
@@ -6523,6 +6533,288 @@ p2, t1 p3 WHERE p0.id=p2.id6 AND p2.id7=p3.id));
 DROP TABLE t1,t2;
 
 set @@optimizer_switch=@old_opt_switch;
-# New tests go here.
 
 --echo # End of 5.6 tests
+
+--echo #
+--echo # Bug#19336348 DEBUG CRASH AT SETUP_SEMIJOIN_DUPS_ELIMINATION IN SQL/SQL_SELECT.CC
+--echo #
+
+CREATE TABLE t1 (
+  col_varchar_nokey varchar(1)
+) ENGINE=InnoDB;
+
+INSERT INTO t1 VALUES ('c'),(NULL),('x');
+
+CREATE TABLE t2 (
+  pk int,
+  col_varchar_key varchar(1),
+  PRIMARY KEY (pk),
+  KEY col_varchar_key (col_varchar_key)
+) ENGINE=InnoDB;
+
+INSERT INTO t2 VALUES (10,'l'),(11,'p');
+
+ANALYZE TABLE t1,t2;
+
+let $query=
+SELECT 1
+FROM t1 AS outr
+WHERE outr.col_varchar_nokey IN
+  (
+    SELECT innr.col_varchar_key
+    FROM t2 AS innr
+    WHERE innr.pk <= 7
+  )
+;
+
+eval EXPLAIN $query;
+eval $query;
+DROP TABLE t1,t2;
+
+--echo #
+--echo # Bug#18174394 BLOBS: CRASH AFTER UNINITIALIZED VALUES IN ITEM_FIELD::STR_RESULT
+--echo #
+## Fixed by the patch for
+## BUG#18447874: WRONG RESULT COMING FROM SEMI-JOIN
+## BUG#18223655: ASSERTION FAILED: (INT)IDX >= 0 && IDX < PARENT_JOIN->TABLES
+
+CREATE TABLE t1(d BLOB, b BLOB);
+INSERT INTO t1(d,b) VALUES ('aaaa',''),('bnbb','');
+
+--error ER_SUBQUERY_NO_1_ROW
+SELECT 1 FROM t1
+WHERE (SELECT b FROM t1) IN (SELECT (d>=1) FROM t1);
+
+DROP TABLE t1;
+
+--echo #
+--echo # Bug#19779600: ASSERT FAILED IN REPLACE_SUBCONDITION WITH IN
+--echo #               PREDICATE INSIDE IN PREDICATE
+--echo #
+
+CREATE TABLE t(X INT) ENGINE=InnoDB;
+INSERT INTO t VALUES (1);
+ANALYZE TABLE t;
+
+let $query=SELECT 1 FROM t WHERE (1 IN (SELECT 1 FROM t)) IN (SELECT 1 FROM t);
+eval EXPLAIN $query;
+eval $query;
+
+DROP TABLE t;
+
+--echo #
+--echo # Bug#19465034 ASSERT ON SETUP_SEMIJOIN_DUPS_ELIMINATION IN SQL/SQL_SELECT.CC
+--echo #
+
+CREATE TABLE t1 (
+  pk INTEGER NOT NULL,
+  i1 INTEGER NOT NULL,
+  PRIMARY KEY (pk)
+) ENGINE=InnoDB;
+
+INSERT INTO t1 VALUES (1,1);
+
+CREATE TABLE t2 (
+  pk INTEGER NOT NULL,
+  c1 VARCHAR(1) NOT NULL,
+  PRIMARY KEY (pk),
+  KEY c1_key (c1)
+) ENGINE=InnoDB;
+
+INSERT INTO t2 VALUES (1,'j'),(2,'v'),(3,'c');
+
+CREATE TABLE t3 (
+  pk INTEGER NOT NULL,
+  c1 VARCHAR(1) NOT NULL,
+  PRIMARY KEY (pk),
+  KEY c1_key (c1)
+) ENGINE=InnoDB;
+
+INSERT INTO t3 VALUES (10,'v'),(11,'s');
+
+ANALYZE TABLE t1, t2, t3;
+
+let $query=
+SELECT *
+FROM t1 JOIN t2 ON t1.i1 >= t2.pk
+WHERE t2.c1 IN (
+  SELECT  t3.c1
+  FROM t3
+  WHERE t3.pk < 3
+);
+
+eval EXPLAIN $query;
+eval $query;
+
+DROP TABLE t1,t2,t3;
+
+--echo #
+--echo # Bug#19586047: CRASH IN ARG_COMPARATOR::SET_CMP_FUNC
+--echo #
+
+CREATE TABLE t1(x INT) ENGINE=InnoDB;
+INSERT INTO t1 VALUES (1);
+ANALYZE TABLE t1;
+
+let $query=SELECT 1 FROM t1 WHERE EXISTS(SELECT 1) IN (SELECT 1 FROM t1);
+eval EXPLAIN $query;
+eval $query;
+
+let $query=
+SELECT 1 FROM t1 WHERE (SELECT 1, 2 FROM t1) IN (SELECT 1, 2 FROM t1);
+eval EXPLAIN $query;
+eval $query;
+
+--echo # The next query is supposed to return zero rows. In some cases
+--echo # it returns one row, because of bug#19822406.
+
+let $query=
+SELECT 1 FROM t1 WHERE
+  (SELECT 1, 2 FROM t1 WHERE x = 2) IN (SELECT 1, 2 FROM t1);
+eval EXPLAIN $query;
+eval $query;
+
+DROP TABLE t1;
+
+--echo #
+--echo #Bug#20119743 ASSERTIONQEP_TAB->USE_ORDER() IN ENUM_NESTED_LOOP_STATE
+--echo #             EVALUATE_JOIN_RECORD
+--echo #
+CREATE TABLE t1 (
+  pk int(11) NOT NULL,
+  col_varchar_nokey varchar(1) DEFAULT NULL,
+  PRIMARY KEY (pk)
+);
+INSERT INTO t1 VALUES (1,'x');
+
+CREATE TABLE t2 (
+  col_date_key date DEFAULT NULL,
+  col_int_key int(11) DEFAULT NULL,
+  col_varchar_key varchar(1) DEFAULT NULL,
+  col_varchar_nokey varchar(1) DEFAULT NULL,
+  KEY col_int_key (col_int_key),
+  KEY col_date_key (col_date_key),
+  KEY col_varchar_key (col_varchar_key,col_int_key)
+);
+INSERT INTO t2 VALUES ('2000-12-03', 8, 'x', 'x'),('2008-05-03', 7, 'd', 'd'),
+('2005-12-06', 1, 'r', 'r'),('2000-04-10', 7, 'f', 'f'),
+('2002-11-05', 9, 'y', 'y'),('2000-09-06', NULL, 'u', 'u'),
+(NULL, 1, 'm', 'm'),('2007-06-14', 9, NULL, NULL),
+('2007-11-17', 2, 'o', 'o'),('2009-02-23', 9, 'w', 'w'),
+('2007-01-08', 2, 'm', 'm'), ('2008-06-10', 4, 'q', 'q'),
+('2002-10-20', 0, NULL, NULL),('2008-09-12', 4, 'd', 'd'),
+('2006-06-16', 8, 'g', 'g'),('2004-09-18', NULL, 'x', 'x'),
+('1900-01-01', NULL, 'f', 'f'),('2005-09-13', 0, 'p', 'p'),
+('2007-04-09', NULL, 'j', 'j'),('2000-09-20', 8, 'c', 'c');
+
+CREATE TABLE t3 (
+  pk int(11) NOT NULL,
+  col_varchar_nokey varchar(1) DEFAULT NULL,
+  PRIMARY KEY (pk)
+);
+INSERT INTO t3 VALUES (1, 'c'),(2, 'c'),(3, 'q'),(4, 'g'),(5, 'e'),(6, 'l'),
+(7, NULL),(8, 'v'),(9, 'c'),(10, 'u'),(11, 'x'),(12, 'x'),(13, 'x'),(14, 'l'),
+(15, 'e'),(16, 's'),(17, 'k'),(18, 'm'),(19, 'x'),(20, 's');
+
+ANALYZE TABLE t1,t2,t3;
+
+let $query1=
+SELECT r1.col_date_key
+FROM t2 AS r1
+WHERE r1.col_int_key NOT IN
+      (SELECT ir2.pk
+       FROM t2 AS ir1 STRAIGHT_JOIN t1 AS ir2
+            ON ir2.col_varchar_nokey = ir1.col_varchar_key
+       WHERE ir2.col_varchar_nokey > r1.col_varchar_nokey
+         AND ir2.pk IN
+             (SELECT iir2.pk
+              FROM t2 AS iir1 RIGHT JOIN t3 AS iir2
+                   ON iir2.col_varchar_nokey = iir1.col_varchar_key)) 
+ORDER BY r1.col_date_key;   
+
+--disable_warnings
+eval EXPLAIN $query1;
+--enable_warnings
+eval $query1;
+
+DROP TABLE t1,t2,t3;
+
+--echo #
+--echo # Bug#20554585 ASSERT JOIN()->TABLES == 0... IN JOIN_TAB::GET_SJ_STRATEGY ON SUBQUERY + VAR
+--echo #
+
+CREATE TABLE t1 (
+  pk int NOT NULL,
+  PRIMARY KEY (pk)
+);
+
+CREATE TABLE t2 (
+  pk int NOT NULL,
+  col_int_key int,
+  col_varchar_key varchar(1),
+  PRIMARY KEY (pk),
+  KEY col_int_key (col_int_key),
+  KEY col_varchar_key (col_varchar_key)
+);
+
+CREATE TABLE t3 (
+  pk int NOT NULL,
+  col_int_key int,
+  col_varchar_key varchar(1),
+  col_varchar varchar(1),
+  PRIMARY KEY (pk),
+  KEY col_int_key (col_int_key),
+  KEY col_varchar_key (col_varchar_key)
+);
+
+INSERT INTO t3 VALUES (1,4,'c','g'),(20,1,'i','p');
+
+CREATE TABLE t4 (
+  col_int int
+);
+
+CREATE TABLE t5 (
+  col_varchar_key varchar(1),
+  pk int NOT NULL,
+  col_int int,
+  PRIMARY KEY (pk),
+  KEY col_varchar_key (col_varchar_key)
+);
+
+SELECT table1.col_varchar_key AS field1
+FROM (t3 AS table1
+  INNER JOIN (
+    SELECT SUBQUERY1_t1.*
+    FROM (t1 AS SUBQUERY1_t1
+      RIGHT JOIN (t2 AS SUBQUERY1_t2
+        INNER JOIN t3 AS SUBQUERY1_t3
+        ON (SUBQUERY1_t3.col_varchar_key = SUBQUERY1_t2.col_varchar_key)
+      ) ON (SUBQUERY1_t3.col_int_key = SUBQUERY1_t2.pk)
+    )
+    WHERE SUBQUERY1_t2.col_varchar_key >= ANY (
+      SELECT CHILD_SUBQUERY1_t2.col_varchar AS CHILD_SUBQUERY1_field1
+      FROM (t2 AS CHILD_SUBQUERY1_t1
+        LEFT OUTER JOIN t3 AS CHILD_SUBQUERY1_t2
+        ON (CHILD_SUBQUERY1_t2.col_int_key = CHILD_SUBQUERY1_t1.col_int_key)
+      )
+      WHERE CHILD_SUBQUERY1_t1.pk >= SUBQUERY1_t2.pk
+    )
+  ) AS table2
+  ON (table2.pk = table1.pk)
+)
+WHERE (EXISTS ((
+  SELECT DISTINCT SUBQUERY2_t2.col_int AS SUBQUERY2_field1
+  FROM (t4 AS SUBQUERY2_t1
+    LEFT OUTER JOIN t5 AS SUBQUERY2_t2
+    ON (SUBQUERY2_t2.pk = SUBQUERY2_t1.col_int)
+   )
+   WHERE SUBQUERY2_t2.col_varchar_key != @var4
+)))
+  AND table1.col_int_key < (35 + 192)
+ORDER BY field1
+;
+
+DROP TABLE t1, t2, t3, t4, t5;
+
+# New tests go here.

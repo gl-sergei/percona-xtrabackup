@@ -1,5 +1,5 @@
 /*
-   Copyright (c) 2005, 2010, Oracle and/or its affiliates. All rights reserved.
+   Copyright (c) 2005, 2013, Oracle and/or its affiliates. All rights reserved.
 
    This program is free software; you can redistribute it and/or modify
    it under the terms of the GNU General Public License as published by
@@ -20,6 +20,9 @@
 
 #include <ndb_types.h>
 #include "../diskpage.hpp"
+
+#define JAM_FILE_ID 419
+
 
 struct Tup_page 
 {
@@ -63,8 +66,14 @@ struct Tup_fixsize_page
   struct File_formats::Page_header m_page_header;
   Uint32 m_restart_seq;
   Uint32 page_state;
-  Uint32 next_page;
-  Uint32 prev_page;
+  union {
+    Uint32 next_page;
+    Uint32 nextList;
+  };
+  union {
+    Uint32 prev_page;
+    Uint32 prevList;
+  };
   Uint32 first_cluster_page;
   Uint32 last_cluster_page;
   Uint32 next_cluster_page;
@@ -108,8 +117,14 @@ struct Tup_varsize_page
   struct File_formats::Page_header m_page_header;
   Uint32 m_restart_seq;
   Uint32 page_state;
-  Uint32 next_page;
-  Uint32 prev_page;
+  union {
+    Uint32 next_page;
+    Uint32 nextList;
+  };
+  union {
+    Uint32 prev_page;
+    Uint32 prevList;
+  };
   Uint32 first_cluster_page;
   Uint32 last_cluster_page;
   Uint32 next_cluster_page;
@@ -259,9 +274,17 @@ struct Tup_varsize_page
   {
     return ((get_index_word(page_idx) & FREE) != 0) ? true : false;
   }
+
+  bool is_empty() const
+  {
+    return high_index == 1;
+  }
 };
 
 NdbOut& operator<< (NdbOut& out, const Tup_varsize_page& page);
 NdbOut& operator<< (NdbOut& out, const Tup_fixsize_page& page);
+
+
+#undef JAM_FILE_ID
 
 #endif

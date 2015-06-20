@@ -5,7 +5,7 @@
 --disable_warnings
 drop table if exists t1,t2,t3;
 --enable_warnings
-
+SET sql_mode = 'NO_ENGINE_SUBSTITUTION';
 CREATE TABLE t1 (
   id int(6) DEFAULT '0' NOT NULL,
   idservice int(5),
@@ -579,7 +579,9 @@ DROP TABLE t1;
 CREATE TABLE t1 (a INT); INSERT INTO t1 VALUES (1),(2);
 SELECT a + 1 AS num FROM t1 ORDER BY 30 - num;
 SELECT CONCAT('test', a) AS str FROM t1 ORDER BY UPPER(str);
+--source include/turn_off_only_full_group_by.inc
 SELECT a + 1 AS num FROM t1 GROUP BY 30 - num;
+--source include/restore_sql_mode_after_turn_off_only_full_group_by.inc
 SELECT a + 1 AS num FROM t1 HAVING 30 - num;
 --error 1054
 SELECT a + 1 AS num, num + 1 FROM t1;
@@ -888,7 +890,7 @@ SELECT 1 AS col FROM t1 WHERE a=2 AND (c=10 OR c IS NULL) ORDER BY c;
 
 # part 2 of the problem : DESC test cases
 --echo # Must use ref-or-null on the a_c index
---replace_column 1 x 2 x 3 x 6 x 7 x 8 x 9 x 10 x
+--replace_column 1 x 2 x 3 x 7 x 8 x 9 x 10 x 12 x
 EXPLAIN
 SELECT 1 AS col FROM t1 WHERE a=2 AND (c=10 OR c IS NULL) ORDER BY c DESC;
 --echo # Must return 1 row
@@ -1567,7 +1569,7 @@ DROP TABLE where_subselect;
 #
 
 CREATE TABLE t1 (
-  id1 INT NULL,
+  id1 INT NOT NULL,
   id2 INT  NOT NULL,
   junk INT NOT NULL,
   PRIMARY KEY (id1, id2, junk),
@@ -1628,9 +1630,11 @@ EXPLAIN
 SELECT a FROM t1 WHERE b = 1 ORDER BY c DESC LIMIT 9;
 SELECT a FROM t1 WHERE b = 1 ORDER BY c DESC LIMIT 9;
 
+--source include/turn_off_only_full_group_by.inc
 EXPLAIN
 SELECT DISTINCT a FROM t1 WHERE b = 1 ORDER BY c DESC LIMIT 0, 9;
 SELECT DISTINCT a FROM t1 WHERE b = 1 ORDER BY c DESC LIMIT 0, 9;
+--source include/restore_sql_mode_after_turn_off_only_full_group_by.inc
 
 DROP TABLE t1;
 
@@ -1711,7 +1715,7 @@ DROP TABLE t1;
 --echo # VALGRIND/CRASH WHEN ORDERING BY MULTIPLE AGGREGATE FUNCTIONS
 --echo #
 
-select 1 order by max(1) + min(1);
+select count(*) order by max(1) + min(1);
 
 --echo End of 5.1 tests
 
@@ -1821,3 +1825,38 @@ let $query=SELECT DISTINCT a FROM t1 WHERE b=1 ORDER BY 1;
 eval EXPLAIN $query;
 eval $query;
 DROP TABLE t1;
+
+--echo #
+--echo # Bug#18636076 DEBUG CRASH ON 
+--echo #              PLAN_CHANGE_WATCHDOG::~PLAN_CHANGE_WATCHDOG
+--echo #
+
+# Both tables must be created using MyISAM in order to reproduce assert
+CREATE TABLE t1 (
+  pk INTEGER NOT NULL,
+  PRIMARY KEY (pk)
+) ENGINE=MyISAM;
+
+INSERT INTO t1 VALUES (1), (2), (3);
+
+CREATE VIEW view_t1 AS SELECT * FROM t1;
+
+CREATE TABLE t2 (
+  i1 INTEGER NOT NULL
+) ENGINE=MyISAM;
+
+let query=
+SELECT DISTINCT t2.i1, view_t1.pk
+FROM view_t1 LEFT JOIN t2
+ON  view_t1.pk = t2.i1
+WHERE (view_t1.pk <= 204 AND t2.i1 != 3)
+  OR view_t1.pk BETWEEN 1 AND 7
+ORDER BY t2.i1;
+
+eval EXPLAIN $query;
+eval $query;
+
+DROP VIEW view_t1;
+DROP TABLE t1, t2;
+
+SET sql_mode = default;

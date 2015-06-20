@@ -1,4 +1,4 @@
-/* Copyright (c) 2008, 2013, Oracle and/or its affiliates. All rights reserved.
+/* Copyright (c) 2008, 2015, Oracle and/or its affiliates. All rights reserved.
 
   This program is free software; you can redistribute it and/or modify
   it under the terms of the GNU General Public License as published by
@@ -21,7 +21,7 @@
 #include "my_global.h"
 #include "my_sys.h"
 #include "pfs_global.h"
-#include "my_net.h"
+#include "pfs_builtin_memory.h"
 
 #include <stdlib.h>
 #include <string.h>
@@ -29,27 +29,29 @@
 #ifdef HAVE_UNISTD_H
 #include <unistd.h>
 #endif
-
-#ifdef __WIN__
-  #include <winsock2.h>
-#else
-  #include <arpa/inet.h>
+#ifdef _WIN32
+#include <winsock2.h>
+#endif
+#ifdef HAVE_ARPA_INET_H
+#include <arpa/inet.h>
+#endif
+#ifdef HAVE_NETINET_IN_H
+#include <netinet/in.h>
 #endif
 
 bool pfs_initialized= false;
-size_t pfs_allocated_memory= 0;
 
 /**
   Memory allocation for the performance schema.
-  The memory used internally in the performance schema implementation
-  is allocated once during startup, and considered static thereafter.
+  The memory used internally in the performance schema implementation.
+  It is allocated at startup, or during runtime with scalable buffers.
 */
-void *pfs_malloc(size_t size, myf flags)
+void *pfs_malloc(PFS_builtin_memory_class *klass, size_t size, myf flags)
 {
-  DBUG_ASSERT(! pfs_initialized);
+  DBUG_ASSERT(klass != NULL);
   DBUG_ASSERT(size > 0);
 
-  void *ptr;
+  void *ptr= NULL;
 
 #ifdef PFS_ALIGNEMENT
 #ifdef HAVE_POSIX_MEMALIGN
@@ -80,13 +82,14 @@ void *pfs_malloc(size_t size, myf flags)
     return NULL;
 #endif
 
-  pfs_allocated_memory+= size;
+  klass->count_alloc(size);
+
   if (flags & MY_ZEROFILL)
     memset(ptr, 0, size);
   return ptr;
 }
 
-void pfs_free(void *ptr)
+void pfs_free(PFS_builtin_memory_class *klass, size_t size, void *ptr)
 {
   if (ptr == NULL)
     return;
@@ -108,6 +111,8 @@ void pfs_free(void *ptr)
 #endif /* HAVE_ALIGNED_MALLOC */
 #endif /* HAVE_MEMALIGN */
 #endif /* HAVE_POSIX_MEMALIGN */
+
+  klass->count_free(size);
 }
 
 void pfs_print_error(const char *format, ...)
@@ -147,7 +152,7 @@ uint pfs_get_socket_address(char *host,
       if (host_len < INET_ADDRSTRLEN+1)
         return 0;
       struct sockaddr_in *sa4= (struct sockaddr_in *)(src_addr);
-    #ifdef __WIN__
+    #ifdef _WIN32
       /* Older versions of Windows do not support inet_ntop() */
       getnameinfo((struct sockaddr *)sa4, sizeof(struct sockaddr_in),
                   host, host_len, NULL, 0, NI_NUMERICHOST);
@@ -164,7 +169,7 @@ uint pfs_get_socket_address(char *host,
       if (host_len < INET6_ADDRSTRLEN+1)
         return 0;
       struct sockaddr_in6 *sa6= (struct sockaddr_in6 *)(src_addr);
-    #ifdef __WIN__
+    #ifdef _WIN32
       /* Older versions of Windows do not support inet_ntop() */
       getnameinfo((struct sockaddr *)sa6, sizeof(struct sockaddr_in6),
                   host, host_len, NULL, 0, NI_NUMERICHOST);

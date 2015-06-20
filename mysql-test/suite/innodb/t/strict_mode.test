@@ -1,9 +1,12 @@
 --source include/have_innodb.inc
+--source include/have_innodb_max_16k.inc
 
 --echo #
 --echo # Bug #17852083 PRINT A WARNING WHEN DDL HAS AN ERROR IN
 --echo # INNODB_STRICT_MODE = 1
 --echo #
+
+call mtr.add_suppression("InnoDB: Cannot add field");
 
 set innodb_strict_mode = 0;
 

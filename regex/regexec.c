@@ -8,7 +8,7 @@
 #include <my_global.h>
 #include <m_string.h>
 #include <m_ctype.h>
-#ifdef __WIN__
+#ifdef _WIN32
 #include  <limits.h>
 #endif
 #include "my_regex.h"
@@ -118,7 +118,7 @@ my_regmatch_t pmatch[];
 int eflags;
 {
 	char *pstr = (char *) str;
-	register struct re_guts *g = preg->re_g;
+	struct re_guts *g = preg->re_g;
 #ifdef REDEBUG
 #	define	GOODFLAGS(f)	(f)
 #else

@@ -118,6 +118,12 @@ SHOW WARNINGS;
 Level	Code	Message
 Warning	1297	Got temporary error 266 'Time-out in NDB, probably caused by deadlock' from NDB
 Error	1133	Can't find any matching row in the user table
+Warning	1296	Got error 4350 'Transaction already aborted' from NDB
+Error	1296	Got error 4350 'Transaction already aborted' from NDBCLUSTER
+Error	1180	Got error 4350 during COMMIT
+Warning	1297	Got temporary error 274 'Time-out in NDB, probably caused by deadlock' from NDB
+Warning	1297	Got temporary error 274 'Time-out in NDB, probably caused by deadlock' from NDB
+Error	1205	Lock wait timeout exceeded; try restarting transaction
 ROLLBACK;
 DROP USER 'billy1'@'127.0.0.1';
 GRANT ALL ON *.* TO 'billy2'@'127.0.0.1';
@@ -137,6 +143,23 @@ DROP USER 'newuser'@'localhost';
 DROP USER 'user2'@'localhost';
 DROP USER 'user3'@'localhost';
 DROP TABLE t1;
+=== test restart of mysqld ===
+# restart
+flush privileges;
+=== test truncate ===
+truncate mysql.proxies_priv;
+flush privileges;
+=== test mysql_upgrade ===
+mysql_upgrade first mysqld...
+mysql_upgrade second mysqld...
+show that tables still are in NDB
+table_name
+columns_priv
+db
+procs_priv
+proxies_priv
+tables_priv
+user
 call mysql.mysql_cluster_backup_privileges();
 call mysql.mysql_cluster_backup_privileges();
 call mysql.mysql_cluster_restore_local_privileges();

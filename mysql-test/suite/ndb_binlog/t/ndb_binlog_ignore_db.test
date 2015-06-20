@@ -1,3 +1,8 @@
+# The include statement below is a temp one for tests that are yet to
+#be ported to run with InnoDB,
+#but needs to be kept for tests that would need MyISAM in future.
+--source include/force_myisam_default.inc
+
 -- source include/have_ndb.inc
 -- source include/have_binlog_format_mixed_or_row.inc
 reset master;
@@ -45,8 +50,8 @@ drop table invisible;
 
 --echo -- ndb_binlog_index table (MyISAM) in mysql db 
 
-insert into ndb_binlog_index values (12, 'F', 23, 0, 0, 0, 0, 3, 44, 55);
-insert into ndb_binlog_index values (20, 'G', 23, 0, 0, 0, 0, 5, 44, 55);
+insert into ndb_binlog_index values (12, 'F', 23, 0, 0, 0, 0, 3, 44, 55, 66, 'H');
+insert into ndb_binlog_index values (20, 'G', 23, 0, 0, 0, 0, 5, 44, 55, 77, 'I');
 
 delete from ndb_binlog_index;
 

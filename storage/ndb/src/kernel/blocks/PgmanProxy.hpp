@@ -1,4 +1,4 @@
-/* Copyright (c) 2008, 2010, Oracle and/or its affiliates. All rights reserved.
+/* Copyright (c) 2008, 2013, Oracle and/or its affiliates. All rights reserved.
 
    This program is free software; you can redistribute it and/or modify
    it under the terms of the GNU General Public License as published by
@@ -20,6 +20,9 @@
 #include <signaldata/LCP.hpp>
 #include <signaldata/ReleasePages.hpp>
 #include "pgman.hpp"
+
+#define JAM_FILE_ID 434
+
 
 class PgmanProxy : public LocalProxy {
 public:
@@ -62,11 +65,12 @@ protected:
      */
     static const char* name() { return "END_LCP_REQ"; }
     EndLcpReq m_req;
+    bool m_extraLast;
     Ss_END_LCP_REQ() {
       m_sendREQ = (SsFUNCREQ)&PgmanProxy::sendEND_LCP_REQ;
       m_sendCONF = (SsFUNCREP)&PgmanProxy::sendEND_LCP_CONF;
       // extra worker (for extent pages) must run after others
-      m_extraLast = true;
+      m_extraLast = false;
     }
     enum { poolSize = 1 };
     static SsPool<Ss_END_LCP_REQ>& pool(LocalProxy* proxy) {
@@ -112,5 +116,8 @@ protected:
   void send_data_file_ord(Signal*, Uint32 i, Uint32 ret,
                           Uint32 cmd, Uint32 file_no = RNIL, Uint32 fd = RNIL);
 };
+
+
+#undef JAM_FILE_ID
 
 #endif

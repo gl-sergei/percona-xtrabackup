@@ -1,4 +1,4 @@
-/* Copyright (c) 2002, 2010, Oracle and/or its affiliates. All rights reserved.
+/* Copyright (c) 2002, 2014, Oracle and/or its affiliates. All rights reserved.
    
    This program is free software; you can redistribute it and/or modify
    it under the terms of the GNU General Public License as published by
@@ -14,9 +14,6 @@
    Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301, USA */
 
 #include "myisamdef.h"
-
-#ifdef HAVE_RTREE_KEYS
-
 #include "rt_index.h"
 #include "rt_key.h"
 #include "rt_mbr.h"
@@ -141,11 +138,9 @@ static int rtree_find_req(MI_INFO *info, MI_KEYDEF *keyinfo, uint search_flag,
   res = 1;
 
 ok:
-  my_afree((uchar*)page_buf);
   return res;
 
 err1:
-  my_afree((uchar*)page_buf);
   info->lastpos = HA_OFFSET_ERROR;
   return -1;
 }
@@ -356,11 +351,9 @@ static int rtree_get_req(MI_INFO *info, MI_KEYDEF *keyinfo, uint key_length,
   res = 1;
 
 ok:
-  my_afree((uchar*)page_buf);
   return res;
 
 err1:
-  my_afree((uchar*)page_buf);
   info->lastpos = HA_OFFSET_ERROR;
   return -1;
 }
@@ -450,13 +443,10 @@ static uchar *rtree_pick_key(MI_INFO *info, MI_KEYDEF *keyinfo, uchar *key,
   double increase;
   double best_incr = DBL_MAX;
   double perimeter;
-  double best_perimeter;
-  uchar *best_key;
+  double best_perimeter= 0.0;
+  uchar *best_key= NULL;
   uchar *k = rt_PAGE_FIRST_KEY(page_buf, nod_flag);
   uchar *last = rt_PAGE_END(page_buf);
-
-  LINT_INIT(best_perimeter);
-  LINT_INIT(best_key);
 
   for (; k < last; k = rt_PAGE_NEXT_KEY(k, key_length, nod_flag))
   {
@@ -481,9 +471,9 @@ static uchar *rtree_pick_key(MI_INFO *info, MI_KEYDEF *keyinfo, uchar *key,
 			     uint key_length, uchar *page_buf, uint nod_flag)
 {
   double increase;
-  double UNINIT_VAR(best_incr);
+  double best_incr= 0.0;
   double area;
-  double UNINIT_VAR(best_area);
+  double best_area= 0.0;
   uchar *best_key= NULL;
   uchar *k = rt_PAGE_FIRST_KEY(page_buf, nod_flag);
   uchar *last = rt_PAGE_END(page_buf);
@@ -588,11 +578,9 @@ static int rtree_insert_req(MI_INFO *info, MI_KEYDEF *keyinfo, uchar *key,
   }
 
 ok:
-  my_afree((uchar*)page_buf);
   DBUG_RETURN(res);
 
 err1:
-  my_afree((uchar*)page_buf);
   DBUG_RETURN(-1); /* purecov: inspected */
 }
 
@@ -717,7 +705,8 @@ static int rtree_fill_reinsert_list(stPageList *ReinsertList, my_off_t page,
   if (ReinsertList->n_pages == ReinsertList->m_pages)
   {
     ReinsertList->m_pages += REINSERT_BUFFER_INC;
-    if (!(ReinsertList->pages = (stPageLevel*)my_realloc((uchar*)ReinsertList->pages, 
+    if (!(ReinsertList->pages = (stPageLevel*)my_realloc(mi_key_memory_stPageList_pages,
+                                                         (uchar*)ReinsertList->pages, 
       ReinsertList->m_pages * sizeof(stPageLevel), MYF(MY_ALLOW_ZERO_PTR))))
       goto err1;
   }
@@ -869,11 +858,9 @@ static int rtree_delete_req(MI_INFO *info, MI_KEYDEF *keyinfo, uchar *key,
   res = 1;
 
 ok:
-  my_afree((uchar*)page_buf);
   DBUG_RETURN(res);
 
 err1:
-  my_afree((uchar*)page_buf);
   DBUG_RETURN(-1); /* purecov: inspected */
 }
 
@@ -946,7 +933,6 @@ int rtree_delete(MI_INFO *info, uint keynr, uchar *key, uint key_length)
           if ((res= rtree_insert_level(info, keynr, k, key_length,
                                        ReinsertList.pages[i].level)) == -1)
           {
-            my_afree((uchar*)page_buf);
             goto err1;
           }
           if (res)
@@ -962,7 +948,6 @@ int rtree_delete(MI_INFO *info, uint keynr, uchar *key, uint key_length)
             }
           }
         }
-        my_afree((uchar*)page_buf);
         if (_mi_dispose(info, keyinfo, ReinsertList.pages[i].offs,
             DFLT_INIT_HITS))
           goto err1;
@@ -1095,13 +1080,8 @@ ha_rows rtree_estimate(MI_INFO *info, uint keynr, uchar *key,
       res = HA_POS_ERROR;
   }
 
-  my_afree((uchar*)page_buf);
   return res;
 
 err1:
-  my_afree((uchar*)page_buf);
   return HA_POS_ERROR;
 }
-
-#endif /*HAVE_RTREE_KEYS*/
-

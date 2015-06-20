@@ -1,5 +1,5 @@
 /*
-   Copyright (c) 2003, 2011, Oracle and/or its affiliates. All rights reserved.
+   Copyright (c) 2003, 2014, Oracle and/or its affiliates. All rights reserved.
 
    This program is free software; you can redistribute it and/or modify
    it under the terms of the GNU General Public License as published by
@@ -31,6 +31,7 @@
 #include "trp_client.hpp"
 #include "trp_node.hpp"
 #include "NdbWaiter.hpp"
+#include "WakeupHandler.hpp"
 
 template <class T>
 struct Ndb_free_list_t 
@@ -81,10 +82,13 @@ public:
 
   NdbWaiter             theWaiter;
 
+  WakeupHandler* wakeHandler;
+
   NdbEventOperationImpl *m_ev_op;
 
   int m_optimized_node_selection;
 
+  BaseString m_ndbObjectName; // Ndb name
   BaseString m_dbname; // Database name
   BaseString m_schemaname; // Schema name
 
@@ -125,7 +129,7 @@ public:
 
   BaseString m_systemPrefix; // Buffer for preformatted for <sys>/<def>/
   
-  void* customDataPtr;
+  Uint64 customData;
 
   Uint64 clientStats[ Ndb::NumClientStatistics ];
   
@@ -191,6 +195,7 @@ public:
    */
   virtual void trp_deliver_signal(const NdbApiSignal*,
                                   const LinearSectionPtr p[3]);
+  virtual void trp_wakeup();
   virtual void recordWaitTimeNanos(Uint64 nanos);
   // Is node available for running transactions
   bool   get_node_alive(NodeId nodeId) const;
@@ -314,7 +319,7 @@ inline
 int
 Ndb_free_list_t<T>::fill(Ndb* ndb, Uint32 cnt)
 {
-#ifndef HAVE_purify
+#ifndef HAVE_VALGRIND
   if (m_free_list == 0)
   {
     m_free_cnt++;
@@ -352,7 +357,7 @@ inline
 T*
 Ndb_free_list_t<T>::seize(Ndb* ndb)
 {
-#ifndef HAVE_purify
+#ifndef HAVE_VALGRIND
   T* tmp = m_free_list;
   if (tmp)
   {
@@ -382,7 +387,7 @@ inline
 void
 Ndb_free_list_t<T>::release(T* obj)
 {
-#ifndef HAVE_purify
+#ifndef HAVE_VALGRIND
   obj->next(m_free_list);
   m_free_list = obj;
   m_free_cnt++;
@@ -412,7 +417,7 @@ inline
 void
 Ndb_free_list_t<T>::release(Uint32 cnt, T* head, T* tail)
 {
-#ifndef HAVE_purify
+#ifndef HAVE_VALGRIND
   if (cnt)
   {
 #ifdef VM_TRACE
@@ -599,6 +604,13 @@ NdbImpl::sendFragmentedSignal(NdbApiSignal * signal, Uint32 nodeId,
     return raw_sendFragmentedSignal(signal, nodeId, ptr, secs);
   }
   return -1;
+}
+
+inline
+void
+NdbImpl::trp_wakeup()
+{
+  wakeHandler->notifyWakeup();
 }
 
 #endif

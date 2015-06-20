@@ -1,5 +1,5 @@
 /*
-   Copyright (c) 2003, 2010, Oracle and/or its affiliates. All rights reserved.
+   Copyright (c) 2003, 2013, Oracle and/or its affiliates. All rights reserved.
 
    This program is free software; you can redistribute it and/or modify
    it under the terms of the GNU General Public License as published by
@@ -27,15 +27,17 @@
 #include <NodeBitmask.hpp>
 #include <SimpleProperties.hpp>
 
-#include <SLList.hpp>
-#include <DLFifoList.hpp>
-#include <DLCFifoList.hpp>
+#include <IntrusiveList.hpp>
 #include <SignalCounter.hpp>
 #include <blocks/mutexes.hpp>
 
 #include <NdbTCP.h>
 #include <NdbTick.h>
 #include <Array.hpp>
+#include <Mutex.hpp>
+
+#define JAM_FILE_ID 474
+
 
 /**
  * Backup - This block manages database backup and restore
@@ -159,6 +161,8 @@ protected:
   void execEND_LCPREQ(Signal* signal);
 
   void execDBINFO_SCANREQ(Signal *signal);
+
+  void execLCP_STATUS_REQ(Signal* signal);
 
 private:
   void defineBackupMutex_locked(Signal* signal, Uint32 ptrI,Uint32 retVal);
@@ -426,8 +430,8 @@ public:
         masterData.gsn = 0;
       }
     
-    /* next time to report backup status */
-    Uint64 m_next_report;
+    /* prev time backup status was reported */
+    NDB_TICKS m_prev_report;
 
     Uint32 m_gsn;
     CompoundState slaveState; 
@@ -562,6 +566,9 @@ public:
   NDB_TICKS m_reset_disk_speed_time;
   static const int  DISK_SPEED_CHECK_DELAY = 100;
   
+  Uint64 m_monitor_words_written;
+  NDB_TICKS m_monitor_snapshot_start;
+
   STATIC_CONST(NO_OF_PAGES_META_FILE = 
 	       (2*MAX_WORDS_META_FILE + BACKUP_WORDS_PER_PAGE - 1) / 
 	       BACKUP_WORDS_PER_PAGE);
@@ -717,5 +724,8 @@ Backup::OperationRecord::finished(Uint32 len)
   opNoDone++;
   noOfRecords++;
 }
+
+
+#undef JAM_FILE_ID
 
 #endif

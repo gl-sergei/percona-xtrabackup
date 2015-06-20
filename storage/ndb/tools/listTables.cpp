@@ -1,5 +1,5 @@
 /*
-   Copyright (c) 2003, 2010, Oracle and/or its affiliates. All rights reserved.
+   Copyright (c) 2003, 2012, Oracle and/or its affiliates. All rights reserved.
 
    This program is free software; you can redistribute it and/or modify
    it under the terms of the GNU General Public License as published by
@@ -149,6 +149,15 @@ list(const char * tabname,
         case NdbDictionary::Object::TableEvent:
             strcpy(type, "TableEvent");
             break;
+        case NdbDictionary::Object::ForeignKey:
+            strcpy(type, "ForeignKey");
+            break;
+        case NdbDictionary::Object::FKParentTrigger:
+            strcpy(type, "FKParentTrigger");
+            break;
+        case NdbDictionary::Object::FKChildTrigger:
+            strcpy(type, "FKChildTrigger");
+            break;
         default:
 	  sprintf(type, "%d", (int)elt.type);
             break;
@@ -293,7 +302,7 @@ int main(int argc, char** argv){
   NDB_INIT(argv[0]);
   const char* _tabname;
   ndb_opt_set_usage_funcs(short_usage_sub, usage);
-  load_defaults("my",load_default_groups,&argc,&argv);
+  ndb_load_defaults(NULL,load_default_groups,&argc,&argv);
   int ho_error;
 #ifndef DBUG_OFF
   opt_debug= "d:t:O,/tmp/ndb_show_tables.trace";
@@ -310,7 +319,9 @@ int main(int argc, char** argv){
 
   ndb_cluster_connection->set_name("ndb_show_tables");
   if (ndb_cluster_connection->connect(12,5,1))
-    fatal("Unable to connect to management server.");
+    fatal("Unable to connect to management server.\n - Error: '%d: %s'",
+          ndb_cluster_connection->get_latest_error(),
+          ndb_cluster_connection->get_latest_error_msg());
   if (ndb_cluster_connection->wait_until_ready(30,0) < 0)
     fatal("Cluster nodes not ready in 30 seconds.");
 

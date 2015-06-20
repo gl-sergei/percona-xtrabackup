@@ -1,4 +1,4 @@
-/* Copyright (c) 2001, 2011, Oracle and/or its affiliates. All rights reserved.
+/* Copyright (c) 2001, 2015, Oracle and/or its affiliates. All rights reserved.
 
    This program is free software; you can redistribute it and/or modify
    it under the terms of the GNU General Public License as published by
@@ -16,9 +16,7 @@
 
 /* Execute DO statement */
 
-#include "sql_priv.h"
 #include "transaction.h"
-#include "unireg.h"
 #include "sql_do.h"
 #include "sql_base.h"                           // setup_fields
 #include "sql_select.h"                         // free_underlaid_joins
@@ -28,11 +26,11 @@ bool mysql_do(THD *thd, List<Item> &values)
   List_iterator<Item> li(values);
   Item *value;
   DBUG_ENTER("mysql_do");
-  if (setup_fields(thd, Ref_ptr_array(), values, MARK_COLUMNS_NONE, 0, 0))
+  if (setup_fields(thd, Ref_ptr_array(), values, 0, 0, 0))
     DBUG_RETURN(TRUE);
   while ((value = li++))
     value->val_int();
-  free_underlaid_joins(thd, &thd->lex->select_lex);
+  free_underlaid_joins(thd, thd->lex->select_lex);
 
   if (thd->is_error())
   {

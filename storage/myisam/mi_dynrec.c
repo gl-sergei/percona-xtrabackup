@@ -39,15 +39,7 @@ static int delete_dynamic_record(MI_INFO *info,my_off_t filepos,
 static int _mi_cmp_buffer(File file, const uchar *buff, my_off_t filepos,
 			  uint length);
 
-/* Play it safe; We have a small stack when using threads */
-#undef my_alloca
-#undef my_afree
-#define my_alloca(A) my_malloc((A),MYF(0))
-#define my_afree(A) my_free((A))
-
 	/* Interface function from MI_INFO */
-
-#ifdef HAVE_MMAP
 
 /*
   Create mmaped area for MyISAM handler
@@ -117,7 +109,8 @@ int mi_munmap_file(MI_INFO *info)
 {
   int ret;
   DBUG_ENTER("mi_unmap_file");
-  if ((ret= my_munmap((void*) info->s->file_map, info->s->mmaped_length)))
+  if ((ret= my_munmap((void*) info->s->file_map,
+                      (size_t)info->s->mmaped_length)))
     DBUG_RETURN(ret);
   info->s->file_read= mi_nommap_pread;
   info->s->file_write= mi_nommap_pwrite;
@@ -145,7 +138,6 @@ void mi_remap_file(MI_INFO *info, my_off_t size)
     mi_dynmap_file(info, size);
   }
 }
-#endif
 
 
 /*
@@ -281,7 +273,8 @@ int _mi_write_blob_record(MI_INFO *info, const uchar *record)
 	  MI_DYN_DELETE_BLOCK_HEADER+1);
   reclength= (info->s->base.pack_reclength +
 	      _my_calc_total_blob_length(info,record)+ extra);
-  if (!(rec_buff=(uchar*) my_alloca(reclength)))
+  if (!(rec_buff=(uchar*) my_malloc(mi_key_memory_record_buffer,
+                                    reclength, MYF(0))))
   {
     my_errno= HA_ERR_OUT_OF_MEM; /* purecov: inspected */
     return(-1);
@@ -293,7 +286,7 @@ int _mi_write_blob_record(MI_INFO *info, const uchar *record)
   DBUG_ASSERT(reclength2 <= reclength);
   error=write_dynamic_record(info,rec_buff+ALIGN_SIZE(MI_MAX_DYN_BLOCK_HEADER),
 			     reclength2);
-  my_afree(rec_buff);
+  my_free(rec_buff);
   return(error);
 }
 
@@ -308,7 +301,8 @@ int _mi_update_blob_record(MI_INFO *info, my_off_t pos, const uchar *record)
 	  MI_DYN_DELETE_BLOCK_HEADER);
   reclength= (info->s->base.pack_reclength+
 	      _my_calc_total_blob_length(info,record)+ extra);
-  if (!(rec_buff=(uchar*) my_alloca(reclength)))
+  if (!(rec_buff=(uchar*) my_malloc(mi_key_memory_record_buffer,
+                                    reclength, MYF(0))))
   {
     my_errno= HA_ERR_OUT_OF_MEM; /* purecov: inspected */
     return(-1);
@@ -318,7 +312,7 @@ int _mi_update_blob_record(MI_INFO *info, my_off_t pos, const uchar *record)
   error=update_dynamic_record(info,pos,
 			      rec_buff+ALIGN_SIZE(MI_MAX_DYN_BLOCK_HEADER),
 			      reclength);
-  my_afree(rec_buff);
+  my_free(rec_buff);
   return(error);
 }
 
@@ -710,7 +704,7 @@ int _mi_write_part_record(MI_INFO *info,
 	/* Make a long block for one write */
   record_end= *record+length-head_length;
   del_length=(res_length ? MI_DYN_DELETE_BLOCK_HEADER : 0);
-  bmove((uchar*) (*record-head_length),(uchar*) temp,head_length);
+  memmove((uchar*) (*record - head_length),(uchar*) temp, head_length);
   memcpy(temp,record_end,(size_t) (extra_length+del_length));
   memset(record_end, 0, extra_length);
 
@@ -965,13 +959,13 @@ err:
 
 	/* Pack a record. Return new reclength */
 
-uint _mi_rec_pack(MI_INFO *info, register uchar *to,
-                  register const uchar *from)
+uint _mi_rec_pack(MI_INFO *info, uchar *to,
+                  const uchar *from)
 {
   uint		length,new_length,flag,bit,i;
   uchar		*pos,*end,*startpos,*packpos;
   enum en_fieldtype type;
-  reg3 MI_COLUMNDEF *rec;
+  MI_COLUMNDEF *rec;
   MI_BLOB	*blob;
   DBUG_ENTER("_mi_rec_pack");
 
@@ -1097,7 +1091,7 @@ my_bool _mi_rec_check(MI_INFO *info,const uchar *record, uchar *rec_buff,
   uint		length,new_length,flag,bit,i;
   uchar		*pos,*end,*packpos,*to;
   enum en_fieldtype type;
-  reg3 MI_COLUMNDEF *rec;
+  MI_COLUMNDEF *rec;
   DBUG_ENTER("_mi_rec_check");
 
   packpos=rec_buff; to= rec_buff+info->s->base.pack_bits;
@@ -1215,13 +1209,13 @@ err:
 	/* Returns -1 and my_errno =HA_ERR_RECORD_DELETED if reclength isn't */
 	/* right. Returns reclength (>0) if ok */
 
-ulong _mi_rec_unpack(register MI_INFO *info, register uchar *to, uchar *from,
+ulong _mi_rec_unpack(MI_INFO *info, uchar *to, uchar *from,
 		     ulong found_length)
 {
   uint flag,bit,length,rec_length,min_pack_length;
   enum en_fieldtype type;
   uchar *from_end,*to_end,*packpos;
-  reg3 MI_COLUMNDEF *rec,*end_field;
+  MI_COLUMNDEF *rec,*end_field;
   DBUG_ENTER("_mi_rec_unpack");
 
   to_end=to + info->s->base.reclength;
@@ -1441,8 +1435,8 @@ void _mi_store_blob_length(uchar *pos,uint pack_length,uint length)
 int _mi_read_dynamic_record(MI_INFO *info, my_off_t filepos, uchar *buf)
 {
   int block_of_record;
-  uint b_type,UNINIT_VAR(left_length);
-  uchar *UNINIT_VAR(to);
+  uint b_type, left_length= 0;
+  uchar *to= NULL;
   MI_BLOCK_INFO block_info;
   File file;
   DBUG_ENTER("mi_read_dynamic_record");
@@ -1547,7 +1541,9 @@ int _mi_cmp_dynamic_unique(MI_INFO *info, MI_UNIQUEDEF *def,
   int error;
   DBUG_ENTER("_mi_cmp_dynamic_unique");
 
-  if (!(old_record=my_alloca(info->s->base.reclength)))
+  if (!(old_record= my_malloc(mi_key_memory_record_buffer,
+                              info->s->base.reclength,
+                              MYF(0))))
     DBUG_RETURN(1);
 
   /* Don't let the compare destroy blobs that may be in use */
@@ -1562,14 +1558,14 @@ int _mi_cmp_dynamic_unique(MI_INFO *info, MI_UNIQUEDEF *def,
     my_free(mi_get_rec_buff_ptr(info, info->rec_buff));
     info->rec_buff=rec_buff;
   }
-  my_afree(old_record);
+  my_free(old_record);
   DBUG_RETURN(error);
 }
 
 
 	/* Compare of record one disk with packed record in memory */
 
-int _mi_cmp_dynamic_record(register MI_INFO *info, register const uchar *record)
+int _mi_cmp_dynamic_record(MI_INFO *info, const uchar *record)
 {
   uint flag,reclength,b_type;
   my_off_t filepos;
@@ -1592,8 +1588,10 @@ int _mi_cmp_dynamic_record(register MI_INFO *info, register const uchar *record)
   {						/* If check isn't disabled  */
     if (info->s->base.blobs)
     {
-      if (!(buffer=(uchar*) my_alloca(info->s->base.pack_reclength+
-				     _my_calc_total_blob_length(info,record))))
+      if (!(buffer=(uchar*) my_malloc(mi_key_memory_record_buffer,
+                                      info->s->base.pack_reclength+
+				      _my_calc_total_blob_length(info,record),
+                                      MYF(0))))
 	DBUG_RETURN(-1);
     }
     reclength=_mi_rec_pack(info,buffer,record);
@@ -1640,7 +1638,7 @@ int _mi_cmp_dynamic_record(register MI_INFO *info, register const uchar *record)
   my_errno=0;
 err:
   if (buffer != info->rec_buff)
-    my_afree((uchar*) buffer);
+    my_free((uchar*) buffer);
   DBUG_RETURN(my_errno);
 }
 
@@ -1709,12 +1707,12 @@ err:
 */
 
 int _mi_read_rnd_dynamic_record(MI_INFO *info, uchar *buf,
-				register my_off_t filepos,
+				my_off_t filepos,
 				my_bool skip_deleted_blocks)
 {
   int block_of_record, info_read, save_errno;
   uint left_len,b_type;
-  uchar *UNINIT_VAR(to);
+  uchar *to= NULL;
   MI_BLOCK_INFO block_info;
   MYISAM_SHARE *share=info->s;
   DBUG_ENTER("_mi_read_rnd_dynamic_record");
@@ -1723,16 +1721,12 @@ int _mi_read_rnd_dynamic_record(MI_INFO *info, uchar *buf,
 
   if (info->lock_type == F_UNLCK)
   {
-#ifndef UNSAFE_LOCKING
     if (share->tot_locks == 0)
     {
       if (my_lock(share->kfile,F_RDLCK,0L,F_TO_EOF,
 		  MYF(MY_SEEK_NOT_DONE) | info->lock_wait))
 	DBUG_RETURN(my_errno);
     }
-#else
-    info->tmp_lock_type=F_RDLCK;
-#endif
   }
   else
     info_read=1;				/* memory-keyinfoblock is ok */

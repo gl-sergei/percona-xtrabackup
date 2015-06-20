@@ -1,5 +1,5 @@
 /*
-   Copyright (c) 2003, 2010, Oracle and/or its affiliates. All rights reserved.
+   Copyright (c) 2003, 2014, Oracle and/or its affiliates. All rights reserved.
 
    This program is free software; you can redistribute it and/or modify
    it under the terms of the GNU General Public License as published by
@@ -19,6 +19,9 @@
 #define DBDIH_C
 #include "Dbdih.hpp"
 #include <ndb_limits.h>
+
+#define JAM_FILE_ID 355
+
 
 #define DEBUG(x) { ndbout << "DIH::" << x << endl; }
 
@@ -45,7 +48,7 @@ void Dbdih::initData()
   c_takeOverPool.setSize(MAX_NDB_NODES);
   {
     Ptr<TakeOverRecord> ptr;
-    while (c_activeTakeOverList.seize(ptr))
+    while (c_activeTakeOverList.seizeFirst(ptr))
     {
       new (ptr.p) TakeOverRecord;
     }
@@ -71,6 +74,8 @@ void Dbdih::initData()
   c_set_initial_start_flag = FALSE;
   c_sr_wait_to = false;
   c_2pass_inr = false;
+  
+  c_lcpTabDefWritesControl.init(MAX_CONCURRENT_LCP_TAB_DEF_FLUSHES);
 }//Dbdih::initData()
 
 void Dbdih::initRecords()
@@ -173,8 +178,10 @@ Dbdih::Dbdih(Block_context& ctx):
   addRecSignal(GSN_START_COPYREQ, &Dbdih::execSTART_COPYREQ);
   addRecSignal(GSN_START_COPYCONF, &Dbdih::execSTART_COPYCONF);
   addRecSignal(GSN_START_COPYREF, &Dbdih::execSTART_COPYREF);
-  addRecSignal(GSN_CREATE_FRAGREQ, &Dbdih::execCREATE_FRAGREQ);
-  addRecSignal(GSN_CREATE_FRAGCONF, &Dbdih::execCREATE_FRAGCONF);
+  addRecSignal(GSN_UPDATE_FRAG_STATEREQ,
+                 &Dbdih::execUPDATE_FRAG_STATEREQ);
+  addRecSignal(GSN_UPDATE_FRAG_STATECONF,
+                 &Dbdih::execUPDATE_FRAG_STATECONF);
   addRecSignal(GSN_DIVERIFYREQ, &Dbdih::execDIVERIFYREQ);
   addRecSignal(GSN_GCP_SAVEREQ, &Dbdih::execGCP_SAVEREQ);
   addRecSignal(GSN_GCP_SAVEREF, &Dbdih::execGCP_SAVEREF);
@@ -319,10 +326,16 @@ Dbdih::Dbdih(Block_context& ctx):
   nodeGroupRecord = 0;
   nodeRecord = 0;
   c_nextNodeGroup = 0;
-  c_fragments_per_node = 1;
+  c_fragments_per_node_ = 0;
   bzero(c_node_groups, sizeof(c_node_groups));
-  c_diverify_queue_cnt = 1;
-
+  if (globalData.ndbMtTcThreads == 0)
+  {
+    c_diverify_queue_cnt = 1;
+  }
+  else
+  {
+    c_diverify_queue_cnt = globalData.ndbMtTcThreads;
+  }
 }//Dbdih::Dbdih()
 
 Dbdih::~Dbdih()

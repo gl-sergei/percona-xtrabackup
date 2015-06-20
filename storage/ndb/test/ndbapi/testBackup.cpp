@@ -1,5 +1,5 @@
 /*
-   Copyright (c) 2003, 2010, Oracle and/or its affiliates. All rights reserved.
+   Copyright (c) 2003, 2013, Oracle and/or its affiliates. All rights reserved.
 
    This program is free software; you can redistribute it and/or modify
    it under the terms of the GNU General Public License as published by
@@ -20,6 +20,8 @@
 #include <HugoTransactions.hpp>
 #include <UtilTransactions.hpp>
 #include <NdbBackup.hpp>
+#include <NdbMgmd.hpp>
+#include <signaldata/DumpStateOrd.hpp>
 
 int runDropTable(NDBT_Context* ctx, NDBT_Step* step);
 
@@ -35,7 +37,7 @@ int
 clearOldBackups(NDBT_Context* ctx, NDBT_Step* step)
 {
   strcpy(tabname, ctx->getTab()->getName());
-  NdbBackup backup(GETNDB(step)->getNodeId());
+  NdbBackup backup;
   backup.clearOldBackups();
   return NDBT_OK;
 }
@@ -70,7 +72,7 @@ int setSlave(NDBT_Context* ctx, NDBT_Step* step){
 }
 
 int runAbort(NDBT_Context* ctx, NDBT_Step* step){
-  NdbBackup backup(GETNDB(step)->getNodeId()+1);
+  NdbBackup backup;
 
   NdbRestarter restarter;
 
@@ -104,7 +106,7 @@ int runAbort(NDBT_Context* ctx, NDBT_Step* step){
 }
 
 int runFail(NDBT_Context* ctx, NDBT_Step* step){
-  NdbBackup backup(GETNDB(step)->getNodeId()+1);
+  NdbBackup backup;
 
   NdbRestarter restarter;
 
@@ -138,7 +140,7 @@ int runFail(NDBT_Context* ctx, NDBT_Step* step){
 }
 
 int runBackupOne(NDBT_Context* ctx, NDBT_Step* step){
-  NdbBackup backup(GETNDB(step)->getNodeId()+1);
+  NdbBackup backup;
   unsigned backupId = 0;
 
   if (backup.start(backupId) == -1){
@@ -151,7 +153,7 @@ int runBackupOne(NDBT_Context* ctx, NDBT_Step* step){
 }
 
 int runBackupRandom(NDBT_Context* ctx, NDBT_Step* step){
-  NdbBackup backup(GETNDB(step)->getNodeId()+1);
+  NdbBackup backup;
   unsigned backupId = rand() % (MAX_BACKUPS);
 
   if (backup.start(backupId) == -1){
@@ -165,7 +167,7 @@ int runBackupRandom(NDBT_Context* ctx, NDBT_Step* step){
 
 int
 runBackupLoop(NDBT_Context* ctx, NDBT_Step* step){
-  NdbBackup backup(GETNDB(step)->getNodeId()+1);
+  NdbBackup backup;
   
   int loops = ctx->getNumLoops();
   while(!ctx->isTestStopped() && loops--)
@@ -233,7 +235,7 @@ int runDropTablesRestart(NDBT_Context* ctx, NDBT_Step* step){
 }
 
 int runRestoreOne(NDBT_Context* ctx, NDBT_Step* step){
-  NdbBackup backup(GETNDB(step)->getNodeId()+1);
+  NdbBackup backup;
   unsigned backupId = ctx->getProperty("BackupId"); 
 
   ndbout << "Restoring backup " << backupId << endl;
@@ -379,7 +381,7 @@ int runBackupBank(NDBT_Context* ctx, NDBT_Step* step){
   int l = 0;
   int maxSleep = 30; // Max seconds between each backup
   Ndb* pNdb = GETNDB(step);
-  NdbBackup backup(GETNDB(step)->getNodeId()+1);
+  NdbBackup backup;
   unsigned minBackupId = ~0;
   unsigned maxBackupId = 0;
   unsigned backupId = 0;
@@ -425,7 +427,7 @@ int runBackupBank(NDBT_Context* ctx, NDBT_Step* step){
 
 int runRestoreBankAndVerify(NDBT_Context* ctx, NDBT_Step* step){
   NdbRestarter restarter;
-  NdbBackup backup(GETNDB(step)->getNodeId()+1);
+  NdbBackup backup;
   unsigned minBackupId = ctx->getProperty("MinBackupId");
   unsigned maxBackupId = ctx->getProperty("MaxBackupId");
   unsigned backupId = minBackupId;
@@ -499,7 +501,7 @@ int runRestoreBankAndVerify(NDBT_Context* ctx, NDBT_Step* step){
   return result;
 }
 int runBackupUndoWaitStarted(NDBT_Context* ctx, NDBT_Step* step){
-  NdbBackup backup(GETNDB(step)->getNodeId()+1);
+  NdbBackup backup;
   unsigned backupId = 0;
   int undoError = 10041;
   NdbRestarter restarter;
@@ -567,7 +569,7 @@ int runChangeUndoDataDuringBackup(NDBT_Context* ctx, NDBT_Step* step){
   hugoTrans.closeTransaction(pNdb);
 
   // make sure backup have finish
-  NdbBackup backup(GETNDB(step)->getNodeId()+1);
+  NdbBackup backup;
 
   // start log event
   if(backup.startLogEvent() != 0) {
@@ -651,7 +653,7 @@ int runVerifyUndoData(NDBT_Context* ctx, NDBT_Step* step){
 int
 runBug57650(NDBT_Context* ctx, NDBT_Step* step)
 {
-  NdbBackup backup(GETNDB(step)->getNodeId()+1);
+  NdbBackup backup;
   NdbRestarter res;
 
   int node0 = res.getNode(NdbRestarter::NS_RANDOM);
@@ -661,9 +663,188 @@ runBug57650(NDBT_Context* ctx, NDBT_Step* step)
   if (backup.start(backupId) == -1)
     return NDBT_FAILED;
 
+  res.insertErrorInAllNodes(5057);
+  int val2[] = { 7099 }; // Force LCP
+  res.dumpStateAllNodes(val2, 1);
+
+  NdbSleep_SecSleep(5);
+  res.waitClusterStarted();
+
+  res.insertErrorInAllNodes(0);
+
   return NDBT_OK;
 }
 
+int
+runBug14019036(NDBT_Context* ctx, NDBT_Step* step)
+{
+  NdbBackup backup;
+  NdbRestarter res;
+  NdbMgmd mgmd;
+
+  res.insertErrorInAllNodes(5073); // slow down backup
+
+  if (!mgmd.connect()) {
+    g_err << "Cannot connect to mgmd server" << endl;
+    return NDBT_FAILED;
+  }
+  if (!mgmd.subscribe_to_events()) {
+    g_err << "Cannot subscribe to mgmd server logevents" << endl;
+    return NDBT_FAILED;
+  }
+  Uint64 maxWaitSeconds = 10;
+  Uint64 endTime = NdbTick_CurrentMillisecond() +
+                   (maxWaitSeconds * 1000);
+
+  int val2[] = { 100000 }; // all dump 100000 
+  unsigned backupId = 0;
+  if (backup.start(backupId, 1, 0, 1) == -1) {
+    g_err << "Failed to start backup nowait" << endl;
+    return NDBT_FAILED;
+  }
+  int records = 0, data = 0;
+  int result = NDBT_OK;
+  while (NdbTick_CurrentMillisecond() < endTime)
+  {
+    char buff[512];
+    char tmp[512];
+
+    // dump backup status in mgmd log 
+    res.dumpStateAllNodes(val2, 1);
+
+    // read backup status logevent from mgmd
+    if (!mgmd.get_next_event_line(buff, sizeof(buff), 10 * 1000)) {
+      g_err << "Failed to read logevent from mgmd" << endl;
+      return NDBT_FAILED;
+    }
+    if(strstr(buff, "#Records")) 
+       sscanf(buff, "%s %d", tmp, &records);
+    if(strstr(buff, "Data")) {
+      sscanf(buff, "%s %d", tmp, &data);
+      if(records == 0 && data > 0) {
+        g_err << "Inconsistent backup status: ";
+        g_err << "Data written = " << data << " bytes, Record count = 0" << endl;
+        result = NDBT_FAILED;
+        break;
+      }
+      else if(records > 0 && data > 0)
+        break;
+    }
+  }    
+
+  res.insertErrorInAllNodes(0);
+
+  return result;
+}
+int
+runBug16656639(NDBT_Context* ctx, NDBT_Step* step)
+{
+  NdbBackup backup;
+  NdbRestarter res;
+
+  res.insertErrorInAllNodes(10032); 
+
+  g_err << "Dumping schema state." << endl;
+
+  int dump1 = DumpStateOrd::SchemaResourceSnapshot;
+  int dump2 = DumpStateOrd::SchemaResourceCheckLeak;
+  res.dumpStateAllNodes(&dump1, 1);
+
+  g_err << "Starting backup." << endl;
+  unsigned backupId = 0;
+  if (backup.start(backupId, 1, 0, 1) == -1) {
+    g_err << "Failed to start backup." << endl;
+    return NDBT_FAILED;
+  }
+
+  g_err << "Waiting 1 sec for frag scans to start." << endl;
+  NdbSleep_SecSleep(1);
+
+  g_err << "Aborting backup." << endl;
+  if(backup.abort(backupId) == -1) {
+    g_err << "Failed to abort backup." << endl;
+    return NDBT_FAILED;
+  }
+
+  g_err << "Checking backup status." << endl;
+  if(backup.startLogEvent() != 0) {
+    g_err << "Can't create log event." << endl;
+    return NDBT_FAILED;
+  }
+  if(backup.checkBackupStatus() != 3) {
+    g_err << "Backup not aborted." << endl;
+    return NDBT_FAILED;
+  }
+
+  res.insertErrorInAllNodes(0);
+  if(res.dumpStateAllNodes(&dump2, 1) != 0) {
+    g_err << "Schema leak." << endl;
+    return NDBT_FAILED;
+  }
+  return NDBT_OK;
+}
+
+
+int makeTmpTable(NdbDictionary::Table& tab, const char *name)
+{
+  tab.setName(name);
+  tab.setLogging(true);
+  {
+    NdbDictionary::Column col("_id");
+    col.setType(NdbDictionary::Column::Unsigned);
+    col.setPrimaryKey(true);
+    tab.addColumn(col);
+  }
+  NdbError error;
+  return tab.validate(error);
+} 
+
+int
+runBug17882305(NDBT_Context* ctx, NDBT_Step* step)
+{
+  NdbBackup backup;
+  NdbDictionary::Table tab;
+  const char *tablename = "#sql-dummy"; 
+  
+  Ndb* const ndb = GETNDB(step);
+  NdbDictionary::Dictionary* const dict = ndb->getDictionary();
+
+  // create "#sql-dummy" table
+  if(makeTmpTable(tab, tablename) == -1) {
+    g_err << "Validation of #sql table failed" << endl;
+    return NDBT_FAILED;
+  }
+  if (dict->createTable(tab) == -1) {
+    g_err << "Failed to create #sql table." << endl;
+    return NDBT_FAILED;
+  }
+
+  // start backup which will contain "#sql-dummy"
+  g_err << "Starting backup." << endl;
+  unsigned backupId = 0;
+  if (backup.start(backupId, 2, 0, 1) == -1) {
+    g_err << "Failed to start backup." << endl;
+    return NDBT_FAILED;
+  }
+
+  // drop "#sql-dummy"
+  if (dict->dropTable(tablename) == -1) {
+    g_err << "Failed to drop #sql-dummy table." << endl;
+    return NDBT_FAILED;
+  }
+
+  // restore from backup, data only.
+  // backup contains data for #sql-dummy, which should 
+  // cause an error as the table doesn't exist, but will 
+  // not cause an error as the default value for 
+  // --exclude-intermediate-sql-tables is 1
+  if (backup.restore(backupId, false) != 0) {
+    g_err << "Failed to restore from backup." << endl;
+    return NDBT_FAILED;
+  }
+
+  return NDBT_OK;
+}   
 NDBT_TESTSUITE(testBackup);
 TESTCASE("BackupOne", 
 	 "Test that backup and restore works on one table \n"
@@ -796,6 +977,18 @@ TESTCASE("FailSlave",
 TESTCASE("Bug57650", "")
 {
   INITIALIZER(runBug57650);
+}
+TESTCASE("Bug14019036", "")
+{
+  INITIALIZER(runBug14019036);
+}
+TESTCASE("Bug16656639", "")
+{
+  INITIALIZER(runBug16656639);
+}
+TESTCASE("Bug17882305", "")
+{
+  INITIALIZER(runBug17882305);
 }
 NDBT_TESTSUITE_END(testBackup);
 

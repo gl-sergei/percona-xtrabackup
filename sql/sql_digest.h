@@ -17,7 +17,7 @@
 #define SQL_DIGEST_H
 
 #include <string.h>
-class String;
+#include "sql_string.h"
 #include "my_md5.h"
 
 #define MAX_DIGEST_STORAGE_SIZE (1024*1024)

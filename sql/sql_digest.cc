@@ -18,22 +18,14 @@
 */
 
 #include "my_global.h"
+#include "my_sys.h"
 #include "my_md5.h"
-#include "mysqld_error.h"
-#include "sql_data_change.h"
-
-#include "sql_string.h"
-#include "sql_class.h"
 #include "sql_lex.h"
+#include "sql_signal.h"
+#include "sql_get_diagnostics.h"
+#include "sql_string.h"
 #include "sql_digest.h"
 #include "sql_digest_stream.h"
-
-#include "sql_get_diagnostics.h"
-
-#ifdef NEVER
-#include "my_sys.h"
-#include "sql_signal.h"
-#endif
 
 /* Generated code */
 #include "sql_yacc.h"

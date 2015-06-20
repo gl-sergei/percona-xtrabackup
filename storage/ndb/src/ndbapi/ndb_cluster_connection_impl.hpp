@@ -1,5 +1,5 @@
 /*
-   Copyright (c) 2004, 2010, Oracle and/or its affiliates. All rights reserved.
+   Copyright (c) 2004, 2013, Oracle and/or its affiliates. All rights reserved.
 
    This program is free software; you can redistribute it and/or modify
    it under the terms of the GNU General Public License as published by
@@ -23,6 +23,7 @@
 #include <Vector.hpp>
 #include <NdbMutex.h>
 #include "DictCache.hpp"
+#include "kernel/ndb_limits.h"
 
 extern NdbMutex *g_ndb_connection_mutex;
 
@@ -43,7 +44,8 @@ struct NdbApiConfig
     m_batch_byte_size(SCAN_BATCH_SIZE),
     m_batch_size(DEF_BATCH_SIZE),
     m_waitfor_timeout(120000),
-    m_default_queue_option(0)
+    m_default_queue_option(0),
+    m_default_hashmap_size(0)
     {}
 
   Uint32 m_scan_batch_size;
@@ -51,6 +53,7 @@ struct NdbApiConfig
   Uint32 m_batch_size;
   Uint32 m_waitfor_timeout; // in milli seconds...
   Uint32 m_default_queue_option;
+  Uint32 m_default_hashmap_size;
 };
 
 class Ndb_cluster_connection_impl : public Ndb_cluster_connection
@@ -74,10 +77,12 @@ public:
 private:
   friend class Ndb;
   friend class NdbImpl;
+  friend class NdbWaitGroup;
   friend void* run_ndb_cluster_connection_connect_thread(void*);
   friend class Ndb_cluster_connection;
   friend class NdbEventBuffer;
   friend class SignalSender;
+  friend class NDBT_Context;
   
   struct Node
   {
@@ -131,6 +136,8 @@ private:
   // Base offset for stats, from Ndb objects that are no 
   // longer with us
   Uint64 globalApiStatsBaseline[ Ndb::NumClientStatistics ];
+
+  NdbWaitGroup *m_multi_wait_group;
 };
 
 #endif

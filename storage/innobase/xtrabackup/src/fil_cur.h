@@ -54,7 +54,7 @@ struct xb_fil_cur_t {
 					after the last cursor read */
 	ulint		buf_npages;	/*!< number of pages in buffer after the
 					last cursor read */
-	ib_int64_t	buf_offset;	/*!< file offset of the first page in
+	ib_uint64_t	buf_offset;	/*!< file offset of the first page in
 					buffer */
 	ulint		buf_page_no;	/*!< number of the first page in
 					buffer */

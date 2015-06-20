@@ -1,4 +1,4 @@
-/* Copyright (c) 2000, 2011, Oracle and/or its affiliates. All rights reserved.
+/* Copyright (c) 2000, 2015, Oracle and/or its affiliates. All rights reserved.
 
    This program is free software; you can redistribute it and/or modify
    it under the terms of the GNU General Public License as published by
@@ -17,12 +17,13 @@
 
 #include "mysys_priv.h"
 #include "m_string.h"
+#include "my_sys.h"
 
 /*
   Initiate dynamic array
 
   SYNOPSIS
-    init_dynamic_array2()
+    my_init_dynamic_array()
       array		Pointer to an array
       element_size	Size of element
       init_buffer       Initial buffer pointer
@@ -40,9 +41,9 @@
     FALSE	Ok
 */
 
-my_bool init_dynamic_array2(DYNAMIC_ARRAY *array, uint element_size,
-                            void *init_buffer, uint init_alloc, 
-                            uint alloc_increment)
+my_bool my_init_dynamic_array(DYNAMIC_ARRAY *array, uint element_size,
+                              void *init_buffer, uint init_alloc, 
+                              uint alloc_increment)
 {
   DBUG_ENTER("init_dynamic_array");
   if (!alloc_increment)
@@ -67,7 +68,8 @@ my_bool init_dynamic_array2(DYNAMIC_ARRAY *array, uint element_size,
     Since the dynamic array is usable even if allocation fails here malloc
     should not throw an error
   */
-  if (!(array->buffer= (uchar*) my_malloc(element_size*init_alloc, MYF(0))))
+  if (!(array->buffer= (uchar*) my_malloc(key_memory_array_buffer,
+                                          element_size*init_alloc, MYF(0))))
     array->max_element=0;
   DBUG_RETURN(FALSE);
 } 
@@ -76,8 +78,10 @@ my_bool init_dynamic_array(DYNAMIC_ARRAY *array, uint element_size,
                            uint init_alloc, uint alloc_increment)
 {
   /* placeholder to preserve ABI */
-  return my_init_dynamic_array_ci(array, element_size, init_alloc, 
-                                  alloc_increment);
+  return my_init_dynamic_array(array, element_size,
+                               NULL,              /* init_buffer */
+                               init_alloc, 
+                               alloc_increment);
 }
 /*
   Insert element at the end of array. Allocate memory if needed.
@@ -138,7 +142,8 @@ void *alloc_dynamic(DYNAMIC_ARRAY *array)
         In this senerio, the buffer is statically preallocated,
         so we have to create an all-new malloc since we overflowed
       */
-      if (!(new_ptr= (char *) my_malloc((array->max_element+
+      if (!(new_ptr= (char *) my_malloc(key_memory_array_buffer,
+                                        (array->max_element+
                                          array->alloc_increment) *
                                         array->size_of_element,
                                         MYF(MY_WME))))
@@ -147,7 +152,8 @@ void *alloc_dynamic(DYNAMIC_ARRAY *array)
              array->elements * array->size_of_element);
     }
     else
-    if (!(new_ptr=(char*) my_realloc(array->buffer,(array->max_element+
+    if (!(new_ptr=(char*) my_realloc(key_memory_array_buffer,
+                                     array->buffer,(array->max_element+
                                      array->alloc_increment)*
                                      array->size_of_element,
                                      MYF(MY_WME | MY_ALLOW_ZERO_PTR))))
@@ -176,90 +182,6 @@ void *pop_dynamic(DYNAMIC_ARRAY *array)
   if (array->elements)
     return array->buffer+(--array->elements * array->size_of_element);
   return 0;
-}
-
-/*
-  Replace element in array with given element and index
-
-  SYNOPSIS
-    set_dynamic()
-      array
-      element	Element to be inserted
-      idx	Index where element is to be inserted
-
-  DESCRIPTION
-    set_dynamic() replaces element in array. 
-    If idx > max_element insert new element. Allocate memory if needed. 
- 
-  RETURN VALUE
-    TRUE	Idx was out of range and allocation of new memory failed
-    FALSE	Ok
-*/
-
-my_bool set_dynamic(DYNAMIC_ARRAY *array, const void *element, uint idx)
-{
-  if (idx >= array->elements)
-  {
-    if (idx >= array->max_element && allocate_dynamic(array, idx))
-      return TRUE;
-    memset((array->buffer+array->elements*array->size_of_element), 0, 
-	  (idx - array->elements)*array->size_of_element);
-    array->elements=idx+1;
-  }
-  memcpy(array->buffer+(idx * array->size_of_element),element,
-	 (size_t) array->size_of_element);
-  return FALSE;
-}
-
-
-/*
-  Ensure that dynamic array has enough elements
-
-  SYNOPSIS
-    allocate_dynamic()
-    array
-    max_elements        Numbers of elements that is needed
-
-  NOTES
-   Any new allocated element are NOT initialized
-
-  RETURN VALUE
-    FALSE	Ok
-    TRUE	Allocation of new memory failed
-*/
-
-my_bool allocate_dynamic(DYNAMIC_ARRAY *array, uint max_elements)
-{
-  if (max_elements >= array->max_element)
-  {
-    uint size;
-    uchar *new_ptr;
-    size= (max_elements + array->alloc_increment)/array->alloc_increment;
-    size*= array->alloc_increment;
-    if (array->buffer == (uchar *)(array + 1))
-    {
-       /*
-         In this senerio, the buffer is statically preallocated,
-         so we have to create an all-new malloc since we overflowed
-       */
-       if (!(new_ptr= (uchar *) my_malloc(size *
-                                         array->size_of_element,
-                                         MYF(MY_WME))))
-         return 0;
-       memcpy(new_ptr, array->buffer, 
-              array->elements * array->size_of_element);
-     }
-     else
-
-
-    if (!(new_ptr= (uchar*) my_realloc(array->buffer,size*
-                                       array->size_of_element,
-                                       MYF(MY_WME | MY_ALLOW_ZERO_PTR))))
-      return TRUE;
-    array->buffer= new_ptr;
-    array->max_element= size;
-  }
-  return FALSE;
 }
 
 
@@ -311,23 +233,6 @@ void delete_dynamic(DYNAMIC_ARRAY *array)
   }
 }
 
-/*
-  Delete element by given index
-
-  SYNOPSIS
-    delete_dynamic_element()
-      array
-      idx        Index of element to be deleted
-*/
-
-void delete_dynamic_element(DYNAMIC_ARRAY *array, uint idx)
-{
-  char *ptr= (char*) array->buffer+array->size_of_element*idx;
-  array->elements--;
-  memmove(ptr,ptr+array->size_of_element,
-          (array->elements-idx)*array->size_of_element);
-}
-
 
 /*
   Free unused memory
@@ -350,7 +255,8 @@ void freeze_size(DYNAMIC_ARRAY *array)
     
   if (array->buffer && array->max_element != elements)
   {
-    array->buffer=(uchar*) my_realloc(array->buffer,
+    array->buffer=(uchar*) my_realloc(key_memory_array_buffer,
+                                      array->buffer,
                                      elements*array->size_of_element,
                                      MYF(MY_WME));
     array->max_element=elements;

@@ -1,4 +1,4 @@
-/* Copyright (c) 2000, 2011, Oracle and/or its affiliates. All rights reserved.
+/* Copyright (c) 2000, 2013, Oracle and/or its affiliates. All rights reserved.
 
    This program is free software; you can redistribute it and/or modify
    it under the terms of the GNU General Public License as published by
@@ -110,7 +110,7 @@ int _mi_delete_static_record(MI_INFO *info)
 }
 
 
-int _mi_cmp_static_record(register MI_INFO *info, register const uchar *old)
+int _mi_cmp_static_record(MI_INFO *info, const uchar *old)
 {
   DBUG_ENTER("_mi_cmp_static_record");
 
@@ -162,8 +162,8 @@ int _mi_cmp_static_unique(MI_INFO *info, MI_UNIQUEDEF *def,
 	/*	   1 if record is deleted */
 	/*	  MY_FILE_ERROR on read-error or locking-error */
 
-int _mi_read_static_record(register MI_INFO *info, register my_off_t pos,
-			   register uchar *record)
+int _mi_read_static_record(MI_INFO *info, my_off_t pos,
+			   uchar *record)
 {
   int error;
 
@@ -197,7 +197,7 @@ int _mi_read_static_record(register MI_INFO *info, register my_off_t pos,
 
 
 int _mi_read_rnd_static_record(MI_INFO *info, uchar *buf,
-			       register my_off_t filepos,
+			       my_off_t filepos,
 			       my_bool skip_deleted_blocks)
 {
   int locked,error,cache_read;
@@ -233,7 +233,6 @@ int _mi_read_rnd_static_record(MI_INFO *info, uchar *buf,
     }
     else
     {						/* We don't nead new info */
-#ifndef UNSAFE_LOCKING
       if ((! cache_read || share->base.reclength > cache_length) &&
 	  share->tot_locks == 0)
       {						/* record not in cache */
@@ -242,9 +241,6 @@ int _mi_read_rnd_static_record(MI_INFO *info, uchar *buf,
 	  DBUG_RETURN(my_errno);
 	locked=1;
       }
-#else
-      info->tmp_lock_type=F_RDLCK;
-#endif
     }
   }
   if (filepos >= info->state->data_file_length)

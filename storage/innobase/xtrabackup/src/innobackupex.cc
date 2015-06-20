@@ -45,10 +45,10 @@ Place, Suite 330, Boston, MA 02111-1307 USA
 #include <mysql.h>
 #include <my_dir.h>
 #include <ut0mem.h>
-#include <os0sync.h>
 #include <os0file.h>
 #include <srv0start.h>
 #include <algorithm>
+#include <m_ctype.h>
 #include <mysqld.h>
 #include <my_default.h>
 #include <my_getopt.h>
@@ -150,7 +150,7 @@ char *ibx_opt_mysql_tmpdir;
 longlong ibx_xtrabackup_use_memory;
 
 
-static inline int ibx_msg(const char *fmt, ...) ATTRIBUTE_FORMAT(printf, 1, 2);
+static inline int ibx_msg(const char *fmt, ...) __attribute__((format(printf, 1, 2)));
 static inline int ibx_msg(const char *fmt, ...)
 {
 	int	result;
@@ -566,7 +566,7 @@ static struct my_option ibx_long_options[] =
 	 "buffer(s) for compression threads in bytes. The default value "
 	 "is 64K.", (uchar*) &ibx_xtrabackup_compress_chunk_size,
 	 (uchar*) &ibx_xtrabackup_compress_chunk_size,
-	 0, GET_ULL, REQUIRED_ARG, (1 << 16), 1024, ULONGLONG_MAX, 0, 0, 0},
+	 0, GET_ULL, REQUIRED_ARG, (1 << 16), 1024, ULONG_MAX, 0, 0, 0},
 
 	{"encrypt", OPT_ENCRYPT, "This option instructs xtrabackup to encrypt "
 	 "backup copies of InnoDB data files using the algorithm specified in "
@@ -606,7 +606,7 @@ static struct my_option ibx_long_options[] =
 	 "details.",
 	 (uchar*) &ibx_xtrabackup_encrypt_chunk_size,
 	 (uchar*) &ibx_xtrabackup_encrypt_chunk_size,
-	 0, GET_ULL, REQUIRED_ARG, (1 << 16), 1024, ULONGLONG_MAX, 0, 0, 0},
+	 0, GET_ULL, REQUIRED_ARG, (1 << 16), 1024, ULONG_MAX, 0, 0, 0},
 
 	{"export", OPT_EXPORT, "This option is passed directly to xtrabackup's "
 	 "--export option. It enables exporting individual tables for import "
@@ -728,7 +728,7 @@ static struct my_option ibx_long_options[] =
 	 "option. See the xtrabackup documentation for details.",
 	 (uchar*) &ibx_xtrabackup_use_memory,
 	 (uchar*) &ibx_xtrabackup_use_memory,
-	 0, GET_LL, REQUIRED_ARG, 100*1024*1024L, 1024*1024L, LONGLONG_MAX, 0,
+	 0, GET_LL, REQUIRED_ARG, 100*1024*1024L, 1024*1024L, LLONG_MAX, 0,
 	 1024*1024L, 0},
 
 	{ 0, 0, 0, 0, 0, 0, GET_NO_ARG, NO_ARG, 0, 0, 0, 0, 0, 0}

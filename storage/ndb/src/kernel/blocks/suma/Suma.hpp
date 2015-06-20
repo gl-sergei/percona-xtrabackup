@@ -1,5 +1,5 @@
 /*
-   Copyright (c) 2003, 2010, Oracle and/or its affiliates. All rights reserved.
+   Copyright (c) 2003, 2013, Oracle and/or its affiliates. All rights reserved.
 
    This program is free software; you can redistribute it and/or modify
    it under the terms of the GNU General Public License as published by
@@ -23,9 +23,7 @@
 
 #include <NodeBitmask.hpp>
 
-#include <SLList.hpp>
-#include <DLList.hpp>
-#include <DLCFifoList.hpp>
+#include <IntrusiveList.hpp>
 #include <KeyTable.hpp>
 #include <DataBuffer.hpp>
 #include <SignalCounter.hpp>
@@ -35,6 +33,10 @@
 #include <signaldata/UtilSequence.hpp>
 #include <signaldata/SumaImpl.hpp>
 #include <ndbapi/NdbDictionary.hpp>
+#include <NdbTick.h>
+
+#define JAM_FILE_ID 469
+
 
 class Suma : public SimulatedBlock {
   BLOCK_DEFINES(Suma);
@@ -119,11 +121,13 @@ public:
   void suma_ndbrequire(bool v);
 
   // wl4391_todo big enough for now
+  // Keep m_fragDesc within 32 bit,
+  // m_dummy is used to pass value.
   union FragmentDescriptor { 
     struct  {
-      Uint8 m_fragmentNo;
+      Uint16 m_fragmentNo;
       Uint8 m_lqhInstanceKey;
-      Uint16 m_nodeId;
+      Uint8 m_nodeId;
     } m_fragDesc;
     Uint32 m_dummy;
   };
@@ -505,6 +509,9 @@ public:
   // for LQH transporter overload check
   const NodeBitmask& getSubscriberNodes() const { return c_subscriber_nodes; }
 
+protected:
+  virtual bool getParam(const char * param, Uint32 * retVal);
+
 private:
   /**
    * Variables
@@ -515,9 +522,14 @@ private:
   /**
    * for restarting Suma not to start sending data too early
    */
+
   struct Startup
   {
+    Uint32 m_wait_handover_timeout_ms; // Max time to wait in phase 101 for API nodes to connect
     bool m_wait_handover;
+    NDB_TICKS m_wait_handover_expire;
+    NDB_TICKS m_wait_handover_message_expire;
+    bool m_forced_disconnect_attempted;
     Uint32 m_restart_server_node_id;
     NdbNodeBitmask m_handover_nodes;
   } c_startup;
@@ -561,6 +573,8 @@ private:
   void send_dict_unlock_ord(Signal* signal, Uint32 state);
   void send_start_me_req(Signal* signal);
   void check_start_handover(Signal* signal);
+  void check_wait_handover_timeout(Signal* signal);
+  void check_wait_handover_message(NDB_TICKS now);
   void send_handover_req(Signal* signal, Uint32 type);
 
   Uint32 get_responsible_node(Uint32 B) const;
@@ -670,6 +684,9 @@ private:
 
   struct Page_chunk
   {
+    STATIC_CONST( CHUNK_PAGE_SIZE = 32768 );
+    STATIC_CONST( PAGES_PER_CHUNK = 16 );
+
     Uint32 m_page_id;
     Uint32 m_size;
     Uint32 m_free;
@@ -708,5 +725,8 @@ private:
 
   void sendScanSubTableData(Signal* signal, Ptr<SyncRecord>, Uint32);
 };
+
+
+#undef JAM_FILE_ID
 
 #endif

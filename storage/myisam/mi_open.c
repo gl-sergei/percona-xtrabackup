@@ -31,8 +31,9 @@
 #include "rt_index.h"
 #include <m_ctype.h>
 
-#ifdef __WIN__
+#ifdef _WIN32
 #include <fcntl.h>
+#include <process.h>
 #endif
 
 static void setup_key_functions(MI_KEYDEF *keyinfo);
@@ -92,7 +93,7 @@ MI_INFO *mi_open(const char *name, int mode, uint open_flags)
   ulonglong max_key_file_length, max_data_file_length;
   DBUG_ENTER("mi_open");
 
-  LINT_INIT(m_info);
+  m_info= NULL;
   kfile= -1;
   lock_error=1;
   errpos=0;
@@ -180,7 +181,7 @@ MI_INFO *mi_open(const char *name, int mode, uint open_flags)
     /* Don't call realpath() if the name can't be a link */
     if (!strcmp(name_buff, org_name) ||
         my_readlink(index_name, org_name, MYF(0)) == -1)
-      (void) strmov(index_name, org_name);
+      (void) my_stpcpy(index_name, org_name);
     *strrchr(org_name, '.')= '\0';
     (void) fn_format(data_name,org_name,"",MI_NAME_DEXT,
                      MY_APPEND_EXT|MY_UNPACK_FILENAME|MY_RESOLVE_SYMLINKS);
@@ -287,7 +288,8 @@ MI_INFO *mi_open(const char *name, int mode, uint open_flags)
     /* Add space for node pointer */
     share->base.max_key_length+= share->base.key_reflength;
 
-    if (!my_multi_malloc(MY_WME,
+    if (!my_multi_malloc(mi_key_memory_MYISAM_SHARE,
+                         MY_WME,
 			 &share,sizeof(*share),
 			 &share->state.rec_per_key_part,sizeof(long)*key_parts,
 			 &share->keyinfo,keys*sizeof(MI_KEYDEF),
@@ -317,10 +319,10 @@ MI_INFO *mi_open(const char *name, int mode, uint open_flags)
     memcpy((char*) share->state.key_del,
 	   (char*) key_del, (sizeof(my_off_t) *
 			     share->state.header.max_block_size_index));
-    strmov(share->unique_file_name, name_buff);
+    my_stpcpy(share->unique_file_name, name_buff);
     share->unique_name_length= strlen(name_buff);
-    strmov(share->index_file_name,  index_name);
-    strmov(share->data_file_name,   data_name);
+    my_stpcpy(share->index_file_name,  index_name);
+    my_stpcpy(share->data_file_name,   data_name);
 
     share->blocksize= MY_MIN(IO_SIZE, myisam_block_size);
     {
@@ -369,14 +371,9 @@ MI_INFO *mi_open(const char *name, int mode, uint open_flags)
 	}
 	if (share->keyinfo[i].flag & HA_SPATIAL)
 	{
-#ifdef HAVE_SPATIAL
 	  uint sp_segs=SPDIMS*2;
 	  share->keyinfo[i].seg=pos-sp_segs;
 	  share->keyinfo[i].keysegs--;
-#else
-	  my_errno=HA_ERR_UNSUPPORTED;
-	  goto err;
-#endif
 	}
         else if (share->keyinfo[i].flag & HA_FULLTEXT)
 	{
@@ -517,7 +514,6 @@ MI_INFO *mi_open(const char *name, int mode, uint open_flags)
     }
     else if (share->options & HA_OPTION_PACK_RECORD)
       share->data_file_type = DYNAMIC_RECORD;
-    my_afree(disk_cache);
     mi_setup_functions(share);
     share->is_log_table= FALSE;
     thr_lock_init(&share->lock);
@@ -527,12 +523,7 @@ MI_INFO *mi_open(const char *name, int mode, uint open_flags)
       mysql_rwlock_init(mi_key_rwlock_MYISAM_SHARE_key_root_lock,
                         &share->key_root_lock[i]);
     mysql_rwlock_init(mi_key_rwlock_MYISAM_SHARE_mmap_lock, &share->mmap_lock);
-    if (!thr_lock_inited)
-    {
-      /* Probably a single threaded program; Don't use concurrent inserts */
-      myisam_concurrent_insert=0;
-    }
-    else if (myisam_concurrent_insert)
+    if (myisam_concurrent_insert)
     {
       share->concurrent_insert=
 	((share->options & (HA_OPTION_READ_ONLY_DATA | HA_OPTION_TMP_TABLE |
@@ -573,7 +564,8 @@ MI_INFO *mi_open(const char *name, int mode, uint open_flags)
   }
 
   /* alloc and set up private structure parts */
-  if (!my_multi_malloc(MY_WME,
+  if (!my_multi_malloc(mi_key_memory_MI_INFO,
+                       MY_WME,
 		       &m_info,sizeof(MI_INFO),
 		       &info.blobs,sizeof(MI_BLOB)*share->base.blobs,
 		       &info.buff,(share->base.max_key_block_length*2+
@@ -590,7 +582,7 @@ MI_INFO *mi_open(const char *name, int mode, uint open_flags)
   if (!have_rtree)
     info.rtree_recursion_state= NULL;
 
-  strmov(info.filename,name);
+  my_stpcpy(info.filename,name);
   memcpy(info.blobs,share->blobs,sizeof(MI_BLOB)*share->base.blobs);
   info.lastkey2=info.lastkey+share->base.max_key_length;
 
@@ -692,7 +684,6 @@ err:
       (void) my_lock(kfile, F_UNLCK, 0L, F_TO_EOF, MYF(MY_SEEK_NOT_DONE));
     /* fall through */
   case 2:
-    my_afree(disk_cache);
     /* fall through */
   case 1:
     (void) mysql_file_close(kfile, MYF(0));
@@ -711,8 +702,7 @@ err:
 uchar *mi_alloc_rec_buff(MI_INFO *info, ulong length, uchar **buf)
 {
   uint extra;
-  uint32 UNINIT_VAR(old_length);
-  LINT_INIT(old_length);
+  uint32 old_length= 0;
 
   if (! *buf || length > (old_length=mi_get_rec_buff_len(info, *buf)))
   {
@@ -736,7 +726,8 @@ uchar *mi_alloc_rec_buff(MI_INFO *info, ulong length, uchar **buf)
 	    MI_REC_BUFF_OFFSET : 0);
     if (extra && newptr)
       newptr-= MI_REC_BUFF_OFFSET;
-    if (!(newptr=(uchar*) my_realloc((uchar*)newptr, length+extra+8,
+    if (!(newptr=(uchar*) my_realloc(mi_key_memory_record_buffer,
+                                     (uchar*)newptr, length+extra+8,
                                      MYF(MY_ALLOW_ZERO_PTR))))
       return newptr;
     *((uint32 *) newptr)= (uint32) length;
@@ -757,7 +748,7 @@ ulonglong mi_safe_mul(ulonglong a, ulonglong b)
 
 	/* Set up functions in structs */
 
-void mi_setup_functions(register MYISAM_SHARE *share)
+void mi_setup_functions(MYISAM_SHARE *share)
 {
   if (share->options & HA_OPTION_COMPRESS_RECORD)
   {
@@ -811,16 +802,12 @@ void mi_setup_functions(register MYISAM_SHARE *share)
 }
 
 
-static void setup_key_functions(register MI_KEYDEF *keyinfo)
+static void setup_key_functions(MI_KEYDEF *keyinfo)
 {
   if (keyinfo->key_alg == HA_KEY_ALG_RTREE)
   {
-#ifdef HAVE_RTREE_KEYS
     keyinfo->ck_insert = rtree_insert;
     keyinfo->ck_delete = rtree_delete;
-#else
-    DBUG_ASSERT(0); /* mi_open should check it never happens */
-#endif
   }
   else
   {

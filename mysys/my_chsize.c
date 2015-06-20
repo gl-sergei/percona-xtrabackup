@@ -1,4 +1,4 @@
-/* Copyright (c) 2000, 2011, Oracle and/or its affiliates. All rights reserved.
+/* Copyright (c) 2000, 2015, Oracle and/or its affiliates. All rights reserved.
 
    This program is free software; you can redistribute it and/or modify
    it under the terms of the GNU General Public License as published by
@@ -14,8 +14,10 @@
    Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301  USA */
 
 #include "mysys_priv.h"
+#include "my_sys.h"
 #include "mysys_err.h"
 #include "m_string.h"
+#include "my_thread_local.h"
 
 /*
   Change size of file.
@@ -66,13 +68,6 @@ int my_chsize(File fd, my_off_t newlength, int filler, myf MyFlags)
       goto err;
     }
     DBUG_RETURN(0);
-#elif defined(HAVE_CHSIZE)
-    if (chsize(fd, (off_t) newlength))
-    {
-      my_errno=errno;
-      goto err;
-    }
-    DBUG_RETURN(0);
 #else
     /*
       Fill space between requested length and true length with 'filler'
@@ -104,7 +99,7 @@ err:
   if (MyFlags & MY_WME)
   {
     char  errbuf[MYSYS_STRERROR_SIZE];
-    my_error(EE_CANT_CHSIZE, MYF(ME_BELL+ME_WAITTANG),
+    my_error(EE_CANT_CHSIZE, MYF(0),
              my_errno, my_strerror(errbuf, sizeof(errbuf), my_errno));
   }
   DBUG_RETURN(1);

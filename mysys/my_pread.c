@@ -1,4 +1,4 @@
-/* Copyright (c) 2000, 2014, Oracle and/or its affiliates. All rights reserved.
+/* Copyright (c) 2000, 2015, Oracle and/or its affiliates. All rights reserved.
 
    This program is free software; you can redistribute it and/or modify
    it under the terms of the GNU General Public License as published by
@@ -14,14 +14,12 @@
    Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301  USA */
 
 #include "mysys_priv.h"
+#include "my_sys.h"
 #include "mysys_err.h"
 #include "my_base.h"
 #include <m_string.h>
 #include <errno.h>
-#if defined (HAVE_PREAD) && !defined(_WIN32)
-#include <unistd.h>
-#endif
-
+#include "my_thread_local.h"
 
 
 /*
@@ -50,32 +48,18 @@ size_t my_pread(File Filedes, uchar *Buffer, size_t Count, my_off_t offset,
 {
   size_t readbytes;
   int error= 0;
-#if !defined (HAVE_PREAD) && !defined (_WIN32)
-  int save_errno;
-#endif
   DBUG_ENTER("my_pread");
   DBUG_PRINT("my",("fd: %d  Seek: %llu  Buffer: %p  Count: %lu  MyFlags: %d",
              Filedes, (ulonglong)offset, Buffer, (ulong)Count, MyFlags));
   for (;;)
   {
     errno= 0;    /* Linux, Windows don't reset this on EOF/success */
-#if !defined (HAVE_PREAD) && !defined (_WIN32)
-    mysql_mutex_lock(&my_file_info[Filedes].mutex);
-    readbytes= (uint) -1;
-    error= (lseek(Filedes, offset, MY_SEEK_SET) == (my_off_t) -1 ||
-           (readbytes= read(Filedes, Buffer, Count)) != Count);
-    save_errno= errno;
-    mysql_mutex_unlock(&my_file_info[Filedes].mutex);
-    if (error)
-      errno= save_errno;
-#else
 #if defined(_WIN32)
     readbytes= my_win_pread(Filedes, Buffer, Count, offset);
-#else 
+#else
     readbytes= pread(Filedes, Buffer, Count, offset);
 #endif
     error= (readbytes != Count);
-#endif
     if(error)
     {
       my_errno= errno ? errno : -1;
@@ -97,10 +81,10 @@ size_t my_pread(File Filedes, uchar *Buffer, size_t Count, my_off_t offset,
       {
         char errbuf[MYSYS_STRERROR_SIZE];
         if (readbytes == (size_t) -1)
-          my_error(EE_READ, MYF(ME_BELL+ME_WAITTANG), my_filename(Filedes),
+          my_error(EE_READ, MYF(0), my_filename(Filedes),
                    my_errno, my_strerror(errbuf, sizeof(errbuf), my_errno));
         else if (MyFlags & (MY_NABP | MY_FNABP))
-          my_error(EE_EOFERR, MYF(ME_BELL+ME_WAITTANG), my_filename(Filedes),
+          my_error(EE_EOFERR, MYF(0), my_filename(Filedes),
                    my_errno, my_strerror(errbuf, sizeof(errbuf), my_errno));
       }
       if (readbytes == (size_t) -1 || (MyFlags & (MY_FNABP | MY_NABP)))
@@ -159,16 +143,7 @@ size_t my_pwrite(File Filedes, const uchar *Buffer, size_t Count,
   for (;;)
   {
     errno= 0;
-#if !defined (HAVE_PREAD) && !defined (_WIN32)
-    int error;
-    writtenbytes= (size_t) -1;
-    mysql_mutex_lock(&my_file_info[Filedes].mutex);
-    error= (lseek(Filedes, offset, MY_SEEK_SET) != (my_off_t) -1 &&
-            (writtenbytes= write(Filedes, Buffer, Count)) == Count);
-    mysql_mutex_unlock(&my_file_info[Filedes].mutex);
-    if (error)
-      break;
-#elif defined (_WIN32)
+#if defined (_WIN32)
     writtenbytes= my_win_pwrite(Filedes, Buffer, Count, offset);
 #else
     writtenbytes= pwrite(Filedes, Buffer, Count, offset);
@@ -187,9 +162,8 @@ size_t my_pwrite(File Filedes, const uchar *Buffer, size_t Count,
       offset+= writtenbytes;
     }
     DBUG_PRINT("error",("Write only %u bytes", (uint) writtenbytes));
-#ifndef NO_BACKGROUND
 
-    if (my_thread_var->abort)
+    if (mysys_thread_var()->abort)
       MyFlags&= ~ MY_WAIT_IF_FULL;		/* End if aborted by user */
 
     if ((my_errno == ENOSPC || my_errno == EDQUOT) &&
@@ -210,7 +184,6 @@ size_t my_pwrite(File Filedes, const uchar *Buffer, size_t Count,
       /* We may come here if the file quota is exeeded */
       continue;
     }
-#endif
     break;                                  /* Return bytes written */
   }
   if (MyFlags & (MY_NABP | MY_FNABP))
@@ -220,7 +193,7 @@ size_t my_pwrite(File Filedes, const uchar *Buffer, size_t Count,
     if (MyFlags & (MY_WME | MY_FAE | MY_FNABP))
     {
       char errbuf[MYSYS_STRERROR_SIZE];
-      my_error(EE_WRITE, MYF(ME_BELL | ME_WAITTANG), my_filename(Filedes),
+      my_error(EE_WRITE, MYF(0), my_filename(Filedes),
                my_errno, my_strerror(errbuf, sizeof(errbuf), my_errno));
     }
     DBUG_RETURN(MY_FILE_ERROR);
@@ -231,5 +204,4 @@ size_t my_pwrite(File Filedes, const uchar *Buffer, size_t Count,
     DBUG_RETURN(MY_FILE_ERROR);
 
   DBUG_RETURN(sum_written);
-
 } /* my_pwrite */

@@ -158,6 +158,7 @@ insert into t1 values ("a"),("b"),("c");
 create table t1(s char(1)) engine = ndb;
 insert into t1 values ("d"),("e"),("f");
 Restarting mysqld
+# restart
 use test;
 select * from t1 order by s;
 s
@@ -203,7 +204,7 @@ begin;
 select count(*) from t1;
 count(*)
 2
-ALTER OFFLINE TABLE t1 ADD COLUMN c int;
+ALTER TABLE t1 algorithm=copy, ADD COLUMN c int;
 select a from t1 where b = 2;
 a
 2
@@ -212,3 +213,20 @@ show tables;
 Tables_in_test
 t1
 drop table t1;
+SHOW TABLES FROM mysql LIKE 'ndb_schema';
+Tables_in_mysql (ndb_schema)
+SELECT count(1) FROM INFORMATION_SCHEMA.TABLES
+WHERE TABLE_SCHEMA = 'mysql' AND TABLE_NAME = 'ndb_schema';
+count(1)
+0
+create table mysql.dummy(a int primary key, b int) engine=myisam;
+create table mysql.dummy(a int primary key, b int) engine=myisam;
+drop table mysql.dummy;
+show create table mysql.dummy;
+Table	Create Table
+dummy	CREATE TABLE `dummy` (
+  `a` int(11) NOT NULL,
+  `b` int(11) DEFAULT NULL,
+  PRIMARY KEY (`a`)
+) ENGINE=MyISAM DEFAULT CHARSET=latin1
+drop table mysql.dummy;

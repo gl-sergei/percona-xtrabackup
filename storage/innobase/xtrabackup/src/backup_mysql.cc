@@ -42,6 +42,8 @@ Place, Suite 330, Boston, MA 02111-1307 USA
 #include <my_global.h>
 #include <mysql.h>
 #include <my_sys.h>
+#include <ha_prototypes.h>
+#include <srv0srv.h>
 #include <fnmatch.h>
 #include <string.h>
 #include "common.h"
@@ -704,9 +706,9 @@ static
 void
 start_query_killer()
 {
-	kill_query_thread_stop		= os_event_create();
-	kill_query_thread_started	= os_event_create();
-	kill_query_thread_stopped	= os_event_create();
+	kill_query_thread_stop    = os_event_create("kill_query_thread_stop");
+	kill_query_thread_started = os_event_create("kill_query_thread_started");
+	kill_query_thread_stopped = os_event_create("kill_query_thread_stopped");
 
 	os_thread_create(kill_query_thread, NULL, &kill_query_thread_id);
 

@@ -1,6 +1,5 @@
 /*
-   Copyright (C) 2003-2007 MySQL AB
-    All rights reserved. Use is subject to license terms.
+   Copyright (c) 2003, 2013, Oracle and/or its affiliates. All rights reserved.
 
    This program is free software; you can redistribute it and/or modify
    it under the terms of the GNU General Public License as published by
@@ -21,6 +20,9 @@
 
 #include "SignalData.hpp"
 
+#define JAM_FILE_ID 58
+
+
 /**
  * 
  */
@@ -32,6 +34,8 @@ class TcKeyConf {
   friend class NdbTransaction;
   friend class Ndbcntr;
   friend class DbUtil;
+
+  friend class TransporterFacade;
 
   /**
    * Sender(s)
@@ -131,5 +135,8 @@ TcKeyConf::setMarkerFlag(Uint32 & confInfo, Uint32 flag){
   ASSERT_BOOL(flag, "TcKeyConf::setMarkerFlag");
   confInfo |= (flag << 17);
 }
+
+
+#undef JAM_FILE_ID
 
 #endif

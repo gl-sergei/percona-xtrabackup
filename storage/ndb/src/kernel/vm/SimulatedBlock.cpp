@@ -1,5 +1,5 @@
 /*
-   Copyright (c) 2003, 2010, Oracle and/or its affiliates. All rights reserved.
+   Copyright (c) 2003, 2014, Oracle and/or its affiliates. All rights reserved.
 
    This program is free software; you can redistribute it and/or modify
    it under the terms of the GNU General Public License as published by
@@ -56,11 +56,13 @@
 #include <signaldata/CallbackSignal.hpp>
 #include "LongSignalImpl.hpp"
 
-#include <EventLogger.hpp>
-extern EventLogger * g_eventLogger;
+#include "KeyDescriptor.hpp"
 
-#define ljamEntry() jamEntryLine(30000 + __LINE__)
-#define ljam() jamLine(30000 + __LINE__)
+#include <EventLogger.hpp>
+
+#define JAM_FILE_ID 252
+
+extern EventLogger * g_eventLogger;
 
 //
 // Constructor, Destructor
@@ -99,12 +101,14 @@ SimulatedBlock::SimulatedBlock(BlockNumber blockNumber,
   if (theInstance == 0) {
     ndbrequire(mainBlock == 0);
     mainBlock = this;
+    theMainInstance = mainBlock;
     globalData.setBlock(blockNumber, mainBlock);
+    mainBlock->addInstance(this, theInstance);
   } else {
     ndbrequire(mainBlock != 0);
     mainBlock->addInstance(this, theInstance);
+    theMainInstance = mainBlock;
   }
-  theMainInstance = mainBlock;
 
   c_fragmentIdCounter = 1;
   c_fragSenderRunning = false;
@@ -161,15 +165,20 @@ SimulatedBlock::initCommon()
   this->getParam("FragmentInfoHash", &count);
   c_fragmentInfoHash.setSize(count);
 
-  count = 5;
+  Uint32 def = 5;
+#ifdef NDBD_MULTITHREADED
+  def += globalData.getBlockThreads();
+#endif
+
+  count = def;
   this->getParam("ActiveMutexes", &count);
   c_mutexMgr.setSize(count);
-  
-  count = 5;
+
+  count = def;
   this->getParam("ActiveCounters", &count);
   c_counterMgr.setSize(count);
 
-  count = 5;
+  count = def;
   this->getParam("ActiveThreadSync", &count);
   c_syncThreadPool.setSize(count);
 }
@@ -182,13 +191,20 @@ SimulatedBlock::~SimulatedBlock()
 #endif
 
 #ifdef VM_TRACE
+  enable_global_variables();
   delete [] m_global_variables;
+  m_global_variables = 0;
 #endif
 
   if (theInstanceList != 0) {
     Uint32 i;
     for (i = 0; i < MaxInstances; i++)
-      delete theInstanceList[i];
+    {
+      if (theInstanceList[i] != this)
+      {
+        delete theInstanceList[i];
+      }
+    }
     delete [] theInstanceList;
   }
   theInstanceList = 0;
@@ -292,45 +308,34 @@ SimulatedBlock::signal_error(Uint32 gsn, Uint32 len, Uint32 recBlockNo,
 
 extern class SectionSegmentPool g_sectionSegmentPool;
 
-#define check_sections(signal, cnt, cnt2) do { if (unlikely(cnt)) { handle_invalid_sections_in_send_signal(signal); } else if (unlikely(cnt2 == 0 && (signal->header.m_fragmentInfo != 0 && signal->header.m_fragmentInfo != 3))) { handle_invalid_fragmentInfo(signal); } } while(0)
-
 void
-SimulatedBlock::handle_invalid_sections_in_send_signal(Signal* signal) const
+SimulatedBlock::handle_invalid_sections_in_send_signal(const Signal* signal) 
+const
 {
-  //Uint32 cnt = signal->header.m_noOfSections;
-#if defined VM_TRACE || defined ERROR_INSERT
+  char errMsg[160];
+  BaseString::snprintf(errMsg, sizeof errMsg,
+                       "Unhandled sections in sendSignal for GSN %u (%s).", 
+                       signal->header.theVerId_signalNumber,
+                       getSignalName(signal->header.theVerId_signalNumber));
+  // Print message and terminate.
   ErrorReporter::handleError(NDBD_EXIT_BLOCK_BNR_ZERO,
-			     "Unhandled sections in sendSignal",
-			     "");
-#else
-  infoEvent("Unhandled sections in sendSignal!!");
-#endif
+                             errMsg,
+                             "");
 }
 
 void
-SimulatedBlock::handle_lingering_sections_after_execute(Signal* signal) const
+SimulatedBlock::handle_lingering_sections_after_execute(const Signal* signal)
+const
 {
-  //Uint32 cnt = signal->header.m_noOfSections;
-#if defined VM_TRACE || defined ERROR_INSERT
+  char errMsg[160];
+  BaseString::snprintf(errMsg, sizeof errMsg,
+                      "Unhandled sections after execute for GSN %u (%s).", 
+                      signal->header.theVerId_signalNumber,
+                      getSignalName(signal->header.theVerId_signalNumber));
+  // Print message and terminate.
   ErrorReporter::handleError(NDBD_EXIT_BLOCK_BNR_ZERO,
-			     "Unhandled sections after execute",
-			     "");
-#else
-  infoEvent("Unhandled sections after execute");
-#endif
-}
-
-void
-SimulatedBlock::handle_lingering_sections_after_execute(SectionHandle* handle) const
-{
-  //Uint32 cnt = signal->header.m_noOfSections;
-#if defined VM_TRACE || defined ERROR_INSERT
-  ErrorReporter::handleError(NDBD_EXIT_BLOCK_BNR_ZERO,
-			     "Unhandled sections(handle) after execute",
-			     "");
-#else
-  infoEvent("Unhandled sections(handle) after execute");
-#endif
+                             errMsg,
+                             "");
 }
 
 void
@@ -505,18 +510,17 @@ SimulatedBlock::sendSignal(BlockReference ref,
 
   BlockReference sendBRef = reference();
   
-  Uint32 noOfSections = signal->header.m_noOfSections;
   Uint32 recBlock = refToBlock(ref);
   Uint32 recNode   = refToNode(ref);
   Uint32 ourProcessor         = globalData.ownId;
   
+  check_sections(signal, signal->header.m_noOfSections, 0);
+
   signal->header.theLength = length;
   signal->header.theVerId_signalNumber = gsn;
   signal->header.theReceiversBlockNumber = recBlock;
   signal->header.m_noOfSections = 0;
 
-  check_sections(signal, noOfSections, 0);
-  
   Uint32 tSignalId = signal->header.theSignalId;
   
   if ((length == 0) || length > 25 || (recBlock == 0)) {
@@ -1581,6 +1585,34 @@ SimulatedBlock::import(SegmentedSectionPtr& ptr, const Uint32* src, Uint32 len)
 }
 
 bool
+SimulatedBlock::import(SectionHandle * dst,
+                       LinearSectionPtr src[3],
+                       Uint32 cnt)
+{
+  ndbassert(dst->m_cnt == 0);
+  if (dst->m_cnt)
+  {
+    releaseSections(* dst);
+  }
+
+  for (Uint32 i = 0; i < cnt; i++)
+  {
+    if (unlikely(!import(dst->m_ptr[i], src[i].p, src[i].sz)))
+    {
+      if (i)
+      {
+        dst->m_cnt = i - 1;
+        releaseSections(* dst);
+        return false;
+      }
+    }
+  }
+  dst->m_cnt = cnt;
+  return true;
+}
+
+
+bool
 SimulatedBlock::dupSection(Uint32& copyFirstIVal, Uint32 srcFirstIVal)
 {
   return ::dupSection(SB_SP_ARG copyFirstIVal, srcFirstIVal);
@@ -1794,7 +1826,7 @@ SimulatedBlock::update_watch_dog_timer(Uint32 interval)
 
 void
 SimulatedBlock::progError(int line, int err_code, const char* extra) const {
-  jamLine(line);
+  jamNoBlock();
 
   const char *aBlockName = getBlockName(number(), "VM Kernel");
 
@@ -1827,7 +1859,7 @@ SimulatedBlock::infoEvent(const char * msg, ...) const {
   BaseString::vsnprintf(buf, 96, msg, ap); // 96 = 100 - 4
   va_end(ap);
   
-  int len = strlen(buf) + 1;
+  size_t len = strlen(buf) + 1;
   if(len > 96){
     len = 96;
     buf[95] = 0;
@@ -1847,7 +1879,7 @@ SimulatedBlock::infoEvent(const char * msg, ...) const {
   signalT.header.theSendersBlockRef      = reference();
   signalT.header.theTrace                = tTrace;
   signalT.header.theSignalId             = tSignalId;
-  signalT.header.theLength               = ((len+3)/4)+1;
+  signalT.header.theLength               = (Uint32)((len+3)/4)+1;
   
 #ifdef NDBD_MULTITHREADED
   sendlocal(m_threadId,
@@ -1872,7 +1904,7 @@ SimulatedBlock::warningEvent(const char * msg, ...) const {
   BaseString::vsnprintf(buf, 96, msg, ap); // 96 = 100 - 4
   va_end(ap);
   
-  int len = strlen(buf) + 1;
+  size_t len = strlen(buf) + 1;
   if(len > 96){
     len = 96;
     buf[95] = 0;
@@ -1892,7 +1924,7 @@ SimulatedBlock::warningEvent(const char * msg, ...) const {
   signalT.header.theSendersBlockRef      = reference();
   signalT.header.theTrace                = tTrace;
   signalT.header.theSignalId             = tSignalId;
-  signalT.header.theLength               = ((len+3)/4)+1;
+  signalT.header.theLength               = (Uint32)((len+3)/4)+1;
 
 #ifdef NDBD_MULTITHREADED
   sendlocal(m_threadId,
@@ -1960,7 +1992,7 @@ SimulatedBlock::execSIGNAL_DROPPED_REP(Signal * signal){
 
 void
 SimulatedBlock::execCONTINUE_FRAGMENTED(Signal * signal){
-  ljamEntry();
+  jamEntry();
 
   ContinueFragmented * sig = (ContinueFragmented*)signal->getDataPtrSend();
   ndbrequire(signal->getSendersBlockRef() == reference()); /* Paranoia */
@@ -1969,20 +2001,20 @@ SimulatedBlock::execCONTINUE_FRAGMENTED(Signal * signal){
   {
   case ContinueFragmented::CONTINUE_SENDING :
   {
-    ljam();
+    jam();
     Ptr<FragmentSendInfo> fragPtr;
     
     c_segmentedFragmentSendList.first(fragPtr);  
     for(; !fragPtr.isNull();){
-      ljam();
+      jam();
       Ptr<FragmentSendInfo> copyPtr = fragPtr;
       c_segmentedFragmentSendList.next(fragPtr);
       
       sendNextSegmentedFragment(signal, * copyPtr.p);
       if(copyPtr.p->m_status == FragmentSendInfo::SendComplete){
-        ljam();
+        jam();
         if(copyPtr.p->m_callback.m_callbackFunction != 0) {
-          ljam();
+          jam();
           execute(signal, copyPtr.p->m_callback, 0);
         }//if
         c_segmentedFragmentSendList.release(copyPtr);
@@ -1991,15 +2023,15 @@ SimulatedBlock::execCONTINUE_FRAGMENTED(Signal * signal){
     
     c_linearFragmentSendList.first(fragPtr);  
     for(; !fragPtr.isNull();){
-      ljam(); 
+      jam(); 
       Ptr<FragmentSendInfo> copyPtr = fragPtr;
       c_linearFragmentSendList.next(fragPtr);
       
       sendNextLinearFragment(signal, * copyPtr.p);
       if(copyPtr.p->m_status == FragmentSendInfo::SendComplete){
-        ljam();
+        jam();
         if(copyPtr.p->m_callback.m_callbackFunction != 0) {
-          ljam();
+          jam();
           execute(signal, copyPtr.p->m_callback, 0);
         }//if
         c_linearFragmentSendList.release(copyPtr);
@@ -2008,7 +2040,7 @@ SimulatedBlock::execCONTINUE_FRAGMENTED(Signal * signal){
     
     if(c_segmentedFragmentSendList.isEmpty() && 
        c_linearFragmentSendList.isEmpty()){
-      ljam();
+      jam();
       c_fragSenderRunning = false;
       return;
     }
@@ -2020,7 +2052,7 @@ SimulatedBlock::execCONTINUE_FRAGMENTED(Signal * signal){
   }
   case ContinueFragmented::CONTINUE_CLEANUP:
   {
-    ljam();
+    jam();
     
     const Uint32 callbackWords = (sizeof(Callback) + 3) >> 2;
     /* Check length of signal */
@@ -2067,6 +2099,25 @@ SimulatedBlock::execSEND_PACKED(Signal* signal)
 {
 }
 
+ATTRIBUTE_NOINLINE
+void
+SimulatedBlock::handle_execute_error(GlobalSignalNumber gsn)
+{
+  /**
+   * This method only called if an error has occurred
+   */
+  char errorMsg[255];
+  if (!(gsn <= MAX_GSN)) {
+    BaseString::snprintf(errorMsg, 255, "Illegal signal received (GSN %d too high)", gsn);
+    ERROR_SET(fatal, NDBD_EXIT_PRGERR, errorMsg, errorMsg);
+  }
+  if (!(theExecArray[gsn] != 0)) {
+    BaseString::snprintf(errorMsg, 255, "Illegal signal received (GSN %d not added)", gsn);
+    ERROR_SET(fatal, NDBD_EXIT_PRGERR, errorMsg, errorMsg);
+  }
+  ndbrequire(false);
+}
+
 // MT LQH callback CONF via signal
 
 const SimulatedBlock::CallbackEntry&
@@ -2080,7 +2131,9 @@ SimulatedBlock::getCallbackEntry(Uint32 ci)
 
 void
 SimulatedBlock::sendCallbackConf(Signal* signal, Uint32 fullBlockNo,
-                                 CallbackPtr& cptr, Uint32 returnCode)
+                                 CallbackPtr& cptr,
+                                 Uint32 senderData, Uint32 callbackInfo,
+                                 Uint32 returnCode)
 {
   Uint32 blockNo = blockToMain(fullBlockNo);
   Uint32 instanceNo = blockToInstance(fullBlockNo);
@@ -2088,9 +2141,6 @@ SimulatedBlock::sendCallbackConf(Signal* signal, Uint32 fullBlockNo,
   ndbrequire(b != 0);
 
   const CallbackEntry& ce = b->getCallbackEntry(cptr.m_callbackIndex);
-
-  // wl4391_todo add as arg if this is not enough
-  Uint32 senderData = returnCode;
 
   if (!isNdbMtLqh()) {
     Callback c;
@@ -2102,6 +2152,7 @@ SimulatedBlock::sendCallbackConf(Signal* signal, Uint32 fullBlockNo,
       jam();
       CallbackAck* ack = (CallbackAck*)signal->getDataPtrSend();
       ack->senderData = senderData;
+      ack->callbackInfo = callbackInfo;
       EXECUTE_DIRECT(number(), GSN_CALLBACK_ACK,
                      signal, CallbackAck::SignalLength);
     }
@@ -2111,6 +2162,7 @@ SimulatedBlock::sendCallbackConf(Signal* signal, Uint32 fullBlockNo,
     conf->senderRef = reference();
     conf->callbackIndex = cptr.m_callbackIndex;
     conf->callbackData = cptr.m_callbackData;
+    conf->callbackInfo = callbackInfo;
     conf->returnCode = returnCode;
 
     if (ce.m_flags & CALLBACK_DIRECT) {
@@ -2134,20 +2186,25 @@ SimulatedBlock::execCALLBACK_CONF(Signal* signal)
 
   Uint32 senderData = conf->senderData;
   Uint32 senderRef = conf->senderRef;
+  Uint32 callbackIndex = conf->callbackIndex;
+  Uint32 callbackData = conf->callbackData;
+  Uint32 callbackInfo = conf->callbackInfo;
+  Uint32 returnCode = conf->returnCode;
 
   ndbrequire(m_callbackTableAddr != 0);
-  const CallbackEntry& ce = getCallbackEntry(conf->callbackIndex);
+  const CallbackEntry& ce = getCallbackEntry(callbackIndex);
   CallbackFunction function = ce.m_function;
 
   Callback callback;
   callback.m_callbackFunction = function;
-  callback.m_callbackData = conf->callbackData;
-  execute(signal, callback, conf->returnCode);
+  callback.m_callbackData = callbackData;
+  execute(signal, callback, returnCode);
 
   if (ce.m_flags & CALLBACK_ACK) {
     jam();
     CallbackAck* ack = (CallbackAck*)signal->getDataPtrSend();
     ack->senderData = senderData;
+    ack->callbackInfo = callbackInfo;
     sendSignal(senderRef, GSN_CALLBACK_ACK,
                signal, CallbackAck::SignalLength, JBB);
   }
@@ -2341,6 +2398,7 @@ SimulatedBlock::assembleFragments(Signal * signal){
        *       sets sendersBlockRef to reference()
        */
       /* Perform dropped signal handling, in this thread, now */
+      jamBuffer()->markEndOfSigExec();
       executeFunction(GSN_SIGNAL_DROPPED_REP, signal);
       
       /* return false to caller - they should not process the signal */
@@ -2506,7 +2564,7 @@ SimulatedBlock::doCleanupFragInfo(Uint32 failedNodeId,
                                   Uint32& rtUnitsUsed,
                                   Uint32& elementsCleaned)
 {
-  ljam();
+  jam();
   DLHashTable<FragmentInfo>::Iterator iter;
   
   c_fragmentInfoHash.next(cursor, iter);
@@ -2516,7 +2574,7 @@ SimulatedBlock::doCleanupFragInfo(Uint32 failedNodeId,
   while (!iter.isNull() &&
          (iter.bucket == startBucket))
   {
-    ljam();
+    jam();
 
     Ptr<FragmentInfo> curr = iter.curr;
     c_fragmentInfoHash.next(iter);
@@ -2525,7 +2583,7 @@ SimulatedBlock::doCleanupFragInfo(Uint32 failedNodeId,
     
     if (refToNode(fragInfo->m_senderRef) == failedNodeId)
     {
-      ljam();
+      jam();
       /* We were assembling a fragmented signal from the
        * failed node, discard the partially assembled
        * sections and free the FragmentInfo hash entry
@@ -2534,7 +2592,7 @@ SimulatedBlock::doCleanupFragInfo(Uint32 failedNodeId,
       {
         if (fragInfo->m_sectionPtrI[s] != RNIL)
         {
-          ljam();
+          jam();
           SegmentedSectionPtr ssptr;
           getSection(ssptr, fragInfo->m_sectionPtrI[s]);
           release(ssptr);
@@ -2561,7 +2619,7 @@ SimulatedBlock::doCleanupFragSend(Uint32 failedNodeId,
                                   Uint32& rtUnitsUsed,
                                   Uint32& elementsCleaned)
 {
-  ljam();
+  jam();
   
   Ptr<FragmentSendInfo> fragPtr;
   const Uint32 NumSendLists = 2;
@@ -2575,7 +2633,7 @@ SimulatedBlock::doCleanupFragSend(Uint32 failedNodeId,
   
   list->first(fragPtr);  
   for(; !fragPtr.isNull();){
-    ljam();
+    jam();
     Ptr<FragmentSendInfo> copyPtr = fragPtr;
     list->next(fragPtr);
     rtUnitsUsed++;
@@ -2584,13 +2642,13 @@ SimulatedBlock::doCleanupFragSend(Uint32 failedNodeId,
     
     if (rg.m_nodes.get(failedNodeId))
     {
-      ljam();
+      jam();
       /* Fragmented signal is being sent to node */
       rg.m_nodes.clear(failedNodeId);
       
       if (rg.m_nodes.isclear())
       {
-        ljam();
+        jam();
         /* No other nodes in receiver group - send
          * is cancelled
          * Will be cleaned up in the usual CONTINUE_FRAGMENTED
@@ -2617,7 +2675,7 @@ SimulatedBlock::doNodeFailureCleanup(Signal* signal,
                                      Uint32 elementsCleaned,
                                      Callback& cb)
 {
-  ljam();
+  jam();
   const bool userCallback = (cb.m_callbackFunction != 0);
   const Uint32 maxRtUnits = userCallback ?
 #ifdef VM_TRACE
@@ -2636,21 +2694,21 @@ SimulatedBlock::doNodeFailureCleanup(Signal* signal,
     switch(resource) {
     case ContinueFragmented::RES_FRAGSEND:
     {
-      ljam();
+      jam();
       resourceDone = doCleanupFragSend(failedNodeId, cursor,
                                        rtUnitsUsed, elementsCleaned);
       break;
     }
     case ContinueFragmented::RES_FRAGINFO:
     {
-      ljam();
+      jam();
       resourceDone = doCleanupFragInfo(failedNodeId, cursor, 
                                        rtUnitsUsed, elementsCleaned);
       break;
     }
     case ContinueFragmented::RES_LAST:
     {
-      ljam();
+      jam();
       /* Node failure processing complete, execute user callback if provided */
       if (userCallback)
         execute(signal, cb, elementsCleaned);
@@ -2670,7 +2728,7 @@ SimulatedBlock::doNodeFailureCleanup(Signal* signal,
 
   } while (rtUnitsUsed <= maxRtUnits);
   
-  ljam();
+  jam();
 
   /* Not yet completed failure handling.
    * Must have exhausted RT units.  
@@ -2702,7 +2760,7 @@ SimulatedBlock::simBlockNodeFailure(Signal* signal,
                                     Uint32 failedNodeId, 
                                     Callback& cb)
 {
-  ljam();
+  jam();
   return doNodeFailureCleanup(signal, failedNodeId, 0, 0, 0, cb);
 }
 
@@ -3363,7 +3421,7 @@ SimulatedBlock::sendFragmentedSignal(BlockReference ref,
 				     Uint32 messageSize){
   bool res = true;
   Ptr<FragmentSendInfo> tmp;
-  res = c_segmentedFragmentSendList.seize(tmp);
+  res = c_segmentedFragmentSendList.seizeFirst(tmp);
   ndbrequire(res);
   
   res = sendFirstFragment(* tmp.p,
@@ -3407,7 +3465,7 @@ SimulatedBlock::sendFragmentedSignal(NodeReceiverGroup rg,
 				     Uint32 messageSize){
   bool res = true;
   Ptr<FragmentSendInfo> tmp;
-  res = c_segmentedFragmentSendList.seize(tmp);
+  res = c_segmentedFragmentSendList.seizeFirst(tmp);
   ndbrequire(res);
   
   res = sendFirstFragment(* tmp.p,
@@ -3459,7 +3517,7 @@ SimulatedBlock::sendFragmentedSignal(BlockReference ref,
 				     Uint32 messageSize){
   bool res = true;
   Ptr<FragmentSendInfo> tmp;
-  res = c_linearFragmentSendList.seize(tmp);
+  res = c_linearFragmentSendList.seizeFirst(tmp);
   ndbrequire(res);
 
   res = sendFirstFragment(* tmp.p, 
@@ -3504,7 +3562,7 @@ SimulatedBlock::sendFragmentedSignal(NodeReceiverGroup rg,
 				     Uint32 messageSize){
   bool res = true;
   Ptr<FragmentSendInfo> tmp;
-  res = c_linearFragmentSendList.seize(tmp);
+  res = c_linearFragmentSendList.seizeFirst(tmp);
   ndbrequire(res);
 
   res = sendFirstFragment(* tmp.p, 
@@ -3556,42 +3614,42 @@ SimulatedBlock::isMultiThreaded()
 
 void 
 SimulatedBlock::execUTIL_CREATE_LOCK_REF(Signal* signal){
-  ljamEntry();
+  jamEntry();
   c_mutexMgr.execUTIL_CREATE_LOCK_REF(signal);
 }
 
 void SimulatedBlock::execUTIL_CREATE_LOCK_CONF(Signal* signal){
-  ljamEntry();
+  jamEntry();
   c_mutexMgr.execUTIL_CREATE_LOCK_CONF(signal);
 }
 
 void SimulatedBlock::execUTIL_DESTORY_LOCK_REF(Signal* signal){
-  ljamEntry();
+  jamEntry();
   c_mutexMgr.execUTIL_DESTORY_LOCK_REF(signal);
 }
 
 void SimulatedBlock::execUTIL_DESTORY_LOCK_CONF(Signal* signal){
-  ljamEntry();
+  jamEntry();
   c_mutexMgr.execUTIL_DESTORY_LOCK_CONF(signal);
 }
 
 void SimulatedBlock::execUTIL_LOCK_REF(Signal* signal){
-  ljamEntry();
+  jamEntry();
   c_mutexMgr.execUTIL_LOCK_REF(signal);
 }
 
 void SimulatedBlock::execUTIL_LOCK_CONF(Signal* signal){
-  ljamEntry();
+  jamEntry();
   c_mutexMgr.execUTIL_LOCK_CONF(signal);
 }
 
 void SimulatedBlock::execUTIL_UNLOCK_REF(Signal* signal){
-  ljamEntry();
+  jamEntry();
   c_mutexMgr.execUTIL_UNLOCK_REF(signal);
 }
 
 void SimulatedBlock::execUTIL_UNLOCK_CONF(Signal* signal){
-  ljamEntry();
+  jamEntry();
   c_mutexMgr.execUTIL_UNLOCK_CONF(signal);
 }
 
@@ -3695,8 +3753,6 @@ SimulatedBlock::init_globals_list(void ** tmp, size_t cnt){
 
 #endif
 
-#include "KeyDescriptor.hpp"
-
 Uint32
 SimulatedBlock::xfrm_key(Uint32 tab, const Uint32* src, 
 			 Uint32 *dst, Uint32 dstSize,
@@ -3749,7 +3805,6 @@ SimulatedBlock::xfrm_attr(Uint32 attrDesc, CHARSET_INFO* cs,
   {
     jam();
     Uint32 len;
-    LINT_INIT(len);
     switch(array){
     case NDB_ARRAYTYPE_SHORT_VAR:
       len = 1 + srcPtr[0];
@@ -3886,7 +3941,7 @@ SimulatedBlock::sendRoutedSignal(RoutePath path[], Uint32 pathcnt,
   SectionHandle handle(this, signal);
   if (userhandle)
   {
-    ljam();
+    jam();
     handle.m_cnt = userhandle->m_cnt;
     for (Uint32 i = 0; i<handle.m_cnt; i++)
       handle.m_ptr[i] = userhandle->m_ptr[i];
@@ -3895,7 +3950,7 @@ SimulatedBlock::sendRoutedSignal(RoutePath path[], Uint32 pathcnt,
 
   if (len + sigLen > 25)
   {
-    ljam();
+    jam();
 
     /**
      * we need to store theData in a section
@@ -3915,7 +3970,7 @@ SimulatedBlock::sendRoutedSignal(RoutePath path[], Uint32 pathcnt,
   }
   else
   {
-    ljam();
+    jam();
     memmove(signal->theData + len, signal->theData, 4 * sigLen);
     len += sigLen;
   }
@@ -3950,11 +4005,11 @@ SimulatedBlock::sendRoutedSignal(RoutePath path[], Uint32 pathcnt,
 void
 SimulatedBlock::execLOCAL_ROUTE_ORD(Signal* signal)
 {
-  ljamEntry();
+  jamEntry();
 
   if (!assembleFragments(signal))
   {
-    ljam();
+    jam();
     return;
   }
 
@@ -3963,7 +4018,7 @@ SimulatedBlock::execLOCAL_ROUTE_ORD(Signal* signal)
     /**
      * This NDBCNTR error code 1001
      */
-    ljam();
+    jam();
     SectionHandle handle(this, signal);
     sendSignalWithDelay(reference(), GSN_LOCAL_ROUTE_ORD, signal, 200, 
                         signal->getLength(), &handle);
@@ -3980,14 +4035,14 @@ SimulatedBlock::execLOCAL_ROUTE_ORD(Signal* signal)
     /**
      * Send to final destination(s);
      */
-    ljam();
+    jam();
     Uint32 gsn = ord->gsn;
     Uint32 prio = ord->prio;
     memcpy(signal->theData+25, ord->path, 4*dstcnt);
     SectionHandle handle(this, signal);
     if (sigLen > LocalRouteOrd::StaticLen + dstcnt)
     {
-      ljam();
+      jam();
       /**
        * Data is at end of this...
        */
@@ -3998,7 +4053,7 @@ SimulatedBlock::execLOCAL_ROUTE_ORD(Signal* signal)
     }
     else
     {
-      ljam();
+      jam();
       /**
        * Put section 0 in signal->theData
        */
@@ -4021,7 +4076,7 @@ SimulatedBlock::execLOCAL_ROUTE_ORD(Signal* signal)
       jam();
       for (Uint32 i = 0; i<dstcnt; i++)
       {
-        ljam();
+        jam();
         sendSignalNoRelease(signal->theData[25+i], gsn, signal, sigLen,
                             JobBufferLevel(prio), &handle);
       }
@@ -4039,7 +4094,7 @@ SimulatedBlock::execLOCAL_ROUTE_ORD(Signal* signal)
     /**
      * Reroute
      */
-    ljam();
+    jam();
     SectionHandle handle(this, signal);
     Uint32 ref = ord->path[0];
     Uint32 prio = ord->path[1];
@@ -4077,7 +4132,7 @@ SimulatedBlock::debugOutTag(char *buf, int line)
   timebuf[0] = 0;
 #ifdef VM_TRACE_TIME
   {
-    NDB_TICKS t = NdbTick_CurrentMillisecond();
+    Uint64 t = NdbTick_CurrentMillisecond();
     uint s = (t / 1000) % 3600;
     uint ms = t % 1000;
     sprintf(timebuf, " - %u.%03u -", s, ms);
@@ -4098,13 +4153,13 @@ SimulatedBlock::synchronize_threads_for_blocks(Signal * signal,
   Callback copy = cb;
   execute(signal, copy, 0);
 #else
-  ljam();
+  jam();
   Uint32 ref[32]; // max threads
   Uint32 cnt = mt_get_thread_references_for_blocks(blocks, getThreadId(),
                                                    ref, NDB_ARRAY_SIZE(ref));
   if (cnt == 0)
   {
-    ljam();
+    jam();
     Callback copy = cb;
     execute(signal, copy, 0);
     return;
@@ -4128,7 +4183,7 @@ SimulatedBlock::synchronize_threads_for_blocks(Signal * signal,
 void
 SimulatedBlock::execSYNC_THREAD_REQ(Signal* signal)
 {
-  ljamEntry();
+  jamEntry();
   Uint32 ref = signal->theData[0];
   Uint32 prio = signal->theData[2];
   sendSignal(ref, GSN_SYNC_THREAD_CONF, signal, signal->getLength(),
@@ -4138,12 +4193,12 @@ SimulatedBlock::execSYNC_THREAD_REQ(Signal* signal)
 void
 SimulatedBlock::execSYNC_THREAD_CONF(Signal* signal)
 {
-  ljamEntry();
+  jamEntry();
   Ptr<SyncThreadRecord> ptr;
   c_syncThreadPool.getPtr(ptr, signal->theData[1]);
   if (ptr.p->m_cnt == 1)
   {
-    ljam();
+    jam();
     Callback copy = ptr.p->m_callback;
     c_syncThreadPool.release(ptr);
     execute(signal, copy, 0);
@@ -4155,7 +4210,7 @@ SimulatedBlock::execSYNC_THREAD_CONF(Signal* signal)
 void
 SimulatedBlock::execSYNC_REQ(Signal* signal)
 {
-  ljamEntry();
+  jamEntry();
   Uint32 ref = signal->theData[0];
   Uint32 prio = signal->theData[2];
   sendSignal(ref, GSN_SYNC_CONF, signal, signal->getLength(),
@@ -4168,7 +4223,7 @@ SimulatedBlock::synchronize_path(Signal * signal,
                                  const Callback & cb,
                                  JobBufferLevel prio)
 {
-  ljam();
+  jam();
 
   // reuse SyncThreadRecord
   Ptr<SyncThreadRecord> ptr;
@@ -4182,12 +4237,12 @@ SimulatedBlock::synchronize_path(Signal * signal,
   req->count = 1;
   if (blocks[0] == 0)
   {
-    ljam();
+    jam();
     ndbrequire(false); // TODO
   }
   else
   {
-    ljam();
+    jam();
     Uint32 len = 0;
     for (; blocks[len+1] != 0; len++)
     {
@@ -4204,11 +4259,11 @@ SimulatedBlock::synchronize_path(Signal * signal,
 void
 SimulatedBlock::execSYNC_PATH_REQ(Signal* signal)
 {
-  ljamEntry();
+  jamEntry();
   SyncPathReq * req = CAST_PTR(SyncPathReq, signal->getDataPtrSend());
   if (req->pathlen == 1)
   {
-    ljam();
+    jam();
     SyncPathReq copy = *req;
     SyncPathConf* conf = CAST_PTR(SyncPathConf, signal->getDataPtrSend());
     conf->senderData = copy.senderData;
@@ -4218,7 +4273,7 @@ SimulatedBlock::execSYNC_PATH_REQ(Signal* signal)
   }
   else
   {
-    ljam();
+    jam();
     Uint32 ref = numberToRef(req->path[0], getOwnNodeId());
     req->pathlen--;
     memmove(req->path, req->path + 1, 4 * req->pathlen);
@@ -4231,7 +4286,7 @@ SimulatedBlock::execSYNC_PATH_REQ(Signal* signal)
 void
 SimulatedBlock::execSYNC_PATH_CONF(Signal* signal)
 {
-  ljamEntry();
+  jamEntry();
   SyncPathConf conf = * CAST_CONSTPTR(SyncPathConf, signal->getDataPtr());
   Ptr<SyncThreadRecord> ptr;
 
@@ -4239,13 +4294,13 @@ SimulatedBlock::execSYNC_PATH_CONF(Signal* signal)
 
   if (ptr.p->m_cnt == 0)
   {
-    ljam();
+    jam();
     ptr.p->m_cnt = conf.count;
   }
 
   if (ptr.p->m_cnt == 1)
   {
-    ljam();
+    jam();
     Callback copy = ptr.p->m_callback;
     c_syncThreadPool.release(ptr);
     execute(signal, copy, 0);
@@ -4278,7 +4333,7 @@ SimulatedBlock::checkNodeFailSequence(Signal* signal)
       (refToNode(ref) == getOwnNodeId() &&
        refToMain(ref) == NDBCNTR))
   {
-    ljam();
+    jam();
     return true;
   }
 
@@ -4412,6 +4467,53 @@ SimulatedBlock::ndbinfo_send_scan_conf(Signal* signal,
              signal_length, JBB);
 }
 
+void SimulatedBlock::init_elapsed_time(Signal *signal,
+                                       NDB_TICKS &latestTIME_SIGNAL)
+{
+  const NDB_TICKS currentTime = NdbTick_getCurrentTicks();
+  signal->theData[0] = Uint32(currentTime.getUint64() >> 32);
+  signal->theData[1] = Uint32(currentTime.getUint64() & 0xFFFFFFFF);
+  latestTIME_SIGNAL = currentTime;
+  sendSignal(reference(), GSN_TIME_SIGNAL, signal, 2, JBB);
+}
+
+void SimulatedBlock::sendTIME_SIGNAL(Signal *signal,
+                                     const NDB_TICKS currentTime,
+                                     Uint32 delay)
+{
+  signal->theData[0] = Uint32(currentTime.getUint64() >> 32);
+  signal->theData[1] = Uint32(currentTime.getUint64() & 0xFFFFFFFF);
+  sendSignalWithDelay(reference(), GSN_TIME_SIGNAL, signal, delay, 2);
+}
+
+/*
+  This function is used to handle TIME_SIGNAL. This signal is intended to
+  be used sort of like a drum beat. We should execute some timer calls
+  every so often. However the OS can easily make the delayed signals to
+  be delayed if the OS is occupied with other things. We will never report
+  sleeps for longer than twice the expected delay. We rely on the delayed
+  signal scheduler to ensure that we run time a bit faster for a while
+  after long sleeps.
+
+  This function will return the elapsed time since last time we called it.
+*/
+Uint64
+SimulatedBlock::elapsed_time(Signal *signal,
+                             const NDB_TICKS currentTime,
+                             NDB_TICKS &latestTIME_SIGNAL,
+                             Uint32 expected_delay)
+{
+  const Uint64 elapsed_time =
+    NdbTick_Elapsed(latestTIME_SIGNAL, currentTime).milliSec();
+  latestTIME_SIGNAL = currentTime;
+
+  if (elapsed_time > Uint64(2 * expected_delay))
+  {
+    return Uint64(2 * expected_delay);
+  }
+  return elapsed_time;
+}
+
 #ifdef VM_TRACE
 void
 SimulatedBlock::assertOwnThread()
@@ -4422,3 +4524,19 @@ SimulatedBlock::assertOwnThread()
 }
 
 #endif
+
+Uint32
+SimulatedBlock::get_recv_thread_idx(NodeId nodeId)
+{
+#ifdef NDBD_MULTITHREADED
+  return mt_get_recv_thread_idx(nodeId);
+#else
+  return 0;
+#endif
+}
+
+/** 
+ * #undef is needed since this file is included by SimulatedBlock_nonmt.cpp
+ * and SimulatedBlock_mt.cpp
+ */
+#undef JAM_FILE_ID

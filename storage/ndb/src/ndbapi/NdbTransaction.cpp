@@ -1,5 +1,5 @@
 /*
-   Copyright (c) 2003, 2010, Oracle and/or its affiliates. All rights reserved.
+   Copyright (c) 2003, 2013, Oracle and/or its affiliates. All rights reserved.
 
    This program is free software; you can redistribute it and/or modify
    it under the terms of the GNU General Public License as published by
@@ -16,6 +16,7 @@
 */
 
 #include <ndb_global.h>
+#include <NdbTick.h>
 #include <NdbOut.hpp>
 #include "API.hpp"
 
@@ -26,6 +27,8 @@
 #include <signaldata/TcKeyFailConf.hpp>
 #include <signaldata/TcHbRep.hpp>
 #include <signaldata/TcRollbackRep.hpp>
+
+static const Uint64 InvalidTransactionId = ~Uint64(0);
 
 /*****************************************************************************
 NdbTransaction( Ndb* aNdb );
@@ -64,10 +67,6 @@ NdbTransaction::NdbTransaction( Ndb* aNdb ) :
   theTransactionIsStarted(false),
   theDBnode(0),
   theReleaseOnClose(false),
-  // Composite query operations
-  m_firstQuery(NULL),
-  m_firstExecQuery(NULL),
-  m_firstActiveQuery(NULL),
   // Scan operations
   m_waitForReply(true),
   m_theFirstScanOperation(NULL),
@@ -75,7 +74,6 @@ NdbTransaction::NdbTransaction( Ndb* aNdb ) :
   m_firstExecutedScanOp(NULL),
   // Scan operations
   theScanningOp(NULL),
-  m_scanningQuery(NULL),
   theBuddyConPtr(0xFFFFFFFF),
   theBlobFlag(false),
   thePendingBlobOps(0),
@@ -83,8 +81,15 @@ NdbTransaction::NdbTransaction( Ndb* aNdb ) :
   maxPendingBlobWriteBytes(~Uint32(0)),
   pendingBlobReadBytes(0),
   pendingBlobWriteBytes(0),
+  // Lock handle
   m_theFirstLockHandle(NULL),
   m_theLastLockHandle(NULL),
+  // Composite query operations
+  m_firstQuery(NULL),
+  m_firstExecQuery(NULL),
+  m_firstActiveQuery(NULL),
+  m_scanningQuery(NULL),
+  //
   m_tcRef(numberToRef(DBTC, 0))
 {
   theListState = NotInList;
@@ -731,27 +736,6 @@ NdbTransaction::executeAsynchPrepare(NdbTransaction::ExecType aTypeOfExec,
     releaseCompletedQueries();
   }
 
-  NdbScanOperation* tcOp = m_theFirstScanOperation;
-  if (tcOp != 0){
-    // Execute any cursor operations
-    while (tcOp != NULL) {
-      int tReturnCode;
-      tReturnCode = tcOp->executeCursor(theDBnode);
-      if (tReturnCode == -1) {
-        DBUG_VOID_RETURN;
-      }//if
-      tcOp->postExecuteRelease(); // Release unneeded resources
-                                  // outside TP mutex
-      tcOp = (NdbScanOperation*)tcOp->next();
-    } // while
-    m_theLastScanOperation->next(m_firstExecutedScanOp);
-    m_firstExecutedScanOp = m_theFirstScanOperation;
-    // Discard cursor operations, since these are also
-    // in the complete operations list we do not need
-    // to release them.
-    m_theFirstScanOperation = m_theLastScanOperation = NULL;
-  }
-
   bool tTransactionIsStarted = theTransactionIsStarted;
   NdbOperation*	tLastOp = theLastOpInList;
   Ndb* tNdb = theNdb;
@@ -1011,6 +995,7 @@ NdbTransaction::sendTC_HBREP()		// Send a TC_HBREP signal;
  
   tNdb->theImpl->lock();
   const int res = tNdb->theImpl->sendSignal(tSignal,theDBnode);
+  tNdb->theImpl->flush_send_buffers();
   tNdb->theImpl->unlock();
   tNdb->releaseSignal(tSignal);
 
@@ -1038,6 +1023,34 @@ NdbTransaction::doSend()
   This method assumes that at least one operation or query have been defined.
   This is ensured by the caller of this routine (=execute).
   */
+  NdbScanOperation* tcOp = m_theFirstScanOperation;
+  if (tcOp != 0){
+    // Execute any cursor operations
+    while (tcOp != NULL) {
+      int tReturnCode;
+      tReturnCode = tcOp->executeCursor(theDBnode);
+      /**
+        Previously this code executed in executeAsynchPrepare and we
+        had no way of reporting an error. Thus this particular failure
+        won't immediately cause a transaction failure in the old code.
+        To retain this old behaviour we don't cause a transaction
+        failure here either. We avoid postExecuteRelease in the
+        failure case just in case we want to analyse the error a
+        bit more.
+      */
+      if (tReturnCode != -1) {
+        tcOp->postExecuteRelease(); // Release unneeded resources
+                                    // outside TP mutex
+      }//if
+      tcOp = (NdbScanOperation*)tcOp->next();
+    } // while
+    m_theLastScanOperation->next(m_firstExecutedScanOp);
+    m_firstExecutedScanOp = m_theFirstScanOperation;
+    // Discard cursor operations, since these are also
+    // in the complete operations list we do not need
+    // to release them.
+    m_theFirstScanOperation = m_theLastScanOperation = NULL;
+  }
 
   switch(theSendStatus){
   case sendOperations: {
@@ -2006,6 +2019,7 @@ NdbTransaction::receiveTC_COMMITREF(const NdbApiSignal* aSignal)
     theCommitStatus = Aborted;
     theCompletionStatus = CompletedFailure;
     theReturnStatus = ReturnFailure;
+    theTransactionId = InvalidTransactionId; /* No further signals please */
     return 0;
   } else {
 #ifdef NDB_NO_DROPPED_SIGNAL
@@ -2056,6 +2070,7 @@ NdbTransaction::receiveTCROLLBACKREF(const NdbApiSignal* aSignal)
     theCommitStatus = Aborted;
     theCompletionStatus = CompletedFailure;
     theReturnStatus = ReturnFailure;
+    theTransactionId = InvalidTransactionId; /* No further signals please */
     return 0;
   } else {
 #ifdef NDB_NO_DROPPED_SIGNAL
@@ -2090,7 +2105,7 @@ transactions.
     if (aSignal->getLength() == TcRollbackRep::SignalLength)
     {
       // Signal may contain additional error data
-      theError.details = (char *) aSignal->readData(5);
+      theError.details = (char *)UintPtr(aSignal->readData(5));
     }
 
     /**********************************************************************/
@@ -2100,6 +2115,7 @@ transactions.
     /*	and we only need to report completion and return with the     */
     /*	error code to the application.				      */
     /**********************************************************************/
+    theTransactionId = InvalidTransactionId; /* No further signals please */
     theCompletionStatus = CompletedFailure;
     theCommitStatus = Aborted;
     theReturnStatus = ReturnFailure;
@@ -2231,6 +2247,7 @@ NdbTransaction::receiveTCKEY_FAILCONF(const TcKeyFailConf * failConf)
       been committed.
     */
     theCommitStatus = Committed;
+    theTransactionId = InvalidTransactionId; /* No further signals please */
     tOp = theFirstExecOpInList;
     while (tOp != NULL) {
       /*
@@ -2307,6 +2324,7 @@ NdbTransaction::receiveTCKEY_FAILREF(const NdbApiSignal* aSignal)
     }//if
     theReleaseOnClose = true;
     theCommitStatus = NdbTransaction::Aborted;
+    theTransactionId = InvalidTransactionId; /* No further signals please */
     return 0;
   } else {
 #ifdef VM_TRACE

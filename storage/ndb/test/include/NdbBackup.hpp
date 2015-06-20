@@ -26,15 +26,15 @@
 
 class NdbBackup : public NdbConfig {
 public:
-  NdbBackup(int _own_id, const char* _addr = 0) 
-    : NdbConfig(_own_id, _addr) {};
+  NdbBackup(const char* _addr = 0)
+    : NdbConfig(_addr) {};
 
   int start(unsigned & _backup_id,
 	    int flags = 2,
 	    unsigned int user_backup_id= 0,
 	    unsigned int logtype= 0);
   int start() { unsigned unused =0; return start(unused); }
-  int restore(unsigned _backup_id);
+  int restore(unsigned _backup_id, bool restore_meta = true);
 
   int NFMaster(NdbRestarter& _restarter);
   int NFMasterAsSlave(NdbRestarter& _restarter);
@@ -49,6 +49,7 @@ public:
   int checkBackupStatus();
 
   int clearOldBackups();
+  int abort(unsigned _backup_id);
 
 private:
 

@@ -1,5 +1,4 @@
-/* Copyright (c) 2001, 2002, 2004-2007 MySQL AB
-   Use is subject to license terms
+/* Copyright (c) 2001, 2012, Oracle and/or its affiliates. All rights reserved.
 
    This program is free software; you can redistribute it and/or modify
    it under the terms of the GNU General Public License as published by
@@ -18,7 +17,7 @@
 
 #include "myrg_def.h"
 
-int myrg_write(register MYRG_INFO *info, uchar *rec)
+int myrg_write(MYRG_INFO *info, uchar *rec)
 {
   /* [phi] MERGE_WRITE_DISABLED is handled by the else case */
   if (info->merge_insert_method == MERGE_INSERT_TO_FIRST)

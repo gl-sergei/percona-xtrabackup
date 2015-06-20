@@ -14,7 +14,7 @@
   51 Franklin Street, Suite 500, Boston, MA 02110-1335 USA */
 
 #include <my_global.h>
-#include <my_pthread.h>
+#include <my_thread.h>
 #include <pfs_instr.h>
 #include <pfs_stat.h>
 #include <pfs_global.h>
@@ -22,6 +22,7 @@
 #include <tap.h>
 
 #include "stub_pfs_global.h"
+#include "stub_global_status_var.h"
 
 #include <string.h> /* memset */
 
@@ -65,6 +66,7 @@ void test_oom()
   stub_alloc_fails_after_count= 1000;
 
   init_event_name_sizing(& param);
+  register_global_classes();
   rc= init_stage_class(param.m_stage_class_sizing);
   ok(rc == 0, "init stage class");
   rc= init_statement_class(param.m_statement_class_sizing);
@@ -92,22 +94,23 @@ void test_oom()
   ok(rc == 1, "oom (user statements)");
   cleanup_user();
 
+  stub_alloc_fails_after_count= 5;
+  rc= init_user(& param);
+  ok(rc == 1, "oom (user transactions)");
+  cleanup_user();
+
   cleanup_statement_class();
   cleanup_stage_class();
 }
 
 void do_all_tests()
 {
-  PFS_atomic::init();
-
   test_oom();
-
-  PFS_atomic::cleanup();
 }
 
 int main(int, char **)
 {
-  plan(6);
+  plan(7);
   MY_INIT("pfs_user-oom-t");
   do_all_tests();
   return 0;

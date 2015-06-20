@@ -1,4 +1,4 @@
-/* Copyright (c) 2000, 2011, Oracle and/or its affiliates. All rights reserved.
+/* Copyright (c) 2000, 2015, Oracle and/or its affiliates. All rights reserved.
 
    This program is free software; you can redistribute it and/or modify
    it under the terms of the GNU General Public License as published by
@@ -16,10 +16,12 @@
 /* This file is included in all heap-files */
 
 #include <my_base.h>			/* This includes global */
-C_MODE_START
-#include <my_pthread.h>
+#include <my_thread.h>
 #include "heap.h"			/* Structs & some defines */
 #include "my_tree.h"
+#include "m_string.h"
+#include "my_sys.h"
+C_MODE_START
 
 /*
   When allocating keys /rows in the internal block structure, do it
@@ -95,7 +97,7 @@ extern uint hp_rb_key_length(HP_KEYDEF *keydef, const uchar *key);
 extern uint hp_rb_null_key_length(HP_KEYDEF *keydef, const uchar *key);
 extern uint hp_rb_var_key_length(HP_KEYDEF *keydef, const uchar *key);
 extern my_bool hp_if_null_in_key(HP_KEYDEF *keyinfo, const uchar *record);
-extern int hp_close(register HP_INFO *info);
+extern int hp_close(HP_INFO *info);
 extern void hp_clear(HP_SHARE *info);
 extern void hp_clear_keys(HP_SHARE *info);
 extern uint hp_rb_pack_key(HP_KEYDEF *keydef, uchar *key, const uchar *old,
@@ -103,8 +105,13 @@ extern uint hp_rb_pack_key(HP_KEYDEF *keydef, uchar *key, const uchar *old,
 
 extern mysql_mutex_t THR_LOCK_heap;
 
+extern PSI_memory_key hp_key_memory_HP_SHARE;
+extern PSI_memory_key hp_key_memory_HP_INFO;
+extern PSI_memory_key hp_key_memory_HP_PTRS;
+extern PSI_memory_key hp_key_memory_HP_KEYDEF;
+
 #ifdef HAVE_PSI_INTERFACE
-extern PSI_mutex_key hp_key_mutex_HP_SHARE_intern_lock;
+
 void init_heap_psi_keys();
 #endif /* HAVE_PSI_INTERFACE */
 

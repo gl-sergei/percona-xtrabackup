@@ -1,5 +1,5 @@
 /*
-   Copyright (c) 2003, 2010, Oracle and/or its affiliates. All rights reserved.
+   Copyright (c) 2003, 2013, Oracle and/or its affiliates. All rights reserved.
 
    This program is free software; you can redistribute it and/or modify
    it under the terms of the GNU General Public License as published by
@@ -63,7 +63,7 @@
 #define MGM_END() \
  { 0, \
    0, \
-   ParserRow<ParserDummy>::Arg, \
+   ParserRow<ParserDummy>::End, \
    ParserRow<ParserDummy>::Int, \
    ParserRow<ParserDummy>::Optional, \
    ParserRow<ParserDummy>::IgnoreMinMax, \
@@ -126,56 +126,82 @@ struct ndb_mgm_handle {
 
 
 /*
-  Check if version "curr" is greater than or equal to
-  a list of given versions
+  Check if version "curr" is new relative a list of given versions.
+
+  curr is regarded new relative a list of versions if
+  either, curr is greater than or equal a version in list
+  with same major and minor version, or, curr is greater
+  than all versions in list.
 
   NOTE! The list of versions to check against must be listed
-  with the highest version first and terminated with version 0
+  with the highest version first, and at most one entry per
+  major and minor version, and terminated with version 0
 */
 static inline
-bool check_version_ge(Uint32 curr, ...)
+bool check_version_new(Uint32 curr, ...)
 {
-  Uint32 version, last = ~0;
+  Uint32 version, last = ~0U;
 
   va_list versions;
   va_start(versions, curr);
-  while ((version= va_arg(versions, Uint32)))
+  while ((version= va_arg(versions, Uint32)) != 0U)
   {
+    // check that version list is descending
+    assert(version < last);
+    // check at most one entry per major.minor
+    assert(!(ndbGetMajor(version) == ndbGetMajor(last) && ndbGetMinor(version) == ndbGetMinor(last)));
+
     if (curr >= version)
     {
       va_end(versions);
-      return true;
+      if (last == ~0U)
+      {
+        return true; // curr is greater than all versions in list (or equal the first and greatest)
+      }
+      return ndbGetMajor(curr) == ndbGetMajor(version) && ndbGetMinor(curr) == ndbGetMinor(version); 
     }
-    assert(version < last); // check that version list is descending
+
     last = version;
   }
-
   va_end(versions);
+
   return false;
 }
 
 static inline void
-test_check_version_ge(void)
+test_check_version_new(void)
 {
-  assert(check_version_ge(NDB_MAKE_VERSION(7,0,19),
-                          NDB_MAKE_VERSION(7,0,20),
-                          0) == false);
-  assert(check_version_ge(NDB_MAKE_VERSION(7,0,19),
-                          NDB_MAKE_VERSION(7,1,6),
-                          NDB_MAKE_VERSION(7,0,20),
-                          0) == false);
-  assert(check_version_ge(NDB_MAKE_VERSION(7,0,19),
-                          NDB_MAKE_VERSION(7,1,6),
-                          NDB_MAKE_VERSION(7,0,18),
-                          0));
-  assert(check_version_ge(NDB_MAKE_VERSION(7,1,8),
-                          NDB_MAKE_VERSION(7,1,6),
-                          NDB_MAKE_VERSION(7,0,18),
-                          0));
-  assert(check_version_ge(NDB_MAKE_VERSION(5,5,6),
-                          NDB_MAKE_VERSION(7,1,6),
-                          NDB_MAKE_VERSION(7,0,18),
-                          0) == false);
+  assert(check_version_new(NDB_MAKE_VERSION(7,0,19),
+                           NDB_MAKE_VERSION(7,0,20),
+                           0) == false);
+  assert(check_version_new(NDB_MAKE_VERSION(7,0,19),
+                           NDB_MAKE_VERSION(7,1,6),
+                           NDB_MAKE_VERSION(7,0,20),
+                           0) == false);
+  assert(check_version_new(NDB_MAKE_VERSION(7,0,19),
+                           NDB_MAKE_VERSION(7,1,6),
+                           NDB_MAKE_VERSION(7,0,18),
+                           0));
+  assert(check_version_new(NDB_MAKE_VERSION(7,1,5),
+                           NDB_MAKE_VERSION(7,1,6),
+                           NDB_MAKE_VERSION(7,0,20),
+                           0) == false);
+  assert(check_version_new(NDB_MAKE_VERSION(7,1,8),
+                           NDB_MAKE_VERSION(7,1,6),
+                           NDB_MAKE_VERSION(7,0,18),
+                           0));
+  assert(check_version_new(NDB_MAKE_VERSION(7,2,3),
+                           NDB_MAKE_VERSION(7,1,6),
+                           NDB_MAKE_VERSION(7,0,18),
+                           0));
+  assert(check_version_new(NDB_MAKE_VERSION(7,1,3),
+                           NDB_MAKE_VERSION(7,2,6),
+                           NDB_MAKE_VERSION(7,0,18),
+                           0) == false);
+  assert(check_version_new(NDB_MAKE_VERSION(5,5,6),
+                           NDB_MAKE_VERSION(7,1,6),
+                           NDB_MAKE_VERSION(7,0,18),
+                           0) == false);
 }
 
 #define SET_ERROR(h, e, s) setError((h), (e), __LINE__, (s))
@@ -235,7 +261,7 @@ ndb_mgm_create_handle()
   DBUG_ENTER("ndb_mgm_create_handle");
   NdbMgmHandle h = (NdbMgmHandle)malloc(sizeof(ndb_mgm_handle));
   if (!h)
-    return NULL;
+    DBUG_RETURN(NULL);
 
   h->connected       = 0;
   h->last_error      = 0;
@@ -471,11 +497,11 @@ ndb_mgm_call(NdbMgmHandle handle,
       switch(t) {
       case PropertiesType_Uint32:
 	cmd_args->get(name, &val_i);
-	out.println("%s: %d", name, val_i);
+	out.println("%s: %u", name, val_i);
 	break;
       case PropertiesType_Uint64:
 	cmd_args->get(name, &val_64);
-	out.println("%s: %Ld", name, val_64);
+	out.println("%s: %llu", name, val_64);
 	break;
       case PropertiesType_char:
 	cmd_args->get(name, val_s);
@@ -499,13 +525,16 @@ ndb_mgm_call(NdbMgmHandle handle,
   out.println("%s", "");
 
   if (cmd_bulk)
-    out.println(cmd_bulk);
+  {
+    out.write(cmd_bulk, strlen(cmd_bulk));
+    out.write("\n", 1);
+  }
 
   CHECK_TIMEDOUT_RET(handle, in, out, NULL);
 
   Parser_t::Context ctx;
   ParserDummy session(handle->socket);
-  Parser_t parser(command_reply, in, true, true, true);
+  Parser_t parser(command_reply, in);
 
   const Properties* p = parser.parse(ctx, session);
   if (p == NULL){
@@ -658,6 +687,9 @@ bool get_mgmd_version(NdbMgmHandle handle)
 
 /**
  * Connect to a management server
+ * no_retries = 0, return immediately,
+ * no_retries < 0, retry infinitely,
+ * else retry no_retries times.
  */
 extern "C"
 int
@@ -791,6 +823,15 @@ ndb_mgm_connect(NdbMgmHandle handle, int no_retries,
 	fflush(handle->errstream);
       }
       no_retries--;
+    }
+    else
+    {
+      // no_retries < 0, retrying infinitely
+      if (verbose == -2)
+      {
+        fprintf(handle->errstream, ".");
+        fflush(handle->errstream);
+      }
     }
     NdbSleep_SecSleep(retry_delay_in_seconds);
   }
@@ -1378,10 +1419,10 @@ ndb_mgm_stop4(NdbMgmHandle handle, int no_of_nodes, const int * node_list,
   
   args.put("node", node_list_str.c_str());
   args.put("abort", abort);
-  if (check_version_ge(handle->mgmd_version(),
-                       NDB_MAKE_VERSION(7,1,8),
-                       NDB_MAKE_VERSION(7,0,19),
-                       0))
+  if (check_version_new(handle->mgmd_version(),
+                        NDB_MAKE_VERSION(7,1,8),
+                        NDB_MAKE_VERSION(7,0,19),
+                        0))
     args.put("force", force);
   else
     SET_ERROR(handle, NDB_MGM_STOP_FAILED,
@@ -1529,10 +1570,10 @@ ndb_mgm_restart4(NdbMgmHandle handle, int no_of_nodes, const int * node_list,
   args.put("initialstart", initial);
   args.put("nostart", nostart);
 
-  if (check_version_ge(handle->mgmd_version(),
-                       NDB_MAKE_VERSION(7,1,8),
-                       NDB_MAKE_VERSION(7,0,19),
-                       0))
+  if (check_version_new(handle->mgmd_version(),
+                        NDB_MAKE_VERSION(7,1,8),
+                        NDB_MAKE_VERSION(7,0,19),
+                        0))
     args.put("force", force);
   else
     SET_ERROR(handle, NDB_MGM_RESTART_FAILED,
@@ -1591,7 +1632,7 @@ ndb_mgm_match_event_severity(const char * name)
     return NDB_MGM_ILLEGAL_EVENT_SEVERITY;
   
   for(int i = 0; clusterlog_severities[i].name !=0 ; i++)
-    if(strcasecmp(name, clusterlog_severities[i].name) == 0)
+    if(native_strcasecmp(name, clusterlog_severities[i].name) == 0)
       return clusterlog_severities[i].severity;
 
   return NDB_MGM_ILLEGAL_EVENT_SEVERITY;
@@ -1628,6 +1669,7 @@ ndb_mgm_get_clusterlog_severity_filter(NdbMgmHandle handle,
     MGM_ARG(clusterlog_severity_names[4], Int, Mandatory, ""),
     MGM_ARG(clusterlog_severity_names[5], Int, Mandatory, ""),
     MGM_ARG(clusterlog_severity_names[6], Int, Mandatory, ""),
+    MGM_END()
   };
   CHECK_CONNECTED(handle, -1);
 
@@ -1660,6 +1702,7 @@ ndb_mgm_get_clusterlog_severity_filter_old(NdbMgmHandle handle)
     MGM_ARG(clusterlog_severity_names[4], Int, Mandatory, ""),
     MGM_ARG(clusterlog_severity_names[5], Int, Mandatory, ""),
     MGM_ARG(clusterlog_severity_names[6], Int, Mandatory, ""),
+    MGM_END()
   };
   CHECK_CONNECTED(handle, NULL);
 
@@ -1789,6 +1832,7 @@ ndb_mgm_get_clusterlog_loglevel(NdbMgmHandle handle,
     MGM_ARG(clusterlog_names[9], Int, Mandatory, ""),
     MGM_ARG(clusterlog_names[10], Int, Mandatory, ""),
     MGM_ARG(clusterlog_names[11], Int, Mandatory, ""),
+    MGM_END()
   };
   CHECK_CONNECTED(handle, -1);
 
@@ -1826,6 +1870,7 @@ ndb_mgm_get_clusterlog_loglevel_old(NdbMgmHandle handle)
     MGM_ARG(clusterlog_names[9], Int, Mandatory, ""),
     MGM_ARG(clusterlog_names[10], Int, Mandatory, ""),
     MGM_ARG(clusterlog_names[11], Int, Mandatory, ""),
+    MGM_END()
   };
   CHECK_CONNECTED(handle, NULL);
 
@@ -2039,7 +2084,7 @@ ndb_mgm_dump_state(NdbMgmHandle handle, int nodeId, const int * _args,
   char buf[256];
   buf[0] = 0;
   for (int i = 0; i < _num_args; i++){
-    unsigned n = strlen(buf);
+    unsigned n = (unsigned)strlen(buf);
     if (n + 20 > sizeof(buf)) {
       SET_ERROR(handle, NDB_MGM_USAGE_ERROR, "arguments too long");
       DBUG_RETURN(-1);
@@ -2260,12 +2305,14 @@ ndb_mgm_set_trace(NdbMgmHandle handle, int nodeId, int traceNumber,
   DBUG_RETURN(retval);
 }
 
-extern "C"
-int 
-ndb_mgm_insert_error(NdbMgmHandle handle, int nodeId, int errorCode,
-		     struct ndb_mgm_reply* reply) 
+int
+ndb_mgm_insert_error_impl(NdbMgmHandle handle, int nodeId,
+                          int errorCode,
+                          int * extra,
+                          struct ndb_mgm_reply* reply)
 {
   DBUG_ENTER("ndb_mgm_insert_error");
+
   CHECK_HANDLE(handle, -1);
   SET_ERROR(handle, NDB_MGM_NO_ERROR, "Executing: ndb_mgm_insert_error");
   const ParserRow<ParserDummy> insert_error_reply[] = {
@@ -2279,6 +2326,10 @@ ndb_mgm_insert_error(NdbMgmHandle handle, int nodeId, int errorCode,
   Properties args;
   args.put("node", nodeId);
   args.put("error", errorCode);
+  if (extra)
+  {
+    args.put("extra", * extra);
+  }
 
   const Properties *prop;
   prop = ndb_mgm_call(handle, insert_error_reply, "insert error", &args);
@@ -2297,6 +2348,23 @@ ndb_mgm_insert_error(NdbMgmHandle handle, int nodeId, int errorCode,
   }
 
   DBUG_RETURN(retval);
+}
+
+extern "C"
+int
+ndb_mgm_insert_error(NdbMgmHandle handle, int nodeId, int errorCode,
+		     struct ndb_mgm_reply* reply)
+{
+  return ndb_mgm_insert_error_impl(handle, nodeId, errorCode, 0, reply);
+}
+
+extern "C"
+int
+ndb_mgm_insert_error2(NdbMgmHandle handle, int nodeId,
+                      int errorCode, int extra,
+		     struct ndb_mgm_reply* reply)
+{
+  return ndb_mgm_insert_error_impl(handle, nodeId, errorCode, &extra, reply);
 }
 
 extern "C"
@@ -2498,10 +2566,10 @@ ndb_mgm_get_configuration2(NdbMgmHandle handle, unsigned int version,
 
   if (from_node != 0)
   {
-    if (check_version_ge(handle->mgmd_version(),
-                         NDB_MAKE_VERSION(7,1,16),
-                         NDB_MAKE_VERSION(7,0,27),
-                         0))
+    if (check_version_new(handle->mgmd_version(),
+                          NDB_MAKE_VERSION(7,1,16),
+                          NDB_MAKE_VERSION(7,0,27),
+                          0))
     {
       args.put("from_node", from_node);
     }
@@ -2562,7 +2630,7 @@ ndb_mgm_get_configuration2(NdbMgmHandle handle, unsigned int version,
     size_t start = 0;
     do {
       if((read = read_socket(handle->socket, handle->timeout,
-			     &buf64[start], len-start)) < 1){
+			     &buf64[start], (int)(len-start))) < 1){
 	delete[] buf64;
 	buf64 = 0;
         if(read==0)
@@ -2685,6 +2753,7 @@ ndb_mgm_alloc_nodeid(NdbMgmHandle handle, unsigned int version, int nodetype,
 {
   DBUG_ENTER("ndb_mgm_alloc_nodeid");
   CHECK_HANDLE(handle, 0);
+  SET_ERROR(handle, NDB_MGM_NO_ERROR, "Executing: ndb_mgm_alloc_nodeid");
   CHECK_CONNECTED(handle, 0);
   union { long l; char c[sizeof(long)]; } endian_check;
 
@@ -3619,5 +3688,127 @@ ndb_mgm_dump_events(NdbMgmHandle handle, enum Ndb_logevent_type type,
         sizeof(events->events[0]), cmp_event);
   DBUG_RETURN(events);
 }
+
+
+static
+int
+set_dynamic_ports_batched(NdbMgmHandle handle, int nodeid,
+                          struct ndb_mgm_dynamic_port* ports,
+                          unsigned num_ports)
+{
+  DBUG_ENTER("set_dynamic_ports_batched");
+
+  Properties args;
+  args.put("node", (Uint32)nodeid);
+  args.put("num_ports", (Uint32)num_ports);
+
+  /*
+    Build the list of nodeid/port pairs which is sent as
+    name value pairs in bulk part of request
+  */
+  BaseString port_list;
+  for(unsigned i = 0; i < num_ports; i++)
+  {
+    port_list.appfmt("%d=%d\n", ports[i].nodeid, ports[i].port);
+  }
+
+  const ParserRow<ParserDummy> set_ports_reply[] = {
+    MGM_CMD("set ports reply", NULL, ""),
+    MGM_ARG("result", String, Mandatory, "Ok or error message"),
+    MGM_END()
+  };
+  const Properties *reply = ndb_mgm_call(handle, set_ports_reply,
+                                         "set ports", &args,
+                                         port_list.c_str());
+  CHECK_REPLY(handle, reply, -1);
+
+  // Check the result for Ok or error
+  const char * result;
+  reply->get("result", &result);
+  if (strcmp(result, "Ok") != 0) {
+    SET_ERROR(handle, NDB_MGM_USAGE_ERROR, result);
+    delete reply;
+    DBUG_RETURN(-1);
+  }
+
+  delete reply;
+  DBUG_RETURN(0);
+}
+
+
+extern "C"
+int
+ndb_mgm_set_dynamic_ports(NdbMgmHandle handle, int nodeid,
+                          struct ndb_mgm_dynamic_port* ports,
+                          unsigned num_ports)
+{
+  DBUG_ENTER("ndb_mgm_set_dynamic_ports");
+  DBUG_PRINT("enter", ("nodeid: %d, num_ports: %u", nodeid, num_ports));
+  CHECK_HANDLE(handle, -1);
+  SET_ERROR(handle, NDB_MGM_NO_ERROR, "Executing: ndb_mgm_set_dynamic_ports");
+  CHECK_CONNECTED(handle, -1);
+
+  if (num_ports == 0)
+  {
+    SET_ERROR(handle, NDB_MGM_USAGE_ERROR,
+              "Illegal number of dynamic ports given in num_ports");
+    DBUG_RETURN(-1);
+  }
+
+  // Check that the ports seems to contain reasonable numbers
+  for (unsigned i = 0; i < num_ports; i++)
+  {
+    if (ports[i].nodeid == 0)
+    {
+      SET_ERROR(handle, NDB_MGM_USAGE_ERROR,
+                "Illegal nodeid specfied in ports array");
+      DBUG_RETURN(-1);
+    }
+
+    if (ports[i].port >= 0)
+    {
+      // Only negative dynamic ports allowed
+      SET_ERROR(handle, NDB_MGM_USAGE_ERROR,
+                "Illegal port specfied in ports array");
+      DBUG_RETURN(-1);
+    }
+  }
+
+  if (!get_mgmd_version(handle))
+    DBUG_RETURN(-1);
+
+  if (check_version_new(handle->mgmd_version(),
+                        NDB_MAKE_VERSION(7,3,3),
+                        NDB_MAKE_VERSION(7,2,14),
+                        NDB_MAKE_VERSION(7,1,28),
+                        NDB_MAKE_VERSION(7,0,40),
+                        0))
+  {
+    // The ndb_mgmd supports reporting all ports at once
+    DBUG_RETURN(set_dynamic_ports_batched(handle, nodeid,
+                                          ports, num_ports));
+  }
+
+  // Report the ports one at a time
+  for (unsigned i = 0; i < num_ports; i++)
+  {
+    struct ndb_mgm_reply mgm_reply;
+    const int err = ndb_mgm_set_connection_int_parameter(handle,
+                                                         nodeid,
+                                                         ports[i].nodeid,
+                                                         CFG_CONNECTION_SERVER_PORT,
+                                                         ports[i].port,
+                                                         &mgm_reply);
+    if (err < 0)
+    {
+      setError(handle, handle->last_error, __LINE__,
+               "Could not set dynamic port for %d->%d",
+               nodeid, ports[i].nodeid);
+      DBUG_RETURN(-1);
+    }
+  }
+  DBUG_RETURN(0);
+}
+
 
 template class Vector<const ParserRow<ParserDummy>*>;

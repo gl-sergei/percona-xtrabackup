@@ -1,4 +1,4 @@
-/* Copyright (c) 2000, 2013, Oracle and/or its affiliates. All rights reserved.
+/* Copyright (c) 2000, 2014, Oracle and/or its affiliates. All rights reserved.
 
    This program is free software; you can redistribute it and/or modify
    it under the terms of the GNU General Public License as published by
@@ -96,6 +96,8 @@ _my_hash_init(HASH *hash, uint growth_size, CHARSET_INFO *charset,
               my_hash_get_key get_key,
               void (*free_element)(void*), uint flags)
 {
+  my_bool retval;
+
   DBUG_ENTER("my_hash_init");
   DBUG_PRINT("enter",("hash: 0x%lx  size: %u", (long) hash, (uint) size));
 
@@ -108,8 +110,10 @@ _my_hash_init(HASH *hash, uint growth_size, CHARSET_INFO *charset,
   hash->flags=flags;
   hash->charset=charset;
   hash->hash_function= hash_function ? hash_function : cset_hash_sort_adapter;
-  DBUG_RETURN(my_init_dynamic_array_ci(&hash->array, 
-                                       sizeof(HASH_LINK), size, growth_size));
+  retval= my_init_dynamic_array(&hash->array, sizeof(HASH_LINK),
+                                NULL,  /* init_buffer */
+                                size, growth_size);
+  DBUG_RETURN(retval);
 }
 
 
@@ -216,12 +220,7 @@ static uint my_hash_rec_mask(const HASH *hash, HASH_LINK *pos,
 
 
 
-/* for compilers which can not handle inline */
-static
-#if !defined(__USLC__) && !defined(__sgi)
-inline
-#endif
-my_hash_value_type rec_hashnr(HASH *hash,const uchar *record)
+static inline my_hash_value_type rec_hashnr(HASH *hash,const uchar *record)
 {
   size_t length;
   uchar *key= (uchar*) my_hash_key(hash, record, &length, 0);
@@ -388,8 +387,8 @@ my_bool my_hash_insert(HASH *info, const uchar *record)
   int flag;
   size_t idx,halfbuff,first_index;
   my_hash_value_type hash_nr;
-  uchar *UNINIT_VAR(ptr_to_rec),*UNINIT_VAR(ptr_to_rec2);
-  HASH_LINK *data,*empty,*UNINIT_VAR(gpos),*UNINIT_VAR(gpos2),*pos;
+  uchar *ptr_to_rec= NULL, *ptr_to_rec2= NULL;
+  HASH_LINK *data, *empty, *gpos= NULL, *gpos2= NULL, *pos;
 
   if (HASH_UNIQUE & info->flags)
   {
@@ -523,7 +522,8 @@ my_bool my_hash_insert(HASH *info, const uchar *record)
 
 my_bool my_hash_delete(HASH *hash, uchar *record)
 {
-  uint blength,pos2,idx,empty_index;
+  size_t blength;
+  uint pos2, idx, empty_index;
   my_hash_value_type pos_hashnr, lastpos_hashnr;
   HASH_LINK *data,*lastpos,*gpos,*pos,*pos3,*empty;
   DBUG_ENTER("my_hash_delete");
@@ -612,8 +612,8 @@ exit:
 my_bool my_hash_update(HASH *hash, uchar *record, uchar *old_key,
                        size_t old_key_length)
 {
-  uint new_index,new_pos_index,blength,records;
-  size_t idx,empty;
+  uint new_index,new_pos_index,records;
+  size_t blength, idx, empty;
   HASH_LINK org_link,*data,*previous,*pos;
   DBUG_ENTER("my_hash_update");
   
@@ -695,7 +695,7 @@ my_bool my_hash_update(HASH *hash, uchar *record, uchar *old_key,
   if (new_index != new_pos_index)
   {					/* Other record in wrong position */
     data[empty] = *pos;
-    movelink(data,new_index,new_pos_index,empty);
+    movelink(data,new_index,new_pos_index,(uint)empty);
     org_link.next=NO_RECORD;
     data[new_index]= org_link;
   }
@@ -703,7 +703,7 @@ my_bool my_hash_update(HASH *hash, uchar *record, uchar *old_key,
   {					/* Link in chain at right position */
     org_link.next=data[new_index].next;
     data[empty]=org_link;
-    data[new_index].next=empty;
+    data[new_index].next= (uint)empty;
   }
   DBUG_RETURN(0);
 }
@@ -736,7 +736,8 @@ my_bool my_hash_check(HASH *hash)
 {
   int error;
   uint i,rec_link,found,max_links,seek,links,idx;
-  uint records,blength;
+  uint records;
+  size_t blength;
   HASH_LINK *data,*hash_info;
 
   records=hash->records; blength=hash->blength;

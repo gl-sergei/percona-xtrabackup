@@ -1,5 +1,5 @@
 /*
-   Copyright (c) 2003, 2010, Oracle and/or its affiliates. All rights reserved.
+   Copyright (c) 2003, 2013, Oracle and/or its affiliates. All rights reserved.
 
    This program is free software; you can redistribute it and/or modify
    it under the terms of the GNU General Public License as published by
@@ -452,6 +452,19 @@ RestoreMetaData::readMetaTableDesc() {
     return true;
     break;
   }
+  case DictTabInfo::ForeignKey:
+  {
+    NdbDictionary::ForeignKey * dst = new NdbDictionary::ForeignKey;
+    errcode =
+      NdbDictInterface::parseForeignKeyInfo(NdbForeignKeyImpl::getImpl(* dst),
+                                            (const Uint32*)ptr, len);
+    if (errcode)
+      delete dst;
+    obj.m_objPtr = dst;
+    debug << hex << obj.m_objPtr << " " 
+	   << dec << dst->getObjectId() << " " << dst->getName() << endl;
+    break;
+  }
   default:
     if (ga_skip_unknown_objects)
     {
@@ -724,6 +737,10 @@ TableS::TableS(Uint32 version, NdbTableImpl* tableImpl)
   
   for (int i = 0; i < tableImpl->getNoOfColumns(); i++)
     createAttr(tableImpl->getColumn(i));
+
+  m_staging = false;
+  m_stagingTable = NULL;
+  m_stagingFlags = 0;
 }
 
 TableS::~TableS()
@@ -1281,8 +1298,7 @@ RestoreDataIterator::readVarData_drop6(Uint32 *buf_ptr, Uint32 *ptr,
     typedef BackupFormat::DataFile::VariableData VarData;
     VarData * data = (VarData *)ptr;
     Uint32 sz = ntohl(data->Sz);
-    Uint32 id = ntohl(data->Id);
-    assert(id == attrId);
+    assert(ntohl(data->Id) == attrId);
 
     attr_data->null = false;
     attr_data->void_value = &data->Data[0];
@@ -1757,6 +1773,7 @@ AttributeDesc::AttributeDesc(NdbDictionary::Column *c)
 {
   size = 8*NdbColumnImpl::getImpl(* c).m_attrSize;
   arraySize = NdbColumnImpl::getImpl(* c).m_arraySize;
+  staging = false;
 }
 
 void TableS::createAttr(NdbDictionary::Column *column)

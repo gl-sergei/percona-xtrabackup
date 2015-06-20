@@ -39,6 +39,8 @@ static int   minEventSendPoll;
 static int   forceSendPoll;
 static bool  useNdbRecord;
 static bool  useCombUpd;
+int          subscriberCount;
+static bool  robustMode;
 
 static ThreadData *data;
 static Ndb_cluster_connection *g_cluster_connection= 0;
@@ -60,7 +62,7 @@ static void usage(const char *prog)
 
    ndbout_c(
            "Usage: %s [-proc <num>] [-warm <num>] [-time <num>] [ -p <num>]" 
-	   "[-t <num> ] [ -e <num> ] [ -f <num>] [ -ndbrecord ]\n"
+	   "[-t <num> ] [ -e <num> ] [ -f <num>] [ -ndbrecord ] [ -s <num>]\n"
            "  -proc <num>    Specifies that <num> is the number of\n"
            "                 threads. The default is 1.\n"
            "  -time <num>    Specifies that the test will run for <num> sec.\n"
@@ -78,8 +80,10 @@ static void usage(const char *prog)
            "  -ndbrecord     Use NdbRecord Api.\n"
            "                 Default is to use old Api\n"
            "  -combupdread   Use update pre-read operation where possible\n"
-           "                 Default is to use separate read+update ops\n",
-           progname);
+           "                 Default is to use separate read+update ops\n"
+           "  -s <num>       Number of subscribers to operate on, default is %u.\n"
+           "  -r             Whether to be robust to key errors\n",
+           progname, NO_OF_SUBSCRIBERS);
 }
 
 static
@@ -97,6 +101,8 @@ parse_args(int argc, const char **argv)
    forceSendPoll    = 0;
    useNdbRecord     = false;
    useCombUpd       = false;
+   subscriberCount  = NO_OF_SUBSCRIBERS;
+   robustMode       = false;
 
    i = 1;
    while (i < argc){
@@ -174,6 +180,20 @@ parse_args(int argc, const char **argv)
      else if (strcmp("-combupdread",argv[i]) == 0) {
        /* Comb up some dread */
        useCombUpd= true;
+       i++;
+     }
+     else if (strcmp("-s", argv[i]) == 0) {
+       if (i + 1 >= argc) {
+         return 1;
+       }
+       if (sscanf(argv[i+1], "%u", &subscriberCount) == -1) {
+         ndbout_c("-s flag requires a positive argument.");
+         return 1;
+       }
+       i+=2;
+     }
+     else if (strcmp("-r", argv[i]) == 0) {
+       robustMode= true;
        i++;
      }
      else {
@@ -548,6 +568,7 @@ NDB_COMMAND(DbAsyncGenerator, "DbAsyncGenerator",
       data[tid].runState              = Runnable;
       data[tid].ndbRecordSharedData   = ndbRecordSharedDataPtr;
       data[tid].useCombinedUpdate     = useCombUpd;
+      data[tid].robustMode            = robustMode;
     }
     sprintf(threadName, "AsyncThread[%d]", i);
     pThread = NdbThread_Create(threadRoutine, 
@@ -681,27 +702,22 @@ asyncDbDisconnect(Ndb* pNDB)
   delete pNDB;
 }
 
+static NDB_TICKS initTicks;
+
 double
 userGetTime(void)
 {
-  static bool initialized = false;
-  static NDB_TICKS initSecs = 0;
-  static Uint32 initMicros = 0;
   double timeValue = 0;
 
-  if ( !initialized ) {
-    initialized = true;
-    NdbTick_CurrentMicrosecond(&initSecs, &initMicros); 
+  if ( !NdbTick_IsValid(initTicks)) {
+    initTicks = NdbTick_getCurrentTicks();
     timeValue = 0.0;
   } else {
-    NDB_TICKS secs = 0;
-    Uint32 micros = 0;
+    const NDB_TICKS now = NdbTick_getCurrentTicks();
+    const Uint64 elapsedMicro =
+      NdbTick_Elapsed(initTicks,now).microSec();
 
-    NdbTick_CurrentMicrosecond(&secs, &micros);
-    double s  = (double)secs  - (double)initSecs;
-    double us = (double)micros - (double)initMicros;
-    
-    timeValue = s + (us / 1000000.0);
+    timeValue = ((double)elapsedMicro) / 1000000.0;
   }
   return timeValue;
 }

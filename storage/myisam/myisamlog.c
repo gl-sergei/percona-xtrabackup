@@ -1,4 +1,4 @@
-/* Copyright (c) 2000, 2011, Oracle and/or its affiliates. All rights reserved.
+/* Copyright (c) 2000, 2013, Oracle and/or its affiliates. All rights reserved.
 
    This program is free software; you can redistribute it and/or modify
    it under the terms of the GNU General Public License as published by
@@ -22,7 +22,7 @@
 #include "myisamdef.h"
 #include <my_tree.h>
 #include <stdarg.h>
-#ifdef HAVE_GETRUSAGE
+#ifdef HAVE_SYS_RESOURCE_H
 #include <sys/resource.h>
 #endif
 
@@ -129,7 +129,7 @@ int main(int argc, char **argv)
 } /* main */
 
 
-static void get_options(register int *argc, register char ***argv)
+static void get_options(int *argc, char ***argv)
 {
   int help,version;
   const char *pos,*usage;
@@ -184,7 +184,7 @@ static void get_options(register int *argc, register char ***argv)
 	  else
 	    pos= *(++*argv);
 	}
-	start_offset=(my_off_t) strtoll(pos,NULL,10);
+	start_offset=(my_off_t) my_strtoll(pos,NULL,10);
 	pos=" ";
 	break;
       case 'p':
@@ -215,7 +215,7 @@ static void get_options(register int *argc, register char ***argv)
 	record_pos_file=(char*) pos;
 	if (!--*argc)
 	  goto err;
-	record_pos=(my_off_t) strtoll(*(++*argv),NULL,10);
+	record_pos=(my_off_t) my_strtoll(*(++*argv),NULL,10);
 	pos=" ";
 	break;
       case 'v':
@@ -405,7 +405,7 @@ static int examine_log(char * file_name, char **table_names)
 	to=isam_file_name;
 	if (filepath)
 	  to=convert_dirname(isam_file_name,filepath,NullS);
-	strmov(to,pos);
+	my_stpcpy(to,pos);
 	fn_ext(isam_file_name)[0]=0;	/* Remove extension */
       }
       open_param.name=file_info.name;
@@ -421,7 +421,8 @@ static int examine_log(char * file_name, char **table_names)
        * The additional space is needed for the sprintf commands two lines
        * below.
        */ 
-      file_info.show_name=my_memdup(isam_file_name,
+      file_info.show_name=my_memdup(PSI_NOT_INSTRUMENTED,
+                                    isam_file_name,
 				    (uint) strlen(isam_file_name)+10,
 				    MYF(MY_WME));
       if (file_info.id > 1)
@@ -450,7 +451,8 @@ static int examine_log(char * file_name, char **table_names)
 	if (!(file_info.isam= mi_open(isam_file_name,O_RDWR,
 				      HA_OPEN_WAIT_IF_LOCKED)))
 	  goto com_err;
-	if (!(file_info.record=my_malloc(file_info.isam->s->base.reclength,
+	if (!(file_info.record=my_malloc(PSI_NOT_INSTRUMENTED,
+                                         file_info.isam->s->base.reclength,
 					 MYF(MY_WME))))
 	  goto end;
 	files_open++;
@@ -676,13 +678,14 @@ static int examine_log(char * file_name, char **table_names)
 }
 
 
-static int read_string(IO_CACHE *file, register uchar* *to, register uint length)
+static int read_string(IO_CACHE *file, uchar* *to, uint length)
 {
   DBUG_ENTER("read_string");
 
   if (*to)
     my_free(*to);
-  if (!(*to= (uchar*) my_malloc(length+1,MYF(MY_WME))) ||
+  if (!(*to= (uchar*) my_malloc(PSI_NOT_INSTRUMENTED,
+                                length+1,MYF(MY_WME))) ||
       my_b_read(file,(uchar*) *to,length))
   {
     if (*to)
@@ -789,7 +792,7 @@ static int reopen_closed_file(TREE *tree, struct file_info *fileinfo)
   char name[FN_REFLEN];
   if (close_some_file(tree))
     return 1;				/* No file to close */
-  strmov(name,fileinfo->show_name);
+  my_stpcpy(name,fileinfo->show_name);
   if (fileinfo->id > 1)
     *strrchr(name,'<')='\0';		/* Remove "<id>" */
 

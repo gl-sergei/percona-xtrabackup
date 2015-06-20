@@ -1,5 +1,5 @@
 /*
-   Copyright (c) 2003, 2010, Oracle and/or its affiliates. All rights reserved.
+   Copyright (c) 2003, 2014, Oracle and/or its affiliates. All rights reserved.
 
    This program is free software; you can redistribute it and/or modify
    it under the terms of the GNU General Public License as published by
@@ -27,6 +27,9 @@
 #include <signaldata/EventReport.hpp>
 #include "LongSignal.hpp"
 #include <NdbTick.h>
+
+#define JAM_FILE_ID 242
+
 
 #define MIN_NUMBER_OF_SIG_PER_DO_JOB 64
 #define MAX_NUMBER_OF_SIG_PER_DO_JOB 2048
@@ -114,9 +117,7 @@ FastScheduler::doJob()
         globalData.JobLap = tJobLap + 1;
 	
 #ifdef VM_TRACE_TIME
-	Uint32 us1, us2;
-	Uint64 ms1, ms2;
-	NdbTick_CurrentMicrosecond(&ms1, &us1);
+	const NDB_TICKS t1 = NdbTick_getCurrentTicks();
 	b->m_currentGsn = reg_gsn;
 #endif
 	
@@ -133,14 +134,11 @@ FastScheduler::doJob()
           }//if
         }
 #endif
-        b->executeFunction(reg_gsn, signal);
+        b->jamBuffer()->markEndOfSigExec();
+        b->executeFunction_async(reg_gsn, signal);
 #ifdef VM_TRACE_TIME
-	NdbTick_CurrentMicrosecond(&ms2, &us2);
-	Uint64 diff = ms2;
-	diff -= ms1;
-	diff *= 1000000;
-	diff += us2;
-	diff -= us1;
+	const NDB_TICKS t2 = NdbTick_getCurrentTicks();
+        const Uint64 diff = NdbTick_Elapsed(t1,t2).microSec();
 	b->addTime(reg_gsn, diff);
 #endif
         tHighPrio = globalData.highestAvailablePrio;
@@ -178,7 +176,7 @@ FastScheduler::postPoll()
 {
   Signal * signal = getVMSignals();
   SimulatedBlock* b_fs = globalData.getBlock(NDBFS);
-  b_fs->executeFunction(GSN_SEND_PACKED, signal);
+  b_fs->executeFunction_async(GSN_SEND_PACKED, signal);
 }
 
 void FastScheduler::sendPacked()
@@ -189,10 +187,10 @@ void FastScheduler::sendPacked()
     SimulatedBlock* b_tup = globalData.getBlock(DBTUP);
     SimulatedBlock* b_fs = globalData.getBlock(NDBFS);
     Signal * signal = getVMSignals();
-    b_lqh->executeFunction(GSN_SEND_PACKED, signal);
-    b_tc->executeFunction(GSN_SEND_PACKED, signal);
-    b_tup->executeFunction(GSN_SEND_PACKED, signal);
-    b_fs->executeFunction(GSN_SEND_PACKED, signal);
+    b_lqh->executeFunction_async(GSN_SEND_PACKED, signal);
+    b_tc->executeFunction_async(GSN_SEND_PACKED, signal);
+    b_tup->executeFunction_async(GSN_SEND_PACKED, signal);
+    b_fs->executeFunction_async(GSN_SEND_PACKED, signal);
     return;
   } else if (globalData.activateSendPacked == 0) {
     return;
@@ -490,15 +488,14 @@ FastScheduler::traceDumpGetCurrentThread()
 }
 
 bool
-FastScheduler::traceDumpGetJam(Uint32 thr_no, Uint32 & jamBlockNumber,
-                               const Uint32 * & thrdTheEmulatedJam,
+FastScheduler::traceDumpGetJam(Uint32 thr_no,
+                               const JamEvent * & thrdTheEmulatedJam,
                                Uint32 & thrdTheEmulatedJamIndex)
 {
   /* Single threaded ndbd scheduler, no threads. */
   assert(thr_no == 0);
 
 #ifdef NO_EMULATED_JAM
-  jamBlockNumber = 0;
   thrdTheEmulatedJam = NULL;
   thrdTheEmulatedJamIndex = 0;
 #else
@@ -506,7 +503,6 @@ FastScheduler::traceDumpGetJam(Uint32 thr_no, Uint32 & jamBlockNumber,
     (EmulatedJamBuffer *)NdbThread_GetTlsKey(NDB_THREAD_TLS_JAM);
   thrdTheEmulatedJam = jamBuffer->theEmulatedJam;
   thrdTheEmulatedJamIndex = jamBuffer->theEmulatedJamIndex;
-  jamBlockNumber = jamBuffer->theEmulatedJamBlockNumber;
 #endif
   return true;
 }

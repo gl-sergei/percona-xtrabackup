@@ -1,4 +1,4 @@
-/* Copyright (c) 2000, 2010, Oracle and/or its affiliates. All rights reserved.
+/* Copyright (c) 2000, 2014, Oracle and/or its affiliates. All rights reserved.
 
    This program is free software; you can redistribute it and/or modify
    it under the terms of the GNU General Public License as published by
@@ -46,11 +46,9 @@ int mi_rnext(MI_INFO *info, uchar *buf, int inx)
   if (!flag)
   {
     switch(info->s->keyinfo[inx].key_alg){
-#ifdef HAVE_RTREE_KEYS
     case HA_KEY_ALG_RTREE:
       error=rtree_get_first(info,inx,info->lastkey_length);
       break;
-#endif
     case HA_KEY_ALG_BTREE:
     default:
       error=_mi_search_first(info,info->s->keyinfo+inx,
@@ -65,7 +63,7 @@ int mi_rnext(MI_INFO *info, uchar *buf, int inx)
       Normally SQL layer would never request "search next" if
       "search first" failed. But HANDLER may do anything.
 
-      As mi_rnext() without preceeding mi_rkey()/mi_rfirst()
+      As mi_rnext() without preceding mi_rkey()/mi_rfirst()
       equals to mi_rfirst(), we must restore original state
       as if failing mi_rfirst() was not called.
     */
@@ -75,7 +73,6 @@ int mi_rnext(MI_INFO *info, uchar *buf, int inx)
   else
   {
     switch (info->s->keyinfo[inx].key_alg) {
-#ifdef HAVE_RTREE_KEYS
     case HA_KEY_ALG_RTREE:
       /*
 	Note that rtree doesn't support that the table
@@ -84,7 +81,6 @@ int mi_rnext(MI_INFO *info, uchar *buf, int inx)
       */
       error= rtree_get_next(info,inx,info->lastkey_length);
       break;
-#endif
     case HA_KEY_ALG_BTREE:
     default:
       if (!changed)

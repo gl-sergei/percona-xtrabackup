@@ -1,5 +1,5 @@
 /*
-   Copyright (c) 2009, 2010, Oracle and/or its affiliates. All rights reserved.
+   Copyright (c) 2009, 2014, Oracle and/or its affiliates. All rights reserved.
 
    This program is free software; you can redistribute it and/or modify
    it under the terms of the GNU General Public License as published by
@@ -16,6 +16,9 @@
 */
 
 #include "Ndbinfo.hpp"
+
+#define JAM_FILE_ID 239
+
 
 
 #define DECLARE_NDBINFO_TABLE(var, num)  \
@@ -78,13 +81,25 @@ DECLARE_NDBINFO_TABLE(POOLS,12) =
   }
 };
 
-DECLARE_NDBINFO_TABLE(TRANSPORTERS, 3) =
-{ { "transporters", 3, 0, "transporter status" },
+DECLARE_NDBINFO_TABLE(TRANSPORTERS, 11) =
+{ { "transporters", 11, 0, "transporter status" },
   {
-    {"node_id",            Ndbinfo::Number, ""},
-    {"remote_node_id",     Ndbinfo::Number, ""},
+    {"node_id",              Ndbinfo::Number, "Node id reporting"},
+    {"remote_node_id",       Ndbinfo::Number, "Node id at other end of link"},
 
-    {"connection_status",  Ndbinfo::Number, ""}
+    {"connection_status",    Ndbinfo::Number, "State of inter-node link"},
+    
+    {"remote_address",       Ndbinfo::String, "Address of remote node"},
+    {"bytes_sent",           Ndbinfo::Number64, "Bytes sent to remote node"},
+    {"bytes_received",       Ndbinfo::Number64, "Bytes received from remote node"},
+
+    {"connect_count",        Ndbinfo::Number, "Number of times connected" },
+    
+    {"overloaded",           Ndbinfo::Number, "Is link reporting overload"},
+    {"overload_count",       Ndbinfo::Number, "Number of overload onsets since connect"},
+    
+    {"slowdown",             Ndbinfo::Number, "Is link requesting slowdown"},
+    {"slowdown_count",       Ndbinfo::Number, "Number of slowdown onsets since connect"}
   }
 };
 
@@ -169,6 +184,139 @@ DECLARE_NDBINFO_TABLE(DISKPAGEBUFFER, 9) =
   }
 };
 
+DECLARE_NDBINFO_TABLE(THREADBLOCKS, 4) =
+{ { "threadblocks", 4, 0, "which blocks are run in which threads" },
+  {
+    {"node_id",                     Ndbinfo::Number, "node id"},
+    {"thr_no",                      Ndbinfo::Number, "thread number"},
+    {"block_number",                Ndbinfo::Number, "block number"},
+    {"block_instance",              Ndbinfo::Number, "block instance"},
+  }
+};
+
+DECLARE_NDBINFO_TABLE(THREADSTAT, 18) =
+{ { "threadstat", 18, 0, "Statistics on execution threads" },
+  {
+    //{"0123456701234567"}
+    {"node_id",             Ndbinfo::Number, "node id"},
+    {"thr_no",              Ndbinfo::Number, "thread number"},
+    {"thr_nm",              Ndbinfo::String, "thread name"},
+    {"c_loop",              Ndbinfo::Number64,"No of loops in main loop"},
+    {"c_exec",              Ndbinfo::Number64,"No of signals executed"},
+    {"c_wait",              Ndbinfo::Number64,"No of times waited for more input"},
+    {"c_l_sent_prioa",      Ndbinfo::Number64,"No of prio A signals sent to own node"},
+    {"c_l_sent_priob",      Ndbinfo::Number64,"No of prio B signals sent to own node"},
+    {"c_r_sent_prioa",      Ndbinfo::Number64,"No of prio A signals sent to remote node"},
+    {"c_r_sent_priob",      Ndbinfo::Number64,"No of prio B signals sent to remote node"},
+    {"os_tid",              Ndbinfo::Number64,"OS thread id"},
+    {"os_now",              Ndbinfo::Number64,"OS gettimeofday (millis)"},
+    {"os_ru_utime",         Ndbinfo::Number64,"OS user CPU time (micros)"},
+    {"os_ru_stime",         Ndbinfo::Number64,"OS system CPU time (micros)"},
+    {"os_ru_minflt",        Ndbinfo::Number64,"OS page reclaims (soft page faults"},
+    {"os_ru_majflt",        Ndbinfo::Number64,"OS page faults (hard page faults)"},
+    {"os_ru_nvcsw",         Ndbinfo::Number64,"OS voluntary context switches"},
+    {"os_ru_nivcsw",        Ndbinfo::Number64,"OS involuntary context switches"}
+  }
+};
+
+DECLARE_NDBINFO_TABLE(TRANSACTIONS, 11) =
+{ { "transactions", 11, 0, "transactions" },
+  {
+    {"node_id",             Ndbinfo::Number, "node id"},
+    {"block_instance",      Ndbinfo::Number, "TC instance no"},
+    {"objid",               Ndbinfo::Number, "Object id of transaction object"},
+    {"apiref",              Ndbinfo::Number, "API reference"},
+    {"transid0",            Ndbinfo::Number, "Transaction id"},
+    {"transid1",            Ndbinfo::Number, "Transaction id"},
+    {"state",               Ndbinfo::Number, "Transaction state"},
+    {"flags",               Ndbinfo::Number, "Transaction flags"},
+    {"c_ops",               Ndbinfo::Number, "No of operations in transaction" },
+    {"outstanding",         Ndbinfo::Number, "Currently outstanding request" },
+    {"timer",               Ndbinfo::Number, "Timer (seconds)"},
+  }
+};
+
+DECLARE_NDBINFO_TABLE(OPERATIONS, 12) =
+{ { "operations", 12, 0, "operations" },
+  {
+    {"node_id",             Ndbinfo::Number, "node id"},
+    {"block_instance",      Ndbinfo::Number, "LQH instance no"},
+    {"objid",               Ndbinfo::Number, "Object id of operation object"},
+    {"tcref",               Ndbinfo::Number, "TC reference"},
+    {"apiref",              Ndbinfo::Number, "API reference"},
+    {"transid0",            Ndbinfo::Number, "Transaction id"},
+    {"transid1",            Ndbinfo::Number, "Transaction id"},
+    {"tableid",             Ndbinfo::Number, "Table id"},
+    {"fragmentid",          Ndbinfo::Number, "Fragment id"},
+    {"op",                  Ndbinfo::Number, "Operation type"},
+    {"state",               Ndbinfo::Number, "Operation state"},
+    {"flags",               Ndbinfo::Number, "Operation flags"}
+  }
+};
+
+DECLARE_NDBINFO_TABLE(MEMBERSHIP, 13) =
+{ { "membership", 13, 0, "membership" },
+  {
+    {"node_id",         Ndbinfo::Number, "node id"},
+    {"group_id",        Ndbinfo::Number, "node group id"},
+    {"left_node",       Ndbinfo::Number, "Left node in heart beat chain"},
+    {"right_node",      Ndbinfo::Number, "Right node in heart beat chain"},
+    {"president",       Ndbinfo::Number, "President nodeid"},
+    {"successor",       Ndbinfo::Number, "President successor"},
+    {"dynamic_id",      Ndbinfo::Number, "President, Configured_heartbeat order"},
+    {"arbitrator",      Ndbinfo::Number, "Arbitrator nodeid"},
+    {"arb_ticket",      Ndbinfo::String, "Arbitrator ticket"},
+    {"arb_state",       Ndbinfo::Number, "Arbitrator state"},
+    {"arb_connected",   Ndbinfo::Number, "Arbitrator connected"},
+    {"conn_rank1_arbs", Ndbinfo::String, "Connected rank 1 arbitrators"},
+    {"conn_rank2_arbs", Ndbinfo::String, "Connected rank 2 arbitrators"}
+  }
+};
+
+DECLARE_NDBINFO_TABLE(DICT_OBJ_INFO, 7) =
+{ { "dict_obj_info", 7, 0, "Dictionary object info" },
+  {
+    {"type",             Ndbinfo::Number,      "Type of dict object"},
+    {"id",               Ndbinfo::Number,      "Object identity"},
+    {"version",          Ndbinfo::Number,      "Object version"},
+    {"state",            Ndbinfo::Number,      "Object state"},
+    {"parent_obj_type",  Ndbinfo::Number,      "Parent object type" },
+    {"parent_obj_id",    Ndbinfo::Number,      "Parent object id" },
+    {"fq_name",          Ndbinfo::String,      "Fully qualified object name"}
+  }
+};
+
+DECLARE_NDBINFO_TABLE(FRAG_MEM_USE, 15) =
+{ { "frag_mem_use", 15, 0, "Per fragment space information" },
+  {
+    {"node_id",                  Ndbinfo::Number,    "node id"},
+    {"block_instance",           Ndbinfo::Number,    "LDM instance number"},
+    {"table_id",                 Ndbinfo::Number,    "Table identity"},
+    {"fragment_num",             Ndbinfo::Number,    "Fragment number"},
+    {"rows",                     Ndbinfo::Number64,  "Number of rows in table"},
+    {"fixed_elem_alloc_bytes",   Ndbinfo::Number64,
+     "Number of bytes allocated for fixed-sized elements"},
+    {"fixed_elem_free_bytes",    Ndbinfo::Number64,
+     "Free bytes in fixed-size element pages"},
+    {"fixed_elem_count",         Ndbinfo::Number64,  
+     "Number of fixed size elements in use"},
+    {"fixed_elem_size_bytes",    Ndbinfo::Number,
+     "Length of each fixed sized element in bytes"},
+    {"var_elem_alloc_bytes",     Ndbinfo::Number64,
+     "Number of bytes allocated for var-size elements"},
+    {"var_elem_free_bytes",      Ndbinfo::Number64,
+     "Free bytes in var-size element pages"},
+    {"var_elem_count",           Ndbinfo::Number64,
+     "Number of var size elements in use"},
+    {"tuple_l2pmap_alloc_bytes", Ndbinfo::Number64, 
+     "Bytes in logical to physical page map for tuple store"},
+    {"hash_index_l2pmap_alloc_bytes",  Ndbinfo::Number64,  
+     "Bytes in logical to physical page map for the hash index"},
+    {"hash_index_alloc_bytes",   Ndbinfo::Number64,  "Bytes in linear hash map"}
+  }
+};
+
+
 #define DBINFOTBL(x) { Ndbinfo::x##_TABLEID, (Ndbinfo::Table*)&ndbinfo_##x }
 
 static
@@ -188,7 +336,14 @@ struct ndbinfo_table_list_entry {
   DBINFOTBL(RESOURCES),
   DBINFOTBL(COUNTERS),
   DBINFOTBL(NODES),
-  DBINFOTBL(DISKPAGEBUFFER)
+  DBINFOTBL(DISKPAGEBUFFER),
+  DBINFOTBL(THREADBLOCKS),
+  DBINFOTBL(THREADSTAT),
+  DBINFOTBL(TRANSACTIONS),
+  DBINFOTBL(OPERATIONS),
+  DBINFOTBL(MEMBERSHIP),
+  DBINFOTBL(DICT_OBJ_INFO),
+  DBINFOTBL(FRAG_MEM_USE)
 };
 
 static int no_ndbinfo_tables =
@@ -211,3 +366,8 @@ const Ndbinfo::Table& Ndbinfo::getTable(Uint32 i)
 {
   return getTable((int)i);
 }
+
+/** 
+ * #undef is needed since this file is included by NdbInfoTables.cpp
+ */
+#undef JAM_FILE_ID

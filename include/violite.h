@@ -1,4 +1,4 @@
-/* Copyright (c) 2000, 2013, Oracle and/or its affiliates. All rights reserved.
+/* Copyright (c) 2000, 2015, Oracle and/or its affiliates. All rights reserved.
 
    This program is free software; you can redistribute it and/or modify
    it under the terms of the GNU General Public License as published by
@@ -21,15 +21,20 @@
 #ifndef vio_violite_h_
 #define	vio_violite_h_
 
-#include "my_net.h"   /* needed because of struct in_addr */
+#include <my_thread.h> /* my_thread_handle */
+#include <mysql/psi/psi.h>
+#include <pfs_socket_provider.h>
 #include <mysql/psi/mysql_socket.h>
-
 
 /* Simple vio interface in C;  The functions are implemented in violite.c */
 
 #ifdef	__cplusplus
 extern "C" {
 #endif /* __cplusplus */
+
+#ifdef HAVE_PSI_INTERFACE
+void init_vio_psi_keys();
+#endif
 
 #ifdef __cplusplus
 typedef struct st_vio Vio;
@@ -58,7 +63,7 @@ enum enum_vio_io_event
 
 Vio* vio_new(my_socket sd, enum enum_vio_type type, uint flags);
 Vio*  mysql_socket_vio_new(MYSQL_SOCKET mysql_socket, enum enum_vio_type type, uint flags);
-#ifdef __WIN__
+#ifdef _WIN32
 Vio* vio_new_win32pipe(HANDLE hPipe);
 Vio* vio_new_win32shared_memory(HANDLE handle_file_map,
                                 HANDLE handle_map,
@@ -69,7 +74,7 @@ Vio* vio_new_win32shared_memory(HANDLE handle_file_map,
                                 HANDLE event_conn_closed);
 #else
 #define HANDLE void *
-#endif /* __WIN__ */
+#endif /* _WIN32 */
 
 void    vio_delete(Vio* vio);
 int vio_shutdown(Vio* vio);
@@ -108,7 +113,7 @@ int vio_timeout(Vio *vio, uint which, int timeout_sec);
 my_bool vio_socket_connect(Vio *vio, struct sockaddr *addr, socklen_t len,
                            int timeout);
 
-my_bool vio_get_normalized_ip_string(const struct sockaddr *addr, int addr_length,
+my_bool vio_get_normalized_ip_string(const struct sockaddr *addr, size_t addr_length,
                                      char *ip_string, size_t ip_string_size);
 
 my_bool vio_is_no_name_error(int err_code);
@@ -147,7 +152,8 @@ enum enum_ssl_init_error
 {
   SSL_INITERR_NOERROR= 0, SSL_INITERR_CERT, SSL_INITERR_KEY, 
   SSL_INITERR_NOMATCH, SSL_INITERR_BAD_PATHS, SSL_INITERR_CIPHERS, 
-  SSL_INITERR_MEMFAIL, SSL_INITERR_LASTERR
+  SSL_INITERR_MEMFAIL, SSL_INITERR_NO_USABLE_CTX, SSL_INITERR_DHFAIL,
+  SSL_INITERR_LASTERR
 };
 const char* sslGetErrString(enum enum_ssl_init_error err);
 
@@ -214,7 +220,7 @@ struct st_vio
   my_bool       localhost;              /* Are we from localhost? */
   struct sockaddr_storage   local;      /* Local internet address */
   struct sockaddr_storage   remote;     /* Remote internet address */
-  int addrLen;                          /* Length of remote address */
+  size_t addrLen;                       /* Length of remote address */
   enum enum_vio_type    type;           /* Type of connection */
   my_bool               inactive; /* Connection inactive (has been shutdown) */
   char                  desc[VIO_DESCRIPTION_SIZE]; /* Description string. This
@@ -266,7 +272,7 @@ struct st_vio
 #ifdef HAVE_OPENSSL
   void    *ssl_arg;
 #endif
-#ifdef HAVE_SMEM
+#if defined (_WIN32) && !defined (EMBEDDED_LIBRARY)
   HANDLE  handle_file_map;
   char    *handle_map;
   HANDLE  event_server_wrote;
@@ -276,6 +282,6 @@ struct st_vio
   HANDLE  event_conn_closed;
   size_t  shared_memory_remain;
   char    *shared_memory_pos;
-#endif /* HAVE_SMEM */
+#endif /* _WIN32 && !EMBEDDED_LIBRARY */
 };
 #endif /* vio_violite_h_ */

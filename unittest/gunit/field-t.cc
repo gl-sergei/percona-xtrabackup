@@ -1,4 +1,4 @@
-/* Copyright (c) 2011, 2013, Oracle and/or its affiliates. All rights reserved.
+/* Copyright (c) 2011, 2014, Oracle and/or its affiliates. All rights reserved.
 
    This program is free software; you can redistribute it and/or modify
    it under the terms of the GNU General Public License as published by
@@ -186,7 +186,7 @@ TEST_F(FieldTest, FieldTimef)
   EXPECT_EQ(0, field->store_time(&bigTime, 4));
   EXPECT_FALSE(field->get_date(&dateTime, 0));
 
-  make_datetime((DATE_TIME_FORMAT *)0, &dateTime, &timeStr, 6);
+  make_datetime((Date_time_format *)0, &dateTime, &timeStr, 6);
   // Skip 'yyyy-mm-dd ' since that will depend on current time zone.
   EXPECT_STREQ("03:45:45.555500", timeStr.c_ptr() + 11);
 
@@ -390,12 +390,13 @@ TEST_F(FieldTest, CopyFieldSet)
 
   Field_set *f_from= create_field_set(&tl4);
   bitmap_set_all(f_from->table->write_set);
+  bitmap_set_all(f_from->table->read_set);
   uchar from_fieldval= static_cast<uchar>(typeset);
   f_from->ptr= &from_fieldval;
 
   Copy_field *cf= new (thd()->mem_root) Copy_field;
   cf->set(f_to, f_from, false);
-  cf->do_copy(cf);
+  cf->invoke_do_copy(cf);
 
   // Copy_field DTOR is not invoked in all contexts, so we may leak memory.
   EXPECT_FALSE(cf->tmp.is_alloced());

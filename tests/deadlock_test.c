@@ -1,5 +1,4 @@
-/* Copyright (C) 2000-2001, 2003-2004, 2006 MySQL AB
-   Use is subject to license terms
+/* Copyright (c) 2000, 2012, Oracle and/or its affiliates. All rights reserved.
 
    This program is free software; you can redistribute it and/or modify
    it under the terms of the GNU General Public License as published by
@@ -45,8 +44,6 @@ MYSQL lock, sel, del_ins;
 
 struct query queries[] =
 {
-  {&del_ins, "insert delayed into foo values(1)", 1, 0, 0},
-  {&del_ins, "insert delayed into foo values(1)", 1, 0, 0},
   {&lock, "lock tables foo write", 1, 1, 0},
   {&lock, "unlock tables", 1,2, 0},
   {&sel, "select * from foo", 0,0, 0},

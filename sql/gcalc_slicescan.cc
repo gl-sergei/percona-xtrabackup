@@ -15,9 +15,8 @@
 
 
 #include "sql_string.h"
-
-#ifdef HAVE_SPATIAL
-
+/* key_memory_Gcalc_dyn_list_block */
+#include "mysqld.h"
 #include "gcalc_slicescan.h"
 
 
@@ -67,7 +66,8 @@ void Gcalc_dyn_list::format_blk(void* block)
 
 bool Gcalc_dyn_list::alloc_new_blk()
 {
-  void *new_block= my_malloc(m_blk_size, MYF(MY_WME));
+  void *new_block= my_malloc(key_memory_Gcalc_dyn_list_block,
+                             m_blk_size, MYF(MY_WME));
   if (!new_block)
     return true;
   *m_blk_hook= new_block;
@@ -835,5 +835,3 @@ redo_loop:
 
   return 0;
 }
-
-#endif /* HAVE_SPATIAL */

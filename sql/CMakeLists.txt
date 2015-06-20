@@ -13,19 +13,27 @@
 # along with this program; if not, write to the Free Software
 # Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301 USA
 
+
 INCLUDE_DIRECTORIES(
   ${CMAKE_SOURCE_DIR}/include 
+  ${CMAKE_SOURCE_DIR}/sql/conn_handler
+  ${CMAKE_SOURCE_DIR}/libbinlogevents/include
   ${CMAKE_SOURCE_DIR}/sql 
+  ${CMAKE_SOURCE_DIR}/sql/auth
   ${CMAKE_SOURCE_DIR}/regex 
   ${ZLIB_INCLUDE_DIR}
   ${SSL_INCLUDE_DIRS}
   ${CMAKE_BINARY_DIR}/sql
 )
 
+SET(CONF_SOURCES
+  ${CMAKE_CURRENT_BINARY_DIR}/sql_builtin.cc 
+)
 SET(GEN_SOURCES
   ${CMAKE_CURRENT_BINARY_DIR}/sql_yacc.h 
   ${CMAKE_CURRENT_BINARY_DIR}/sql_yacc.cc
-  ${CMAKE_CURRENT_BINARY_DIR}/sql_builtin.cc
+  ${CMAKE_CURRENT_BINARY_DIR}/sql_hints.yy.h 
+  ${CMAKE_CURRENT_BINARY_DIR}/sql_hints.yy.cc
   ${CMAKE_CURRENT_BINARY_DIR}/lex_hash.h 
 )
 SET(GEN_DIGEST_SOURCES
@@ -34,6 +42,7 @@ SET(GEN_DIGEST_SOURCES
 
 SET_SOURCE_FILES_PROPERTIES(${GEN_SOURCES}
                             ${GEN_DIGEST_SOURCES}
+                            ${CONF_SOURCES}
                             PROPERTIES GENERATED 1)
 
 # Gen_lex_token
@@ -47,22 +56,32 @@ ADD_CUSTOM_COMMAND(
   DEPENDS gen_lex_token
 )
 
-ADD_DEFINITIONS(-DMYSQL_SERVER -DHAVE_EVENT_SCHEDULER) 
+ADD_DEFINITIONS(-DMYSQL_SERVER -DHAVE_REPLICATION)
 IF(SSL_DEFINES)
  ADD_DEFINITIONS(${SSL_DEFINES})
 ENDIF()
 
 SET(SQL_SHARED_SOURCES
   abstract_query_plan.cc
+  auth/sql_authentication.cc
+  auth/sql_auth_cache.cc
+  auth/sql_authorization.cc
+  auth/sql_user_table.cc
+  auth/sql_user.cc
+  auth/password.c
+  auth/password_policy_service.cc
+  auth/sql_security_ctx.cc
+  bootstrap.cc
+  conn_handler/connection_handler_manager.cc 
   datadict.cc
   debug_sync.cc
   derror.cc
-  des_key_file.cc
   discover.cc
   field.cc
   field_conv.cc 
   filesort.cc
   filesort_utils.cc
+  aggregate_check.cc
   gcalc_slicescan.cc
   gcalc_tools.cc
   gstream.cc
@@ -75,6 +94,10 @@ SET(SQL_SHARED_SOURCES
   item_create.cc
   item_func.cc
   item_geofunc.cc
+  item_geofunc_buffer.cc
+  item_geofunc_relchecks.cc
+  item_geofunc_relchecks_bgwrap.cc
+  item_geofunc_setops.cc
   item_row.cc 
   item_strfunc.cc
   item_subselect.cc
@@ -87,26 +110,41 @@ SET(SQL_SHARED_SOURCES
   lock.cc
   log.cc
   mdl.cc
-  mf_iocache.cc
   my_decimal.cc
   net_serv.cc
+  opt_costconstantcache.cc
+  opt_costconstants.cc
+  opt_costmodel.cc
   opt_explain.cc
   opt_explain_traditional.cc
   opt_explain_json.cc
+  opt_hints.cc
   opt_range.cc
+  opt_statistics.cc
   opt_sum.cc 
   opt_trace.cc
   opt_trace2server.cc
   parse_file.cc
+  parse_tree_helpers.cc
+  parse_tree_hints.cc
+  parse_tree_items.cc
+  parse_tree_node_base.cc
+  parse_tree_nodes.cc
+  select_lex_visitor.cc
+  parser_service.cc
   partition_info.cc
-  password.c
+  partitioning/partition_handler.cc
   procedure.cc 
   protocol.cc
   records.cc
+  rpl_group_replication.cc
   rpl_handler.cc
-  scheduler.cc 
+  rpl_transaction_ctx.cc
+  rpl_transaction_write_set_ctx.cc
+  rpl_write_set_handler.cc
+  rules_table_service.cc
+  session_tracker.cc
   set_var.cc 
-  signal_handler.cc
   sp.cc
   sp_cache.cc
   sp_head.cc
@@ -115,7 +153,6 @@ SET(SQL_SHARED_SOURCES
   sp_rcontext.cc
   spatial.cc
   string_service.cc
-  sql_acl.cc
   sql_admin.cc
   sql_alloc_error_handler.cc
   sql_alter.cc
@@ -123,6 +160,7 @@ SET(SQL_SHARED_SOURCES
   sql_audit.cc
   sql_base.cc 
   sql_bootstrap.cc
+  sql_initialize.cc
   sql_cache.cc
   sql_class.cc
   sql_connect.cc
@@ -142,6 +180,8 @@ SET(SQL_SHARED_SOURCES
   sql_insert.cc
   sql_join_buffer.cc
   sql_lex.cc 
+  sql_lex_hash.cc
+  sql_lex_hints.cc
   sql_list.cc
   sql_load.cc
   sql_locale.cc
@@ -154,6 +194,7 @@ SET(SQL_SHARED_SOURCES
   sql_plugin.cc
   sql_prepare.cc
   sql_profile.cc
+  sql_query_rewrite.cc
   sql_reload.cc
   sql_rename.cc
   sql_resolver.cc
@@ -161,9 +202,9 @@ SET(SQL_SHARED_SOURCES
   sql_select.cc
   sql_servers.cc
   sql_show.cc
+  sql_show_status.cc
   sql_signal.cc
   sql_state.c
-  sql_string.cc 
   sql_table.cc
   sql_tablespace.cc
   sql_test.cc
@@ -177,13 +218,21 @@ SET(SQL_SHARED_SOURCES
   sql_view.cc
   strfunc.cc
   sys_vars.cc
+  sys_vars_resource_mgr.cc
   table.cc
   table_cache.cc
+  table_trigger_dispatcher.cc
   thr_malloc.cc 
   transaction.cc
+  transaction_info.cc
+  trigger.cc
+  trigger_creation_ctx.cc
+  trigger_loader.cc
+  trigger_chain.cc
   tztime.cc
   uniques.cc
   unireg.cc
+  xa.cc
 )
 
 SET(SQL_EXPORTED_SOURCES ${SQL_SHARED_SOURCES} PARENT_SCOPE)
@@ -191,7 +240,7 @@ SET(SQL_EXPORTED_SOURCES ${SQL_SHARED_SOURCES} PARENT_SCOPE)
 SET(SQL_SOURCE
   ${GEN_SOURCES}
   ${GEN_DIGEST_SOURCES}
-  ${MYSYS_LIBWRAP_SOURCE}
+  ${CONF_SOURCES}
   ${SQL_SHARED_SOURCES}
   ../libmysql/errmsg.c
   ../sql-common/client.c
@@ -200,32 +249,93 @@ SET(SQL_SOURCE
   ../sql-common/my_user.c 
   ../sql-common/pack.c
   ../sql-common/client_authentication.cc
+  ../sql-common/sql_string.cc 
+  conn_handler/channel_info.cc
+  conn_handler/connection_handler_per_thread.cc
+  conn_handler/connection_handler_one_thread.cc
+  conn_handler/socket_connection.cc
+  des_key_file.cc
   event_data_objects.cc
   event_db_repository.cc 
   event_parse_data.cc
   event_queue.cc
   event_scheduler.cc
   events.cc
+  mf_iocache.cc
   mysqld.cc
+  mysqld_thd_manager.cc
+  signal_handler.cc
   sql_client.cc
   )
 
-IF (WIN32 AND OPENSSL_APPLINK_C)
-  SET_SOURCE_FILES_PROPERTIES(
-    ../sql-common/client_authentication.cc
-    PROPERTIES COMPILE_FLAGS "-DHAVE_OPENSSL_APPLINK_C"
+IF(NOT WIN32)
+  LIST(APPEND SQL_SOURCE mysqld_daemon.cc)
+ENDIF()
+
+IF(WIN32)
+  LIST(APPEND SQL_SOURCE
+              named_pipe.cc
+              conn_handler/named_pipe_connection.cc
+              conn_handler/shared_memory_connection.cc
+      )
+ENDIF()
+
+INCLUDE(${MYSQL_CMAKE_SCRIPT_DIR}/compile_flags.cmake)
+ADD_COMPILE_FLAGS(
+  item_geofunc.cc
+  item_geofunc_buffer.cc
+  item_geofunc_relchecks.cc
+  item_geofunc_relchecks_bgwrap.cc
+  item_geofunc_setops.cc
+  auth/sql_authorization.cc
+  auth/sql_authentication.cc
+  auth/sql_user_table.cc
+  auth/sql_user.cc
+  auth/sql_auth_cache.cc
+  COMPILE_FLAGS -I${BOOST_PATCHES_DIR} -I${BOOST_INCLUDE_DIR}
+)
+
+# Boost Geometry source has unused local typedefs.
+MY_CHECK_CXX_COMPILER_FLAG("-Wno-unused-local-typedefs" HAVE_NO_UNUSED_TYPEDEFS)
+IF(HAVE_NO_UNUSED_TYPEDEFS)
+  ADD_COMPILE_FLAGS(
+    item_geofunc.cc
+    item_geofunc_buffer.cc
+    item_geofunc_relchecks.cc
+    item_geofunc_relchecks_bgwrap.cc
+    item_geofunc_setops.cc
+    COMPILE_FLAGS "-Wno-unused-local-typedefs"
   )
 ENDIF()
 
-MYSQL_ADD_PLUGIN(partition ha_partition.cc STORAGE_ENGINE DEFAULT STATIC_ONLY
-RECOMPILE_FOR_EMBEDDED)
+MY_CHECK_CXX_COMPILER_FLAG("-fno-builtin-memcmp" HAVE_NO_BUILTIN_MEMCMP)
+# See comments in filesort_compare-t.cc about __builtin_memcmp
+IF(HAVE_NO_BUILTIN_MEMCMP)
+  ADD_COMPILE_FLAGS(
+    filesort_utils.cc
+    COMPILE_FLAGS "-fno-builtin-memcmp"
+  )
+ENDIF()
+
+IF (WIN32 AND OPENSSL_APPLINK_C)
+  ADD_COMPILE_FLAGS(
+    ../sql-common/client_authentication.cc
+    COMPILE_FLAGS "-DHAVE_OPENSSL_APPLINK_C"
+  )
+ENDIF()
+
+IF(HAVE_MY_TIMER)
+  SET(SQL_SOURCE ${SQL_SOURCE} sql_timer.cc)
+ENDIF()
 
 ADD_LIBRARY(sql STATIC ${SQL_SOURCE})
 ADD_DEPENDENCIES(sql GenServerSource)
 ADD_DEPENDENCIES(sql GenDigestServerSource)
+ADD_DEPENDENCIES(sql GenBootstrapPriv)
+ADD_DEPENDENCIES(sql GenSysSchema)
 DTRACE_INSTRUMENT(sql)
 TARGET_LINK_LIBRARIES(sql ${MYSQLD_STATIC_PLUGIN_LIBS} 
-  mysys mysys_ssl dbug strings vio regex   
+  mysys mysys_ssl dbug strings vio regex binlogevents_static
   ${LIBWRAP} ${LIBCRYPT} ${LIBDL}
   ${SSL_LIBRARIES})
 
@@ -238,32 +348,51 @@ IF(WIN32)
   TARGET_LINK_LIBRARIES(sql auth_win_client)
 ENDIF()
 
-SET (BINLOG_SOURCE uuid.cc rpl_gtid_misc.cc
+SET (BINLOG_SOURCE rpl_gtid_misc.cc
                    rpl_gtid_sid_map.cc rpl_gtid_set.cc rpl_gtid_specification.cc
-                   rpl_gtid_state.cc rpl_gtid_owned.cc rpl_gtid_cache.cc
-                   rpl_gtid_execution.cc rpl_gtid_mutex_cond_array.cc
+                   rpl_gtid_state.cc rpl_gtid_owned.cc rpl_gtid_execution.cc
+                   rpl_gtid_mutex_cond_array.cc rpl_gtid_persist.cc
                    log_event.cc log_event_old.cc binlog.cc sql_binlog.cc
-		   rpl_filter.cc rpl_record.cc rpl_record_old.cc rpl_utility.cc
-		   rpl_injector.cc)
+                   rpl_filter.cc rpl_record.cc rpl_record_old.cc
+                   rpl_utility.cc rpl_injector.cc rpl_table_access.cc)
 ADD_LIBRARY(binlog ${BINLOG_SOURCE})
-SET (RPL_SOURCE rpl_handler.cc rpl_tblmap.cc)
+TARGET_LINK_LIBRARIES(binlog binlogevents_static)
+
+SET (RPL_SOURCE rpl_handler.cc rpl_tblmap.cc rpl_context.cc)
 ADD_DEPENDENCIES(binlog GenError)
 ADD_LIBRARY(rpl ${RPL_SOURCE})
-SET (MASTER_SOURCE rpl_master.cc)
+SET (MASTER_SOURCE rpl_master.cc rpl_binlog_sender.cc)
 ADD_DEPENDENCIES(rpl GenError)
 ADD_LIBRARY(master ${MASTER_SOURCE})
 ADD_DEPENDENCIES(master GenError)
 SET (SLAVE_SOURCE rpl_slave.cc rpl_reporting.cc rpl_mi.cc rpl_rli.cc
-		  rpl_info_handler.cc rpl_info_file.cc rpl_info_table.cc
-		  rpl_info_values.cc rpl_info.cc rpl_info_factory.cc
-		  rpl_info_table_access.cc dynamic_ids.cc rpl_rli_pdb.cc
-		  rpl_info_dummy.cc)
+		  rpl_info_handler.cc rpl_info_file.cc
+                  rpl_info_table.cc rpl_info_values.cc rpl_info.cc
+                  rpl_info_factory.cc rpl_info_table_access.cc dynamic_ids.cc
+                  rpl_rli_pdb.cc rpl_info_dummy.cc rpl_mts_submode.cc
+                  rpl_slave_commit_order_manager.cc rpl_msr.cc
+                  rpl_trx_boundary_parser.cc rpl_channel_service_interface.cc)
 ADD_LIBRARY(slave ${SLAVE_SOURCE})
 ADD_DEPENDENCIES(slave GenError)
-ADD_LIBRARY(sqlgunitlib
-  filesort_utils.cc mdl.cc sql_list.cc sql_string.cc thr_malloc.cc
+
+######################### GUnit Lib #################################
+
+SET(SQL_GUNIT_LIB_SOURCE 
+  filesort_utils.cc 
+  mdl.cc 
+  sql_list.cc 
+  ../sql-common/sql_string.cc
+  thr_malloc.cc
   )
+
+IF(WIN32)
+  LIST(APPEND SQL_GUNIT_LIB_SOURCE named_pipe.cc)
+ENDIF()
+
+ADD_LIBRARY(sqlgunitlib ${SQL_GUNIT_LIB_SOURCE})
 ADD_DEPENDENCIES(sqlgunitlib GenError)
+
+######################### GUnit Lib #################################
 
 
 IF(WIN32)
@@ -289,13 +418,13 @@ IF(NOT WITHOUT_DYNAMIC_PLUGINS)
   IF(NOT mysqld_link_flags)
     SET(mysqld_link_flags)
   ENDIF()
-  IF (MINGW OR CYGWIN)
+  IF (MINGW)
   ENDIF()
   IF(MSVC)
     # Set module definition file. Also use non-incremental linker, 
     # incremental appears to crash from time to time,if used with /DEF option
 
-    FOREACH (CORELIB sql mysys mysys_ssl dbug strings)
+    FOREACH (CORELIB sql binlog slave mysys mysys_ssl dbug strings binlogevents_static)
       GET_TARGET_PROPERTY(LOC ${CORELIB} LOCATION)
       FILE(TO_NATIVE_PATH ${LOC} LOC)
       SET (LIB_LOCATIONS ${LIB_LOCATIONS} ${LOC}) 
@@ -325,26 +454,37 @@ IF(WITH_MYSQLD_LDFLAGS)
   ENDIF() 
 ENDIF()
 
+
 # Handle out-of-source build from source package with possibly broken 
 # bison. Copy bison output to from source to build directory, if not already 
 # there
-IF (NOT ${CMAKE_CURRENT_SOURCE_DIR} STREQUAL ${CMAKE_CURRENT_BINARY_DIR})
-  IF(EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/sql_yacc.cc)
-    IF(NOT EXISTS ${CMAKE_CURRENT_BINARY_DIR}/sql_yacc.cc)
-      CONFIGURE_FILE(${CMAKE_CURRENT_SOURCE_DIR}/sql_yacc.cc 
-        ${CMAKE_CURRENT_BINARY_DIR}/sql_yacc.cc COPYONLY)
-      CONFIGURE_FILE(${CMAKE_CURRENT_SOURCE_DIR}/sql_yacc.h
-        ${CMAKE_CURRENT_BINARY_DIR}/sql_yacc.h COPYONLY)
-    ENDIF()
-  ENDIF()
-ENDIF()
-
-
 INCLUDE(${CMAKE_SOURCE_DIR}/cmake/bison.cmake)
+COPY_BISON_OUTPUT(
+  ${CMAKE_CURRENT_SOURCE_DIR}/sql_yacc.cc
+  ${CMAKE_CURRENT_SOURCE_DIR}/sql_yacc.h
+  ${CMAKE_CURRENT_BINARY_DIR}/sql_yacc.cc
+  ${CMAKE_CURRENT_BINARY_DIR}/sql_yacc.h
+)
+
+COPY_BISON_OUTPUT(
+  ${CMAKE_CURRENT_SOURCE_DIR}/sql_hints.yy.cc
+  ${CMAKE_CURRENT_SOURCE_DIR}/sql_hints.yy.h
+  ${CMAKE_CURRENT_BINARY_DIR}/sql_hints.yy.cc
+  ${CMAKE_CURRENT_BINARY_DIR}/sql_hints.yy.h
+)
+
 RUN_BISON(
   ${CMAKE_CURRENT_SOURCE_DIR}/sql_yacc.yy 
   ${CMAKE_CURRENT_BINARY_DIR}/sql_yacc.cc
   ${CMAKE_CURRENT_BINARY_DIR}/sql_yacc.h
+  MYSQL
+)
+
+RUN_BISON(
+  ${CMAKE_CURRENT_SOURCE_DIR}/sql_hints.yy 
+  ${CMAKE_CURRENT_BINARY_DIR}/sql_hints.yy.cc
+  ${CMAKE_CURRENT_BINARY_DIR}/sql_hints.yy.h
+  HINT_PARSER_
 )
 
 # Gen_lex_hash
@@ -366,8 +506,6 @@ ADD_CUSTOM_TARGET(
         DEPENDS ${GEN_DIGEST_SOURCES}
 )
 
-#Need this only for embedded
-SET_TARGET_PROPERTIES(GenServerSource PROPERTIES EXCLUDE_FROM_ALL TRUE)
 
 IF(WIN32 OR HAVE_DLOPEN AND NOT DISABLE_SHARED)
 ENDIF()
@@ -385,7 +523,7 @@ CONFIGURE_FILE(
 
 ADD_CUSTOM_TARGET(dist 
   COMMAND ${CMAKE_COMMAND} -P ${CMAKE_BINARY_DIR}/make_dist.cmake
-  DEPENDS ${CMAKE_BINARY_DIR}/sql/sql_yacc.cc ${CMAKE_BINARY_DIR}/sql/sql_yacc.h
+  DEPENDS ${CMAKE_BINARY_DIR}/sql/sql_yacc.cc ${CMAKE_BINARY_DIR}/sql/sql_yacc.h ${CMAKE_BINARY_DIR}/sql/sql_hints.yy.cc ${CMAKE_BINARY_DIR}/sql/sql_hints.yy.h
   WORKING_DIRECTORY ${CMAKE_BINARY_DIR}
 )
 
@@ -409,26 +547,34 @@ IF(NOT CMAKE_CROSSCOMPILING)
   ENDIF()
 ENDIF()
 IF(WIN32 AND MYSQLD_EXECUTABLE)
-  CONFIGURE_FILE(
-    ${CMAKE_SOURCE_DIR}/cmake/create_initial_db.cmake.in
-    ${CMAKE_CURRENT_BINARY_DIR}/create_initial_db.cmake
-    @ONLY
-  )
-  
-  IF(MSVC_IDE OR CMAKE_GENERATOR MATCHES "Xcode")
-    SET (CONFIG_PARAM -DCONFIG=${CMAKE_CFG_INTDIR})
-  ENDIF()
-  MAKE_DIRECTORY(${CMAKE_CURRENT_BINARY_DIR}/data)
   ADD_CUSTOM_COMMAND(
-     OUTPUT initdb.dep
-     COMMAND ${CMAKE_COMMAND}
-     ${CONFIG_PARAM} -P ${CMAKE_CURRENT_BINARY_DIR}/create_initial_db.cmake
-     WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}/data
+     OUTPUT data
+     COMMAND "${CMAKE_COMMAND}" -E remove_directory
+       ${CMAKE_CURRENT_BINARY_DIR}/data
+     COMMAND "${MYSQLD_EXECUTABLE}"
+       --no-defaults
+       --console
+       --lc-messages-dir=${CMAKE_CURRENT_BINARY_DIR}/share
+       --datadir=${CMAKE_CURRENT_BINARY_DIR}/data
+       --default-storage-engine=MyISAM
+       --default-tmp-storage-engine=MyISAM
+       --loose-skip-auto_generate_certs
+       --loose-skip-sha256_password_auto_generate_rsa_keys
+       --initialize-insecure
+       --log_syslog=0
+       --skip-ssl
+     COMMAND "${CMAKE_COMMAND}" -E make_directory
+       ${CMAKE_CURRENT_BINARY_DIR}/data/test
+     COMMAND "${CMAKE_COMMAND}" -E remove
+       ${CMAKE_CURRENT_BINARY_DIR}/data/mysql/db.opt
+     COMMAND "${CMAKE_COMMAND}" -E remove
+       ${CMAKE_CURRENT_BINARY_DIR}/data/performance_schema/db.opt
+     WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}
      DEPENDS mysqld
   )
-  ADD_CUSTOM_TARGET(initial_database  
+  ADD_CUSTOM_TARGET(initial_database
     ALL
-    DEPENDS  initdb.dep
+    DEPENDS  data
   )
 ENDIF()
 ENDIF()

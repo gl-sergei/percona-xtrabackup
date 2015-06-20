@@ -19,6 +19,7 @@ Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA 02111-1307 USA
 *******************************************************/
 
 #include <my_base.h>
+#include <my_thread_local.h>
 #include "common.h"
 #include "xbcrypt.h"
 
@@ -47,7 +48,7 @@ xb_crypt_read_key_file(const char *filename, void** key, uint *keylength)
 	fseek(fp, 0 , SEEK_END);
 	*keylength = ftell(fp);
 	rewind(fp);
-	*key = my_malloc(*keylength, MYF(MY_FAE));
+	*key = my_malloc(PSI_NOT_INSTRUMENTED, *keylength, MYF(MY_FAE));
 	*keylength = fread(*key, 1, *keylength, fp);
 	my_fclose(fp, MYF(0));
 	return TRUE;

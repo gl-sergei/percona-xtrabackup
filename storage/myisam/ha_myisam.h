@@ -104,14 +104,13 @@ class ha_myisam: public handler
   FT_INFO *ft_init_ext(uint flags, uint inx,String *key)
   {
     return ft_init_search(flags,file,inx,
-                          (uchar *)key->ptr(), key->length(), key->charset(),
-                          table->record[0]);
+                          (uchar *)key->ptr(), (uint)key->length(),
+                          key->charset(), table->record[0]);
   }
   int ft_read(uchar *buf);
   int rnd_init(bool scan);
   int rnd_next(uchar *buf);
   int rnd_pos(uchar * buf, uchar *pos);
-  int restart_rnd_next(uchar *buf, uchar *pos);
   void position(const uchar *record);
   int info(uint);
   int extra(enum ha_extra_function operation);
@@ -147,13 +146,11 @@ class ha_myisam: public handler
   int assign_to_keycache(THD* thd, HA_CHECK_OPT* check_opt);
   int preload_keys(THD* thd, HA_CHECK_OPT* check_opt);
   bool check_if_incompatible_data(HA_CREATE_INFO *info, uint table_changes);
-#ifdef HAVE_QUERY_CACHE
   my_bool register_query_cache_table(THD *thd, char *table_key,
-                                     uint key_length,
+                                     size_t key_length,
                                      qc_engine_callback
                                      *engine_callback,
                                      ulonglong *engine_data);
-#endif
   MI_INFO *file_ptr(void)
   {
     return file;

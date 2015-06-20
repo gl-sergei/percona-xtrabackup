@@ -1,5 +1,5 @@
 /*
-   Copyright (c) 2003, 2010, Oracle and/or its affiliates. All rights reserved.
+   Copyright (c) 2003, 2012, Oracle and/or its affiliates. All rights reserved.
 
    This program is free software; you can redistribute it and/or modify
    it under the terms of the GNU General Public License as published by
@@ -247,9 +247,9 @@ extern const GlobalSignalNumber NO_OF_SIGNAL_NAMES;
 #define GSN_COPY_STATEREQ               175
 #define GSN_COPY_TABCONF                176
 #define GSN_COPY_TABREQ                 177
-#define GSN_CREATE_FRAGCONF             178
-#define GSN_CREATE_FRAGREF              179
-#define GSN_CREATE_FRAGREQ              180
+#define GSN_UPDATE_FRAG_STATECONF       178
+#define GSN_UPDATE_FRAG_STATEREF        179
+#define GSN_UPDATE_FRAG_STATEREQ        180
 #define GSN_DEBUG_SIG                   181
 #define GSN_DIH_SCAN_TAB_REQ            182
 #define GSN_DIH_SCAN_TAB_REF            183
@@ -454,9 +454,13 @@ extern const GlobalSignalNumber NO_OF_SIGNAL_NAMES;
 #define GSN_COPY_DATA_REF               337
 #define GSN_COPY_DATA_CONF              338
 
+/*
+   jonas 2012-01-10 unused currently...
+     so rename REQ to ORD
 #define GSN_OPEN_COMCONF                339
 #define GSN_OPEN_COMREF                 340
-#define GSN_OPEN_COMREQ                 341
+*/
+#define GSN_OPEN_COMORD                 341
 #define GSN_PACKED_SIGNAL               342
 #define GSN_PREP_FAILCONF               343
 #define GSN_PREP_FAILREF                344
@@ -592,7 +596,7 @@ extern const GlobalSignalNumber NO_OF_SIGNAL_NAMES;
 #define GSN_NODE_PING_REQ               461 /* distr. */
 #define GSN_NODE_PING_CONF              462 /* distr. */
 
-/* 463 unused */
+#define GSN_CANCEL_SUBSCRIPTION_REQ     463
 /* 464 unused */
 
 #define GSN_DUMP_STATE_ORD              465
@@ -832,9 +836,10 @@ extern const GlobalSignalNumber NO_OF_SIGNAL_NAMES;
 
 #define GSN_SYNC_PATH_REQ               613
 #define GSN_SYNC_PATH_CONF              614
-#define GSN_615
-#define GSN_616
-#define GSN_617
+
+#define GSN_LCP_STATUS_REQ              615
+#define GSN_LCP_STATUS_CONF             616
+#define GSN_LCP_STATUS_REF              617
 
 #define GSN_618
 #define GSN_619
@@ -843,24 +848,30 @@ extern const GlobalSignalNumber NO_OF_SIGNAL_NAMES;
 #define GSN_622
 #define GSN_623
 
-#define GSN_627
-#define GSN_628
-#define GSN_629
-#define GSN_630
-#define GSN_631
-#define GSN_632
-#define GSN_633
-#define GSN_634
-#define GSN_635
-#define GSN_636
-#define GSN_637
-#define GSN_638
-#define GSN_639
-#define GSN_640
-#define GSN_641
-#define GSN_642
-#define GSN_643
-#define GSN_644
+#define GSN_CREATE_FK_REQ               627
+#define GSN_CREATE_FK_REF               628
+#define GSN_CREATE_FK_CONF              629
+
+#define GSN_DROP_FK_REQ                 630
+#define GSN_DROP_FK_REF                 631
+#define GSN_DROP_FK_CONF                632
+
+#define GSN_CREATE_FK_IMPL_REQ          633
+#define GSN_CREATE_FK_IMPL_REF          634
+#define GSN_CREATE_FK_IMPL_CONF         635
+
+#define GSN_DROP_FK_IMPL_REQ            636
+#define GSN_DROP_FK_IMPL_REF            637
+#define GSN_DROP_FK_IMPL_CONF           638
+
+#define GSN_BUILD_FK_REQ                639
+#define GSN_BUILD_FK_REF                640
+#define GSN_BUILD_FK_CONF               641
+
+#define GSN_BUILD_FK_IMPL_REQ           642
+#define GSN_BUILD_FK_IMPL_REF           643
+#define GSN_BUILD_FK_IMPL_CONF          644
+
 #define GSN_645
 #define GSN_646
 #define GSN_647

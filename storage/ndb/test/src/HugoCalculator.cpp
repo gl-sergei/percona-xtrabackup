@@ -69,7 +69,7 @@ HugoCalculator::HugoCalculator(const NdbDictionary::Table& tab) : m_tab(tab) {
   ndbout << "updatesCol = " << m_updatesCol << endl;
 #endif
   // Check that idCol is not conflicting with updatesCol
-  assert(m_idCol != m_updatesCol && m_idCol != -1 && m_updatesCol != -1);
+  require(m_idCol != m_updatesCol && m_idCol != -1 && m_updatesCol != -1);
 }
 
 Int32
@@ -201,9 +201,6 @@ HugoCalculator::calcValue(int record,
   case NdbDictionary::Column::Decimal:
   case NdbDictionary::Column::Decimalunsigned:
   case NdbDictionary::Column::Binary:
-  case NdbDictionary::Column::Datetime:
-  case NdbDictionary::Column::Time:
-  case NdbDictionary::Column::Date:
   case NdbDictionary::Column::Bit:
     while (len > 4)
     {
@@ -244,7 +241,7 @@ HugoCalculator::calcValue(int record,
   case NdbDictionary::Column::Varbinary:
   case NdbDictionary::Column::Varchar:
     len = calc_len(myRand(&seed), len - 1);
-    assert(len < 256);
+    require(len < 256);
     * outlen = len + 1;
     * buf = len;
     dst++;
@@ -252,7 +249,7 @@ HugoCalculator::calcValue(int record,
   case NdbDictionary::Column::Longvarchar:
   case NdbDictionary::Column::Longvarbinary:
     len = calc_len(myRand(&seed), len - 2);
-    assert(len < 65536);
+    require(len < 65536);
     * outlen = len + 2;
     int2store(buf, len);
     dst += 2;
@@ -276,14 +273,34 @@ write_char:
     pos--;
     break;
   }
+  /*
+   * Date and time types.  Compared as binary data so valid values
+   * are not required, but they can be nice for manual testing e.g.
+   * to avoid garbage in ndb_select_all output.  -todo
+   */
+  case NdbDictionary::Column::Year:
+  case NdbDictionary::Column::Date:
+  case NdbDictionary::Column::Time:
+  case NdbDictionary::Column::Datetime:
+  case NdbDictionary::Column::Time2:
+  case NdbDictionary::Column::Datetime2:
+  case NdbDictionary::Column::Timestamp:
+  case NdbDictionary::Column::Timestamp2:
+    while (len > 4)
+    {
+      memcpy(buf+pos, &val, 4);
+      pos += 4;
+      len -= 4;
+      val= myRand(&seed);
+    }
+    memcpy(buf+pos, &val, len);
+    break;
   case NdbDictionary::Column::Blob:
     * outlen = calc_blobLen(myRand(&seed), len);
     // Don't set any actual data...
     break;
   case NdbDictionary::Column::Undefined:
   case NdbDictionary::Column::Text:
-  case NdbDictionary::Column::Year:
-  case NdbDictionary::Column::Timestamp:
     abort();
     break;
   }
@@ -476,7 +493,7 @@ HugoCalculator::equalForRow(Uint8 * pRow,
       Uint32 real_len;
       const char * value = calcValue(rowId, attrId, 0, buf,
                                      len, &real_len);
-      assert(value != 0); // NULLable PK not supported...
+      require(value != 0); // NULLable PK not supported...
       Uint32 off = 0;
       bool ret = NdbDictionary::getOffset(pRecord, attrId, off);
       if (!ret)
@@ -523,7 +540,7 @@ HugoCalculator::setValues(Uint8 * pRow,
       }
       else
       {
-        assert(attr->getNullable());
+        require(attr->getNullable());
         NdbDictionary::setNull(pRecord, (char*)pRow, attrId, true);
       }
     }

@@ -19,16 +19,16 @@
 #include "fulltext.h"
 #include "rt_index.h"
 
-int mi_update(register MI_INFO *info, const uchar *oldrec, uchar *newrec)
+int mi_update(MI_INFO *info, const uchar *oldrec, uchar *newrec)
 {
   int flag,key_changed,save_errno;
-  reg3 my_off_t pos;
+  my_off_t pos;
   uint i;
   uchar old_key[MI_MAX_KEY_BUFF],*new_key;
   my_bool auto_key_changed=0;
   ulonglong changed;
   MYISAM_SHARE *share=info->s;
-  ha_checksum UNINIT_VAR(old_checksum);
+  ha_checksum old_checksum= 0;
   DBUG_ENTER("mi_update");
 
   DBUG_EXECUTE_IF("myisam_pretend_crashed_table_on_usage",

@@ -1,4 +1,4 @@
-# Copyright (c) 2010, 2013, Oracle and/or its affiliates. All rights reserved.
+# Copyright (c) 2010, 2015, Oracle and/or its affiliates. All rights reserved.
 # 
 # This program is free software; you can redistribute it and/or modify
 # it under the terms of the GNU General Public License as published by
@@ -13,18 +13,8 @@
 # along with this program; if not, write to the Free Software
 # Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301  USA
 
-IF(ESSENTIALS)
- SET(CPACK_COMPONENTS_USED "Server;Client;DataFiles")
- SET(CPACK_WIX_UI "WixUI_InstallDir")
- IF(CMAKE_SIZEOF_VOID_P MATCHES 8)
-  SET(CPACK_PACKAGE_FILE_NAME  "mysql-essential-${VERSION}-winx64")
- ELSE()
-  SET(CPACK_PACKAGE_FILE_NAME  "mysql-essential-${VERSION}-win32")
- ENDIF()
-ELSE()
-  SET(CPACK_COMPONENTS_USED 
-    "Server;Client;DataFiles;Development;SharedLibraries;Documentation;IniFiles;Readme;Server_Scripts;DebugBinaries")
-ENDIF()
+SET(CPACK_COMPONENTS_USED 
+    "Server;Client;DataFiles;Development;SharedLibraries;Documentation;IniFiles;Readme;Server_Scripts")
 
 
 # Some components like Embedded are optional
@@ -61,21 +51,13 @@ SET(CPACK_COMPONENT_GROUP_MYSQLSERVER_DESCRIPTION "Install MySQL Server")
  SET(CPACK_COMPONENT_CLIENT_DISPLAY_NAME "Client Programs")
  SET(CPACK_COMPONENT_CLIENT_DESCRIPTION 
    "Various helpful (commandline) tools including the mysql command line client" )
- # Subfeature "Debug binaries" 
- SET(CPACK_COMPONENT_DEBUGBINARIES_GROUP "MySQLServer")
- SET(CPACK_COMPONENT_DEBUGBINARIES_DISPLAY_NAME "Debug binaries")
- SET(CPACK_COMPONENT_DEBUGBINARIES_DESCRIPTION 
-   "Debug/trace versions of executables and libraries" )
- #SET(CPACK_COMPONENT_DEBUGBINARIES_WIX_LEVEL 2)
-  
-   
+    
  #Subfeature "Data Files" 
  SET(CPACK_COMPONENT_DATAFILES_GROUP "MySQLServer")
  SET(CPACK_COMPONENT_DATAFILES_DISPLAY_NAME "Server data files")
  SET(CPACK_COMPONENT_DATAFILES_DESCRIPTION "Server data files" )
  SET(CPACK_COMPONENT_DATAFILES_HIDDEN 1)
- 
- 
+  
 #Feature "Devel"
 SET(CPACK_COMPONENT_GROUP_DEVEL_DISPLAY_NAME "Development Components")
 SET(CPACK_COMPONENT_GROUP_DEVEL_DESCRIPTION "Installs C/C++ header files and libraries")
@@ -87,7 +69,7 @@ SET(CPACK_COMPONENT_GROUP_DEVEL_DESCRIPTION "Installs C/C++ header files and lib
  SET(CPACK_COMPONENT_SHAREDLIBRARIES_GROUP "Devel")
  SET(CPACK_COMPONENT_SHAREDLIBRARIES_DISPLAY_NAME "Client C API library (shared)")
  SET(CPACK_COMPONENT_SHAREDLIBRARIES_DESCRIPTION "Installs shared client library")
- 
+  
  #Subfeature "Embedded"
  SET(CPACK_COMPONENT_EMBEDDED_GROUP "Devel")
  SET(CPACK_COMPONENT_EMBEDDED_DISPLAY_NAME "Embedded server library")

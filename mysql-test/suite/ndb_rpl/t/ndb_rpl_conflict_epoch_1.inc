@@ -3,6 +3,13 @@
 #
 #
 
+if ($extended_exceptions_table)
+{
+call mtr.add_suppression("NDB Slave: exceptions table .* has suspicious definition .*");
+}
+
+if (!$extended_exceptions_table)
+{
 create table `test`.`t1$EX`
   (server_id int unsigned,
    master_server_id int unsigned,
@@ -11,7 +18,23 @@ create table `test`.`t1$EX`
    a int not null,
    d int,
    primary key(server_id, master_server_id, master_epoch, count)) engine ndb;
-
+}
+if ($extended_exceptions_table)
+{
+create table `test`.`t1$EX`
+  (ndb$server_id int unsigned,
+   ndb$master_server_id int unsigned,
+   ndb$master_epoch bigint unsigned,
+   ndb$count int unsigned,
+   a int not null,
+   b$old varchar(255),
+   b$new varchar(255),
+   d int,
+   ndb$op_type           enum('write_row','update_row', 'delete_row') not null,
+   ndb$cft_cause         enum('row_does_not_exist','row_already_exists','data_in_conflict','trans_in_conflict') not null,
+   ndb$orig_transid      bigint unsigned not null,
+   primary key(ndb$server_id, ndb$master_server_id, ndb$master_epoch, ndb$count)) engine ndb;
+}
 
 --echo Create table
 create table test.t1(a int primary key, b varchar(255)) engine = ndb;
@@ -27,34 +50,58 @@ create table test.t2(a int primary key, b int) engine = ndb;
 
 insert into test.t1 values (1, "Metropole");
 
---echo -- Give time for a new epoch on the Master
-# This is 3 seconds to be > GCP_Save time, so that the next epoch
-# will be visibly greater than the one inserted above
-# (e.g. if we have 4 bits of extra GCI resolution, the max
-#  representable GCI is XXX/15.  If we insert at XXX/16, we
-#  need to wait until we get to XXX+1/0 at least, to avoid
-#  the Primary Master undoing the update)
-#
---sleep 3
+# Here we want to verify that updates can originate at the Secondary without
+# causing conflicts
+# We first insert on the Primary, allow that to propagate, then update on 
+# the secondary.
+# This is much complicated by the fact that we run with varying number of
+# extra GCI bits, from 0 to 31.  With 0 extra GCI bits, the row's GCI appears
+# to be GCIhi|0xffffffff, which means that all secondary initiated changes
+# will be considered in-conflict until the MaxReplicatedEpoch hits GCIhi+1|0
+# To make this test stable, we use a loop to check for this condition!
 
---echo -- Insert something to ensure the new epoch is noticed
-#
-# Required in case our initial insert's epoch gets rounded up to
-# 0xffffffff, in which case 'later' updates from the slave will
-# be in conflict until some newer gci_hi is the MaxReplicatedEpoch
-#
-replace into test.t2 values (2, 1);
 --sync_slave_with_master slave
 --connection slave
---echo -- Flushed to slave
-select * from test.t1 order by a;
---disable_query_log
 FLUSH LOGS;
---enable_query_log
 --sync_slave_with_master master
 --connection master
---echo -- Flushed back to Master
-select * from test.t1 order by a;
+--echo -- Verify that Max rep epoch has been updated
+
+--disable_query_log
+--disable_result_log
+SELECT @MaxRepGCIHI:=Variable_Value >> 32
+FROM Information_schema.Global_Status
+WHERE Variable_Name like 'Ndb_slave_max_replicated_epoch';
+
+SELECT @MaxRepGCIHI = 0;
+
+--let $first_gcihi = `SELECT @MaxRepGCIHI`
+--let $current_gcihi = $first_gcihi
+--let $different = `SELECT $current_gcihi - $first_gcihi`
+
+#--echo Difference is $different
+
+while (!$different)
+{
+  # Do something, sleep a little, and see if we've ticked over GCIhi yet
+  replace into test.t2 values(2,1);
+  replace into test.t2 values(2,2);
+  --sleep 1
+
+  SELECT @MaxRepGCIHI:=Variable_Value >> 32
+  FROM Information_schema.Global_Status
+  WHERE Variable_Name like 'Ndb_slave_max_replicated_epoch';
+
+  --let $current_gcihi = `SELECT @MaxRepGCIHI`
+  --let $different = `SELECT $current_gcihi - $first_gcihi`
+  #--echo Current GCI Hi is $current_gcihi
+  #--echo Difference is $different
+}
+--enable_result_log
+--enable_query_log
+
+--echo -- Primary Cluster Max Rep Epoch now beyond the original update epoch
+
 --connection slave
 
 --echo -- Now update data on slave

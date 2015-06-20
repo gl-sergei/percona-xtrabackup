@@ -1,5 +1,5 @@
 /*
-   Copyright (c) 2003, 2010, Oracle and/or its affiliates. All rights reserved.
+   Copyright (c) 2003, 2013, Oracle and/or its affiliates. All rights reserved.
 
    This program is free software; you can redistribute it and/or modify
    it under the terms of the GNU General Public License as published by
@@ -20,6 +20,9 @@
 
 #include "SignalData.hpp"
 #include "ndb_limits.h"
+
+#define JAM_FILE_ID 134
+
 
 class ScanFragReq {
   /**
@@ -89,6 +92,7 @@ public:
   static void setDescendingFlag(Uint32 & requestInfo, Uint32 descending);
   static void setTupScanFlag(Uint32 & requestInfo, Uint32 tupScan);
   static void setAttrLen(Uint32 & requestInfo, Uint32 attrLen);
+  static void clearAttrLen(Uint32 & requestInfo);
   static void setScanPrio(Uint32& requestInfo, Uint32 prio);
   static void setNoDiskFlag(Uint32& requestInfo, Uint32 val);
   static void setLcpScanFlag(Uint32 & requestInfo, Uint32 val);
@@ -177,7 +181,7 @@ public:
   Uint32 fragmentCompleted;
   Uint32 transId1;
   Uint32 transId2;
-  Uint32 total_len;
+  Uint32 total_len;  // Total #Uint32 returned as TRANSID_AI
 };
 
 class ScanFragRef {
@@ -277,7 +281,7 @@ public:
  *           1111111111222222222233
  * 01234567890123456789012345678901
  *  rrcdlxhkrztppppaaaaaaaaaaaaaaaa   Short variant ( < 6.4.0)
- *  rrcdlxhkrztppppAs                 Long variant (6.4.0 +)
+ *  rrcdlxhkrztppppCs                 Long variant (6.4.0 +)
  */
 #define SF_LOCK_MODE_SHIFT   (5)
 #define SF_LOCK_MODE_MASK    (1)
@@ -422,6 +426,13 @@ ScanFragReq::setAttrLen(UintR & requestInfo, UintR val){
 }
 
 inline
+void
+ScanFragReq::clearAttrLen(Uint32 & requestInfo)
+{
+  requestInfo &= ~((Uint32)SF_ATTR_LEN_MASK << SF_ATTR_LEN_SHIFT);
+}
+
+inline
 Uint32
 ScanFragReq::getNoDiskFlag(const Uint32 & requestInfo){
   return (requestInfo >> SF_NO_DISK_SHIFT) & 1;
@@ -532,5 +543,8 @@ ScanFragNextReq::setCorrFactorFlag(Uint32 & ri)
 {
   ri |= (1 << SFN_CORR_SHIFT);
 }
+
+
+#undef JAM_FILE_ID
 
 #endif

@@ -1,5 +1,5 @@
 /*
-   Copyright (c) 2003, 2010, Oracle and/or its affiliates. All rights reserved.
+   Copyright (c) 2003, 2012, Oracle and/or its affiliates. All rights reserved.
 
    This program is free software; you can redistribute it and/or modify
    it under the terms of the GNU General Public License as published by
@@ -90,6 +90,8 @@ public:
   {
     m_transporter_registry.set_status_overloaded(remoteNodeId,
                                                  used >= m_overload_limit);
+    m_transporter_registry.set_status_slowdown(remoteNodeId,
+                                               used >= m_slowdown_limit);
   }
 
   virtual int doSend() = 0;
@@ -101,6 +103,13 @@ public:
 
   /* Get the configured maximum send buffer usage. */
   Uint32 get_max_send_buffer() { return m_max_send_buffer; }
+
+  Uint32 get_connect_count() { return m_connect_count; }
+
+  void inc_overload_count() { m_overload_count++; }
+  Uint32 get_overload_count() { return m_overload_count; }
+  void inc_slowdown_count() { m_slowdown_count++; }
+  Uint32 get_slowdown_count() { return m_slowdown_count; }
 
 protected:
   Transporter(TransporterRegistry &,
@@ -139,8 +148,6 @@ protected:
    */
   char remoteHostName[256];
   char localHostName[256];
-  struct in_addr remoteHostAddress;
-  struct in_addr localHostAddress;
 
   int m_s_port;
 
@@ -149,8 +156,6 @@ protected:
   
   const bool isServer;
 
-  unsigned createIndex;
-  
   int byteOrder;
   bool compressionUsed;
   bool checksumUsed;
@@ -159,6 +164,13 @@ protected:
   Uint32 m_max_send_buffer;
   /* Overload limit, as configured with the OverloadLimit config parameter. */
   Uint32 m_overload_limit;
+  Uint32 m_slowdown_limit;
+  void resetCounters();
+  Uint64 m_bytes_sent;
+  Uint64 m_bytes_received;
+  Uint32 m_connect_count;
+  Uint32 m_overload_count;
+  Uint32 m_slowdown_count;
 
 private:
 

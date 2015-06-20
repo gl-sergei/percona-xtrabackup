@@ -1,5 +1,5 @@
 /*
-   Copyright (c) 2003, 2010, Oracle and/or its affiliates. All rights reserved.
+   Copyright (c) 2003, 2014, Oracle and/or its affiliates. All rights reserved.
 
    This program is free software; you can redistribute it and/or modify
    it under the terms of the GNU General Public License as published by
@@ -162,6 +162,8 @@ Ndb::NDB_connect(Uint32 tNode, Uint32 instance)
         if (prev != 0)
         {
           prev->theNext = curr->theNext;
+          if (!curr->theNext)
+            theConnectionArrayLast[tNode] = prev;
           curr->theNext = tConArray;
           theConnectionArray[tNode] = curr;
         }
@@ -210,12 +212,10 @@ Ndb::NDB_connect(Uint32 tNode, Uint32 instance)
     //************************************************
     // Send and receive was successful
     //************************************************
-    NdbTransaction* tPrevFirst = theConnectionArray[tNode];
     tNdbCon->setConnectedNodeId(tNode, nodeSequence);
     
     tNdbCon->setMyBlockReference(theMyRef);
-    theConnectionArray[tNode] = tNdbCon;
-    tNdbCon->theNext = tPrevFirst;
+    prependConnectionArray(tNdbCon, tNode);
     DBUG_RETURN(1);
   } else {
 //****************************************************************************
@@ -261,6 +261,8 @@ Ndb::getConnectedNdbTransaction(Uint32 nodeId, Uint32 instance){
         {
           assert(false); // Should have been moved in NDB_connect
           prev->theNext = next->theNext;
+          if (!next->theNext)
+            theConnectionArrayLast[nodeId] = prev;
           goto found_middle;
         }
         else
@@ -276,7 +278,7 @@ Ndb::getConnectedNdbTransaction(Uint32 nodeId, Uint32 instance){
     return 0;
   }
 found_first:
-  theConnectionArray[nodeId] = next->theNext;
+  removeConnectionArray(next, nodeId);
 found_middle:
   next->theNext = NULL;
 
@@ -381,6 +383,7 @@ Ndb::computeHash(Uint32 *retval,
   const NdbColumnImpl* const * cols = impl->m_columns.getBase();
   Uint32 len;
   char* pos;
+  void* malloced_buf = NULL;
 
   Uint32 colcnt = impl->m_columns.size();
   Uint32 parts = impl->m_noOfDistributionKeys;
@@ -447,8 +450,18 @@ Ndb::computeHash(Uint32 *retval,
     sumlen += len;
 
   }
-  
-  if (buf)
+
+  if (!buf)
+  {
+    bufLen = sumlen;
+    bufLen += sizeof(Uint64); /* add space for potential alignment */
+    buf = malloc(bufLen);
+    if (unlikely(buf == 0))
+      return 4000;
+    malloced_buf = buf; /* Remember to free */
+    assert(bufLen > sumlen);
+  }
+
   {
     /* Get 64-bit aligned ptr required for hashing */
     assert(bufLen != 0);
@@ -461,15 +474,7 @@ Ndb::computeHash(Uint32 *retval,
     if (unlikely(sumlen > bufLen))
       goto ebuftosmall;
   }
-  else
-  {
-    buf = malloc(sumlen);
-    if (unlikely(buf == 0))
-      goto enomem;
-    bufLen = 0;
-    assert((UintPtr(buf) & 7) == 0);
-  }
-  
+
   pos = (char*)buf;
   for (Uint32 i = 0; i<parts; i++)
   {
@@ -525,8 +530,8 @@ Ndb::computeHash(Uint32 *retval,
     * retval = values[1];
   }
   
-  if (bufLen == 0)
-    free(buf);
+  if (malloced_buf)
+    free(malloced_buf);
   
   return 0;
   
@@ -546,16 +551,13 @@ ebuftosmall:
   return 4278;
 
 emalformedstring:
-  if (bufLen == 0)
-    free(buf);
+  if (malloced_buf)
+    free(malloced_buf);
   
   return 4279;
   
 emalformedkey:
   return 4280;
-
-enomem:
-  return 4000;
 }
 
 int
@@ -566,6 +568,7 @@ Ndb::computeHash(Uint32 *retval,
 {
   Uint32 len;
   char* pos = NULL;
+  void* malloced_buf = NULL;
 
   Uint32 parts = keyRec->distkey_index_length;
 
@@ -577,7 +580,20 @@ Ndb::computeHash(Uint32 *retval,
     goto euserdeftable;
   }
 
-  if (buf)
+  if (!buf)
+  {
+    /* We malloc buf here.  Don't have a handy 'Max distr key size'
+     * variable, so let's use the key length, which must include
+     * the Distr key.
+     */
+    bufLen = keyRec->m_keyLenInWords << 2;
+    bufLen += sizeof(Uint64); /* add space for potential alignment */
+    buf = malloc(bufLen);
+    if (unlikely(buf == 0))
+      return 4000;
+    malloced_buf = buf; /* Remember to free */
+  }
+
   {
     /* Get 64-bit aligned address as required for hashing */
     assert(bufLen != 0);
@@ -587,19 +603,7 @@ Ndb::computeHash(Uint32 *retval,
     buf = (void*)use;
     bufLen -= Uint32(use - org);
   }
-  else
-  {
-    /* We malloc buf here.  Don't have a handy 'Max distr key size'
-     * variable, so let's use the key length, which must include
-     * the Distr key.
-     */
-    buf= malloc(keyRec->m_keyLenInWords << 2);
-    if (unlikely(buf == 0))
-      goto enomem;
-    bufLen= 0; /* So we remember to deallocate */
-    assert((UintPtr(buf) & 7) == 0);
-  }
-  
+
   pos= (char*) buf;
 
   for (Uint32 i = 0; i < parts; i++)
@@ -687,21 +691,19 @@ Ndb::computeHash(Uint32 *retval,
   {
     * retval = values[1];
   }
-  
-  if (bufLen == 0)
-    free(buf);
+
+  if (malloced_buf)
+    free(malloced_buf);
 
   return 0;
 
 euserdeftable:
   return 4544;
 
-enomem:
-  return 4000;
   
 emalformedstring:
-  if (bufLen == 0)
-    free(buf);
+  if (malloced_buf)
+    free(malloced_buf);
 
   return 4279;
 }
@@ -737,7 +739,8 @@ Ndb::startTransaction(const NdbDictionary::Table *table,
 }
 
 NdbTransaction*
-Ndb::startTransaction(const NdbDictionary::Table* table, Uint32 partitionId)
+Ndb::startTransaction(const NdbDictionary::Table* table,
+                      Uint32 partitionId)
 {
   DBUG_ENTER("Ndb::startTransaction");
   DBUG_PRINT("enter", 
@@ -759,6 +762,29 @@ Ndb::startTransaction(const NdbDictionary::Table* table, Uint32 partitionId)
     theImpl->incClientStat(TransStartCount, 1);
 
     NdbTransaction *trans= startTransactionLocal(0, nodeId, 0);
+    DBUG_PRINT("exit",("start trans: 0x%lx  transid: 0x%lx",
+                       (long) trans,
+                       (long) (trans ? trans->getTransactionId() : 0)));
+    DBUG_RETURN(trans);
+  }
+  DBUG_RETURN(NULL);
+}
+
+NdbTransaction*
+Ndb::startTransaction(Uint32 nodeId,
+                      Uint32 instanceId)
+{
+  DBUG_ENTER("Ndb::startTransaction");
+  DBUG_PRINT("enter", 
+             ("nodeId: %u instanceId: %u", nodeId, instanceId));
+  if (theInitState == Initialised) 
+  {
+    theError.code = 0;
+    checkFailedNode();
+
+    theImpl->incClientStat(TransStartCount, 1);
+
+    NdbTransaction *trans= startTransactionLocal(0, nodeId, instanceId);
     DBUG_PRINT("exit",("start trans: 0x%lx  transid: 0x%lx",
                        (long) trans,
                        (long) (trans ? trans->getTransactionId() : 0)));
@@ -892,11 +918,13 @@ NdbTransaction*
 Ndb::startTransactionLocal(Uint32 aPriority, Uint32 nodeId, Uint32 instance)
 {
 #ifdef VM_TRACE
+#ifdef NDB_USE_GET_ENV
   char buf[255];
   const char* val = NdbEnv_GetEnv("NDB_TRANSACTION_NODE_ID", buf, 255);
   if(val != 0){
     nodeId = atoi(val);
   }
+#endif
 #endif
 
   DBUG_ENTER("Ndb::startTransactionLocal");
@@ -944,6 +972,48 @@ Ndb::startTransactionLocal(Uint32 aPriority, Uint32 nodeId, Uint32 instance)
   DBUG_RETURN(tConnection);
 }//Ndb::startTransactionLocal()
 
+void
+Ndb::appendConnectionArray(NdbTransaction *aCon, Uint32 nodeId)
+{
+  NdbTransaction *last = theConnectionArrayLast[nodeId];
+  if (last)
+  {
+    last->theNext = aCon;
+  }
+  else
+  {
+    theConnectionArray[nodeId] = aCon;
+  }
+  aCon->theNext = NULL;
+  theConnectionArrayLast[nodeId] = aCon;
+}
+
+void
+Ndb::prependConnectionArray(NdbTransaction *aCon, Uint32 nodeId)
+{
+  NdbTransaction *first = theConnectionArray[nodeId];
+  aCon->theNext = first;
+  if (!first)
+  {
+    theConnectionArrayLast[nodeId] = aCon;
+  }
+  theConnectionArray[nodeId] = aCon;
+}
+
+void
+Ndb::removeConnectionArray(NdbTransaction *first, Uint32 nodeId)
+{
+  NdbTransaction *next = first->theNext;
+  if (!next)
+  {
+    theConnectionArray[nodeId] = theConnectionArrayLast[nodeId] = NULL;
+  }
+  else
+  {
+    theConnectionArray[nodeId] = next;
+  }
+}
+
 /*****************************************************************************
 void closeTransaction(NdbTransaction* aConnection);
 
@@ -972,6 +1042,11 @@ Ndb::closeTransaction(NdbTransaction* aConnection)
   tCon = theTransactionList;
   theRemainingStartTransactions++;
   
+  DBUG_EXECUTE_IF("ndb_delay_close_txn", {
+    fprintf(stderr, "Ndb::closeTransaction() (%p) taking a break\n", this);
+    NdbSleep_MilliSleep(1000);
+    fprintf(stderr, "Ndb::closeTransaction() resuming\n");
+  });
   DBUG_PRINT("info",("close trans: 0x%lx  transid: 0x%lx",
                      (long) aConnection,
                      (long) aConnection->getTransactionId()));
@@ -1044,8 +1119,8 @@ Ndb::closeTransaction(NdbTransaction* aConnection)
     /**
      * Put it back in idle list for that node
      */
-    aConnection->theNext = theConnectionArray[nodeId];
-    theConnectionArray[nodeId] = aConnection;
+    appendConnectionArray(aConnection, nodeId);
+
     DBUG_VOID_RETURN;
   } else {
     aConnection->theReleaseOnClose = false;
@@ -1673,6 +1748,29 @@ int Ndb::setSchemaName(const char * a_schema_name)
 }
 // </internal>
  
+const char* Ndb::getNdbObjectName() const
+{
+  return theImpl->m_ndbObjectName.c_str();
+}
+
+int Ndb::setNdbObjectName(const char *name)
+{
+  if (!theImpl->m_ndbObjectName.empty())
+  {
+    theError.code = 4121;
+    return -1; // Cannot set twice
+  }
+
+  if (theInitState != NotInitialised)
+  {
+    theError.code = 4122;
+    return -1; // Should be set before init() is called
+  }
+
+  theImpl->m_ndbObjectName.assign(name);
+  return 0;
+}
+
 const char * Ndb::getDatabaseName() const
 {
   return getCatalogName();
@@ -1761,14 +1859,23 @@ Ndb::externalizeIndexName(const char * internalIndexName, bool fullyQualifiedNam
     register const char *ptr = internalIndexName;
    
     // Scan name from the end
-    while (*ptr++); ptr--; // strend
+    while (*ptr++)
+    {
+      ;
+    }
+    ptr--; // strend
+
     while (ptr >= internalIndexName && *ptr != table_name_separator)
+    {
       ptr--;
+    }
      
     return ptr + 1;
   }
   else
+  {
     return internalIndexName;
+  }
 }
 
 const char *
@@ -1921,7 +2028,20 @@ Ndb::getSchemaFromInternalName(const char * internalName)
   return ret;
 }
 
-// ToDo set event buffer size
+unsigned Ndb::get_eventbuf_max_alloc()
+{
+    return theEventBuffer->m_max_alloc;
+}
+
+void
+Ndb::set_eventbuf_max_alloc(unsigned sz)
+{
+  if (theEventBuffer != NULL)
+  {
+    theEventBuffer->m_max_alloc = sz;
+  }
+}
+
 NdbEventOperation* Ndb::createEventOperation(const char* eventName)
 {
   DBUG_ENTER("Ndb::createEventOperation");
@@ -2158,8 +2278,7 @@ Ndb::getNdbErrorDetail(const NdbError& err, char* buff, Uint32 buffLen) const
             
             Uint32 components = idxName.split(idxNameComponents,
                                               splitString);
-            
-            assert(components == 4);
+            require(components == 4);
             
             primTableObjectId = atoi(idxNameComponents[2].c_str());
             indexName = idxNameComponents[3];
@@ -2200,7 +2319,7 @@ Ndb::getNdbErrorDetail(const NdbError& err, char* buff, Uint32 buffLen) const
             
             Uint32 components = tabName.split(tabNameComponents,
                                               splitString);
-            assert (components == 3);
+            require(components == 3);
             
             /* Now we generate a string of the format
              * <dbname>/<schemaname>/<tabname>/<idxname>
@@ -2254,13 +2373,31 @@ Ndb::getNdbErrorDetail(const NdbError& err, char* buff, Uint32 buffLen) const
 void
 Ndb::setCustomData(void* _customDataPtr)
 {
-  theImpl->customDataPtr = _customDataPtr;
+  theImpl->customData = Uint64(_customDataPtr);
 }
 
 void*
 Ndb::getCustomData() const
 {
-  return theImpl->customDataPtr;
+  return (void*)theImpl->customData;
+}
+
+void
+Ndb::setCustomData64(Uint64 _customData)
+{
+  theImpl->customData = _customData;
+}
+
+Uint64
+Ndb::getCustomData64() const
+{
+  return theImpl->customData;
+}
+
+Uint64
+Ndb::getNextTransactionId() const
+{
+  return theFirstTransId;
 }
 
 Uint32
@@ -2290,7 +2427,10 @@ const char* ClientStatNames [] =
   "TransLocalReadRowCount",
   "DataEventsRecvdCount",
   "NonDataEventsRecvdCount",
-  "EventBytesRecvdCount"
+  "EventBytesRecvdCount",
+  "ForcedSendsCount",
+  "UnforcedSendsCount",
+  "DeferredSendsCount"
 };
 
 Uint64

@@ -30,6 +30,7 @@ template <uint default_width> class Bitmap
   MY_BITMAP map;
   uint32 buffer[(default_width+31)/32];
 public:
+  enum { ALL_BITS= default_width };
   Bitmap() { init(); }
   Bitmap(const Bitmap& from) { *this=from; }
   explicit Bitmap(uint prefix_to_set) { init(prefix_to_set); }
@@ -50,8 +51,24 @@ public:
   void intersect(const Bitmap& map2) { bitmap_intersect(&map, &map2.map); }
   void intersect(ulonglong map2buff)
   {
+    // Use a spearate temporary buffer, as bitmap_init() clears all the bits.
+    ulonglong buf2;
     MY_BITMAP map2;
-    bitmap_init(&map2, (uint32 *)&map2buff, sizeof(ulonglong)*8, 0);
+
+    bitmap_init(&map2, (uint32 *) &buf2, sizeof(ulonglong) * 8, 0);
+
+    // Store the original bits.
+    if (sizeof(ulonglong) >= 8) {
+      int8store(const_cast<uchar *>(static_cast<uchar *>
+                                    (static_cast<void *>(&buf2))),
+                map2buff);
+    } else {
+      DBUG_ASSERT(sizeof(buffer) >= 4);
+      int4store(const_cast<uchar *>(static_cast<uchar *>
+                                    (static_cast<void *>(&buf2))),
+                static_cast<uint32>(map2buff));
+    }
+
     bitmap_intersect(&map, &map2);
   }
   /* Use highest bit for all bits above sizeof(ulonglong)*8. */
@@ -60,7 +77,7 @@ public:
     intersect(map2buff);
     if (map.n_bits > sizeof(ulonglong) * 8)
       bitmap_set_above(&map, sizeof(ulonglong),
-                       MY_TEST(map2buff & (LL(1) << (sizeof(ulonglong) * 8 - 1))));
+                       MY_TEST(map2buff & (1LL << (sizeof(ulonglong) * 8 - 1))));
   }
   void subtract(const Bitmap& map2) { bitmap_subtract(&map, &map2.map); }
   void merge(const Bitmap& map2) { bitmap_union(&map, &map2.map); }
@@ -92,9 +109,12 @@ public:
   ulonglong to_ulonglong() const
   {
     if (sizeof(buffer) >= 8)
-      return uint8korr(buffer);
+      return uint8korr(static_cast<const uchar *>
+                       (static_cast<const void *>(buffer)));
     DBUG_ASSERT(sizeof(buffer) >= 4);
-    return (ulonglong) uint4korr(buffer);
+    return (ulonglong)
+      uint4korr(static_cast<const uchar *>
+                (static_cast<const void *>(buffer)));
   }
   uint bits_set() const { return bitmap_bits_set(&map); }
 };
@@ -106,16 +126,7 @@ public:
   Bitmap<64>() { init(); }
   enum { ALL_BITS = 64 };
 
-#if defined(__NETWARE__) || defined(__MWERKS__)
-  /*
-    Metwork compiler gives error on Bitmap<64>
-    Changed to Bitmap, since in this case also it will proper construct
-    this class
-  */
-  explicit Bitmap(uint prefix_to_set) { set_prefix(prefix_to_set); }
-#else
   explicit Bitmap<64>(uint prefix_to_set) { set_prefix(prefix_to_set); }
-#endif
   void init() { clear_all(); }
   void init(uint prefix_to_set) { set_prefix(prefix_to_set); }
   uint length() const { return 64; }

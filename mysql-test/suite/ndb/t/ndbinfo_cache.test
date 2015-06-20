@@ -1,3 +1,8 @@
+# The include statement below is a temp one for tests that are yet to
+#be ported to run with InnoDB,
+#but needs to be kept for tests that would need MyISAM in future.
+--source include/force_myisam_default.inc
+
 --source include/have_query_cache.inc
 --source include/have_ndb.inc
 
@@ -24,8 +29,6 @@ select * from counters;
 show status like "Qcache_queries_in_cache";
 show status like "Qcache_inserts";
 
-# Turn off query cache
-SET GLOBAL query_cache_size=default;
-SET GLOBAL query_cache_type=default;
+SET GLOBAL query_cache_size=0;
 
 --source ndbinfo_drop.inc

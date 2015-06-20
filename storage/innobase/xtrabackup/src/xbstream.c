@@ -214,7 +214,8 @@ stream_one_file(File file, xb_wstream_file_t *xbfile)
 	posix_fadvise(file, 0, 0, POSIX_FADV_SEQUENTIAL);
 	offset = my_tell(file, MYF(MY_WME));
 
-	buf = (uchar*)(my_malloc(XBSTREAM_BUFFER_SIZE, MYF(MY_FAE)));
+	buf = (uchar*)(my_malloc(PSI_NOT_INSTRUMENTED, XBSTREAM_BUFFER_SIZE,
+				 MYF(MY_FAE)));
 
 	while ((bytes = my_read(file, buf, XBSTREAM_BUFFER_SIZE,
 				MYF(MY_WME))) > 0) {
@@ -309,13 +310,15 @@ file_entry_new(ds_ctxt_t *ds_ctxt, const char *path, uint pathlen)
 	file_entry_t	*entry;
 	ds_file_t	*file;
 
-	entry = (file_entry_t *) my_malloc(sizeof(file_entry_t),
+	entry = (file_entry_t *) my_malloc(PSI_NOT_INSTRUMENTED,
+					   sizeof(file_entry_t),
 					   MYF(MY_WME | MY_ZEROFILL));
 	if (entry == NULL) {
 		return NULL;
 	}
 
-	entry->path = my_strndup(path, pathlen, MYF(MY_WME));
+	entry->path = my_strndup(PSI_NOT_INSTRUMENTED,
+				 path, pathlen, MYF(MY_WME));
 	if (entry->path == NULL) {
 		goto err;
 	}

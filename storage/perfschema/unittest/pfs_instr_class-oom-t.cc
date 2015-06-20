@@ -14,12 +14,14 @@
   51 Franklin Street, Suite 500, Boston, MA 02110-1335 USA */
 
 #include <my_global.h>
-#include <my_pthread.h>
+#include <my_thread.h>
 #include <pfs_instr_class.h>
 #include <pfs_global.h>
 #include <tap.h>
+#include <sql_class.h>
 
 #include "stub_pfs_global.h"
+#include "stub_global_status_var.h"
 
 void test_oom()
 {
@@ -55,11 +57,7 @@ void test_oom()
 
 void do_all_tests()
 {
-  PFS_atomic::init();
-
   test_oom();
-
-  PFS_atomic::cleanup();
 }
 
 int main(int, char **)

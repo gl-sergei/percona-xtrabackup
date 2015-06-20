@@ -43,19 +43,24 @@ Place, Suite 330, Boston, MA 02111-1307 USA
 #include <os0file.h>
 #include <my_dir.h>
 #include <ut0mem.h>
+#include <ut0new.h>
 #include <srv0start.h>
+#include <srv0srv.h>
 #include <fil0fil.h>
+#include <fsp0sysspace.h>
 #include <set>
 #include <string>
 #include <mysqld.h>
 #include <version_check_pl.h>
 #include <sstream>
+#include <algorithm>
 #include "fil_cur.h"
 #include "xtrabackup.h"
 #include "common.h"
 #include "backup_copy.h"
 #include "backup_mysql.h"
 
+using std::min;
 
 /* list of files to sync for --rsync mode */
 std::set<std::string> rsync_list;
@@ -83,7 +88,7 @@ struct datadir_iter_t {
 	ulint		filepath_len;
 	char		*filepath_rel;
 	ulint		filepath_rel_len;
-	os_ib_mutex_t	mutex;
+	ib_mutex_t	mutex;
 	os_file_dir_t	dir;
 	os_file_dir_t	dbdir;
 	os_file_stat_t	dbinfo;
@@ -101,7 +106,7 @@ struct datadir_thread_ctxt_t {
 	datadir_iter_t		*it;
 	uint			n_thread;
 	uint			*count;
-	os_ib_mutex_t		count_mutex;
+	ib_mutex_t		*count_mutex;
 	os_thread_id_t		id;
 	bool			ret;
 };
@@ -127,12 +132,13 @@ datadir_node_fill(datadir_node_t *node, datadir_iter_t *it)
 {
 	if (node->filepath_len < it->filepath_len) {
 		free(node->filepath);
-		node->filepath = (char*)(ut_malloc(it->filepath_len));
+		node->filepath = (char*)(ut_malloc_nokey(it->filepath_len));
 		node->filepath_len = it->filepath_len;
 	}
 	if (node->filepath_rel_len < it->filepath_rel_len) {
 		free(node->filepath_rel);
-		node->filepath_rel = (char*)(ut_malloc(it->filepath_rel_len));
+		node->filepath_rel =
+			(char*)(ut_malloc_nokey(it->filepath_rel_len));
 		node->filepath_rel_len = it->filepath_rel_len;
 	}
 
@@ -171,10 +177,10 @@ datadir_iter_new(const char *path, bool skip_first_level = true)
 {
 	datadir_iter_t *it;
 
-	it = static_cast<datadir_iter_t *>(ut_malloc(sizeof(datadir_iter_t)));
-	memset(it, 0, sizeof(datadir_iter_t));
+	it = static_cast<datadir_iter_t *>
+				(ut_zalloc_nokey(sizeof(datadir_iter_t)));
 
-	it->mutex = os_mutex_create();
+	mutex_create("datadir_iter_t::mutex", &it->mutex);
 	it->datadir_path = strdup(path);
 
 	it->dir = os_file_opendir(it->datadir_path, TRUE);
@@ -187,13 +193,14 @@ datadir_iter_new(const char *path, bool skip_first_level = true)
 	it->err = DB_SUCCESS;
 
 	it->dbpath_len = FN_REFLEN;
-	it->dbpath = static_cast<char*>(ut_malloc(it->dbpath_len));
+	it->dbpath = static_cast<char*>(ut_malloc_nokey(it->dbpath_len));
 
 	it->filepath_len = FN_REFLEN;
-	it->filepath = static_cast<char*>(ut_malloc(it->filepath_len));
+	it->filepath = static_cast<char*>(ut_malloc_nokey(it->filepath_len));
 
 	it->filepath_rel_len = FN_REFLEN;
-	it->filepath_rel = static_cast<char*>(ut_malloc(it->filepath_rel_len));
+	it->filepath_rel = static_cast<char*>
+				(ut_malloc_nokey(it->filepath_rel_len));
 
 	it->skip_first_level = skip_first_level;
 
@@ -246,12 +253,12 @@ datadir_iter_next_database(datadir_iter_t *it)
 			}
 
 			it->dbpath = static_cast<char*>
-					(ut_malloc(it->dbpath_len));
+					(ut_malloc_nokey(it->dbpath_len));
 		}
 		ut_snprintf(it->dbpath, it->dbpath_len,
 			    "%s/%s", it->datadir_path,
 			    it->dbinfo.name);
-		srv_normalize_path_for_win(it->dbpath);
+		os_normalize_path_for_win(it->dbpath);
 
 		if (it->dbinfo.type == OS_FILE_TYPE_FILE) {
 			it->is_file = true;
@@ -295,7 +302,7 @@ make_path_n(int n, char **path, ulint *path_len, ...)
 
 	if (len_needed < *path_len) {
 		ut_free(*path);
-		*path = static_cast<char*>(ut_malloc(len_needed));
+		*path = static_cast<char*>(ut_malloc_nokey(len_needed));
 	}
 
 	va_start(vl, path_len);
@@ -366,7 +373,7 @@ datadir_iter_next(datadir_iter_t *it, datadir_node_t *node)
 {
 	bool	ret = true;
 
-	os_mutex_enter(it->mutex);
+	mutex_enter(&it->mutex);
 
 	if (datadir_iter_next_file(it)) {
 
@@ -401,7 +408,7 @@ datadir_iter_next(datadir_iter_t *it, datadir_node_t *node)
 	ret = false;
 
 done:
-	os_mutex_exit(it->mutex);
+	mutex_exit(&it->mutex);
 
 	return(ret);
 }
@@ -415,7 +422,7 @@ static
 void
 datadir_iter_free(datadir_iter_t *it)
 {
-	os_mutex_free(it->mutex);
+	mutex_free(&it->mutex);
 
 	if (it->dbdir) {
 
@@ -445,9 +452,9 @@ struct datafile_cur_t {
 	uint		thread_n;
 	byte*		orig_buf;
 	byte*		buf;
-	ib_int64_t	buf_size;
-	ib_int64_t	buf_read;
-	ib_int64_t	buf_offset;
+	ib_uint64_t	buf_size;
+	ib_uint64_t	buf_read;
+	ib_uint64_t	buf_offset;
 };
 
 static
@@ -464,7 +471,7 @@ static
 bool
 datafile_open(const char *file, datafile_cur_t *cursor, uint thread_n)
 {
-	ulint		success;
+	bool		success;
 
 	memset(cursor, 0, sizeof(datafile_cur_t));
 
@@ -482,6 +489,7 @@ datafile_open(const char *file, datafile_cur_t *cursor, uint thread_n)
 							cursor->abs_path,
 							OS_FILE_OPEN,
 							OS_FILE_READ_ONLY,
+							false,
 							&success);
 	if (!success) {
 		/* The following call prints an error message */
@@ -506,7 +514,7 @@ datafile_open(const char *file, datafile_cur_t *cursor, uint thread_n)
 	posix_fadvise(cursor->file, 0, 0, POSIX_FADV_SEQUENTIAL);
 
 	cursor->buf_size = 10 * 1024 * 1024;
-	cursor->buf = static_cast<byte *>(ut_malloc(cursor->buf_size));
+	cursor->buf = static_cast<byte *>(ut_malloc_nokey(cursor->buf_size));
 
 	return(true);
 }
@@ -884,35 +892,35 @@ run_data_threads(datadir_iter_t *it, os_thread_func_t func, uint n)
 {
 	datadir_thread_ctxt_t	*data_threads;
 	uint			i, count;
-	os_ib_mutex_t		count_mutex;
+	ib_mutex_t		count_mutex;
 	bool			ret;
 
 	data_threads = (datadir_thread_ctxt_t*)
-				(ut_malloc(sizeof(datadir_thread_ctxt_t) * n));
+			(ut_malloc_nokey(sizeof(datadir_thread_ctxt_t) * n));
 
-	count_mutex = os_mutex_create();
+	mutex_create("count_mutex", &count_mutex);
 	count = n;
 
 	for (i = 0; i < n; i++) {
 		data_threads[i].it = it;
 		data_threads[i].n_thread = i + 1;
 		data_threads[i].count = &count;
-		data_threads[i].count_mutex = count_mutex;
+		data_threads[i].count_mutex = &count_mutex;
 		os_thread_create(func, data_threads + i, &data_threads[i].id);
 	}
 
 	/* Wait for threads to exit */
 	while (1) {
 		os_thread_sleep(100000);
-		os_mutex_enter(count_mutex);
+		mutex_enter(&count_mutex);
 		if (count == 0) {
-			os_mutex_exit(count_mutex);
+			mutex_exit(&count_mutex);
 			break;
 		}
-		os_mutex_exit(count_mutex);
+		mutex_exit(&count_mutex);
 	}
 
-	os_mutex_free(count_mutex);
+	mutex_free(&count_mutex);
 
 	ret = true;
 	for (i = 0; i < n; i++) {
@@ -1505,22 +1513,17 @@ copy_back()
 	}
 	innobase_data_file_path_copy = strdup(innobase_data_file_path);
 
-	if (!(ret = srv_parse_data_file_paths_and_sizes(
-					innobase_data_file_path_copy))) {
+	if (!srv_sys_space.parse_params(innobase_data_file_path,
+				true, false)) {
 		msg("syntax error in innodb_data_file_path\n");
 		return(false);
 	}
 
-	srv_max_n_threads = 1000;
-	os_sync_mutex = NULL;
-	ut_mem_init();
 	/* temporally dummy value to avoid crash */
 	srv_page_size_shift = 14;
 	srv_page_size = (1 << srv_page_size_shift);
-	os_sync_init();
-	sync_init();
+	sync_check_init();
 	os_io_init_simple();
-	mem_init(srv_mem_pool_size);
 	ut_crc32_init();
 
 	/* copy undo tablespaces */
@@ -1570,11 +1573,12 @@ copy_back()
 				? innobase_data_home_dir : mysql_data_home,
 			DS_TYPE_LOCAL);
 
-	for (i = 0; i < srv_n_data_files; i++) {
-		const char *filename = base_name(srv_data_file_names[i]);
-
-		if (!(ret = copy_or_move_file(filename,
-						srv_data_file_names[i], 1))) {
+	for (Tablespace::files_t::iterator
+	     iter(srv_sys_space.files_begin()),
+	     end(srv_sys_space.files_end());
+	     iter != end;
+	     ++iter) {
+		if (!(ret = copy_or_move_file(iter->name(), iter->name(), 1))) {
 			goto cleanup;
 		}
 	}
@@ -1645,12 +1649,12 @@ copy_back()
 
 		/* skip innodb data files */
 		is_ibdata_file = false;
-		for (i = 0; i < srv_n_data_files; i++) {
-			const char *ibfile;
-
-			ibfile = base_name(srv_data_file_names[i]);
-
-			if (strcmp(ibfile, filename) == 0) {
+		for (Tablespace::files_t::iterator
+		     iter(srv_sys_space.files_begin()),
+		     end(srv_sys_space.files_end());
+		     iter != end;
+		     ++iter) {
+			if (strcmp(iter->name(), filename) == 0) {
 				is_ibdata_file = true;
 				continue;
 			}
@@ -1700,12 +1704,7 @@ cleanup:
 
 	ds_data = NULL;
 
-	sync_close();
-	sync_initialized = FALSE;
-	os_sync_free();
-	mem_close();
-	os_sync_mutex = NULL;
-	ut_free_all_mem();
+	sync_check_close();
 
 	return(ret);
 }
@@ -1795,9 +1794,9 @@ cleanup:
 
 	datadir_node_free(&node);
 
-	os_mutex_enter(ctxt->count_mutex);
+	mutex_enter(ctxt->count_mutex);
 	--(*ctxt->count);
-	os_mutex_exit(ctxt->count_mutex);
+	mutex_exit(ctxt->count_mutex);
 
 	ctxt->ret = ret;
 
@@ -1812,10 +1811,7 @@ decrypt_decompress()
 	datadir_iter_t *it = NULL;
 
 	srv_max_n_threads = 1000;
-	os_sync_mutex = NULL;
-	ut_mem_init();
-	os_sync_init();
-	sync_init();
+	sync_check_init();
 
 	/* cd to backup directory */
 	if (my_setwd(xtrabackup_target_dir, MYF(MY_WME)))
@@ -1844,11 +1840,7 @@ decrypt_decompress()
 
 	ds_data = NULL;
 
-	sync_close();
-	sync_initialized = FALSE;
-	os_sync_free();
-	os_sync_mutex = NULL;
-	ut_free_all_mem();
+	sync_check_close();
 
 	return(ret);
 }

@@ -1,5 +1,5 @@
 /*
-   Copyright (c) 2000, 2013, Oracle and/or its affiliates. All rights reserved.
+   Copyright (c) 2000, 2015, Oracle and/or its affiliates. All rights reserved.
 
    This program is free software; you can redistribute it and/or modify
    it under the terms of the GNU General Public License as published by
@@ -18,22 +18,18 @@
 
 #ifndef _myisam_h
 #define _myisam_h
+
+#include "my_base.h"
+#include "m_ctype.h"
+#include "keycache.h"
+#include "my_compare.h"
+#include "my_check_opt.h"
+#include "m_string.h"
+
 #ifdef	__cplusplus
 extern "C" {
 #endif
 
-#ifndef _my_base_h
-#include <my_base.h>
-#endif
-#ifndef _m_ctype_h
-#include <m_ctype.h>
-#endif
-#ifndef _keycache_h
-#include "keycache.h"
-#endif
-#include "my_compare.h"
-#include <mysql/plugin.h>
-#include <my_check_opt.h>
 /*
   Limit max keys according to HA_MAX_POSSIBLE_KEY
 */
@@ -70,35 +66,35 @@ extern "C" {
   sets all high keys.
 */
 #define MI_KEYMAP_BITS      (8 * SIZEOF_LONG_LONG)
-#define MI_KEYMAP_HIGH_MASK (ULL(1) << (MI_KEYMAP_BITS - 1))
+#define MI_KEYMAP_HIGH_MASK (1ULL << (MI_KEYMAP_BITS - 1))
 #define mi_get_mask_all_keys_active(_keys_) \
                             (((_keys_) < MI_KEYMAP_BITS) ? \
-                             ((ULL(1) << (_keys_)) - ULL(1)) : \
-                             (~ ULL(0)))
+                             ((1ULL << (_keys_)) - 1ULL) : \
+                             (~ 0ULL))
 
 #if MI_MAX_KEY > MI_KEYMAP_BITS
 
 #define mi_is_key_active(_keymap_,_keyno_) \
                             (((_keyno_) < MI_KEYMAP_BITS) ? \
-                             MY_TEST((_keymap_) & (ULL(1) << (_keyno_))) : \
+                             MY_TEST((_keymap_) & (1ULL << (_keyno_))) : \
                              MY_TEST((_keymap_) & MI_KEYMAP_HIGH_MASK))
 #define mi_set_key_active(_keymap_,_keyno_) \
                             (_keymap_)|= (((_keyno_) < MI_KEYMAP_BITS) ? \
-                                          (ULL(1) << (_keyno_)) : \
+                                          (1ULL << (_keyno_)) : \
                                           MI_KEYMAP_HIGH_MASK)
 #define mi_clear_key_active(_keymap_,_keyno_) \
                             (_keymap_)&= (((_keyno_) < MI_KEYMAP_BITS) ? \
-                                          (~ (ULL(1) << (_keyno_))) : \
-                                          (~ (ULL(0))) /*ignore*/ )
+                                          (~ (1ULL << (_keyno_))) : \
+                                          (~ (0ULL)) /*ignore*/ )
 
 #else
 
 #define mi_is_key_active(_keymap_,_keyno_) \
-                            MY_TEST((_keymap_) & (ULL(1) << (_keyno_)))
+                            MY_TEST((_keymap_) & (1ULL << (_keyno_)))
 #define mi_set_key_active(_keymap_,_keyno_) \
-                            (_keymap_)|= (ULL(1) << (_keyno_))
+                            (_keymap_)|= (1ULL << (_keyno_))
 #define mi_clear_key_active(_keymap_,_keyno_) \
-                            (_keymap_)&= (~ (ULL(1) << (_keyno_)))
+                            (_keymap_)&= (~ (1ULL << (_keyno_)))
 
 #endif
 
@@ -238,13 +234,11 @@ typedef struct st_columndef		/* column information */
   uint8  null_bit;			/* If column may be 0 */
   uint16 null_pos;			/* position for null marker */
 
-#ifndef NOT_PACKED_DATABASES
   void (*unpack)(struct st_columndef *rec,struct st_mi_bit_buff *buff,
 		 uchar *start,uchar *end);
   enum en_fieldtype base_type;
   uint space_length_bits,pack_type;
   MI_DECODE_TREE *huff_tree;
-#endif
 } MI_COLUMNDEF;
 
 
@@ -421,16 +415,16 @@ typedef struct st_sort_info
 /* functions in mi_check */
 void myisamchk_init(MI_CHECK *param);
 int chk_status(MI_CHECK *param, MI_INFO *info);
-int chk_del(MI_CHECK *param, register MI_INFO *info, uint test_flag);
+int chk_del(MI_CHECK *param, MI_INFO *info, uint test_flag);
 int chk_size(MI_CHECK *param, MI_INFO *info);
 int chk_key(MI_CHECK *param, MI_INFO *info);
 int chk_data_link(MI_CHECK *param, MI_INFO *info,int extend);
-int mi_repair(MI_CHECK *param, register MI_INFO *info,
+int mi_repair(MI_CHECK *param, MI_INFO *info,
 	      char * name, int rep_quick);
-int mi_sort_index(MI_CHECK *param, register MI_INFO *info, char * name);
-int mi_repair_by_sort(MI_CHECK *param, register MI_INFO *info,
+int mi_sort_index(MI_CHECK *param, MI_INFO *info, char * name);
+int mi_repair_by_sort(MI_CHECK *param, MI_INFO *info,
 		      const char * name, int rep_quick);
-int mi_repair_parallel(MI_CHECK *param, register MI_INFO *info,
+int mi_repair_parallel(MI_CHECK *param, MI_INFO *info,
 		      const char * name, int rep_quick);
 int change_to_newfile(const char * filename, const char * old_ext,
 		      const char * new_ext, myf myflags);

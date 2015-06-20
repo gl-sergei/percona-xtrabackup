@@ -1,4 +1,4 @@
-# Copyright (c) 2006, 2012, Oracle and/or its affiliates. All rights reserved.
+# Copyright (c) 2006, 2015, Oracle and/or its affiliates. All rights reserved.
 # 
 # This program is free software; you can redistribute it and/or modify
 # it under the terms of the GNU General Public License as published by
@@ -31,6 +31,7 @@ SET(HEADERS_ABI
   mysql/plugin_audit.h
   mysql/plugin_ftparser.h
   mysql/plugin_validate_password.h
+  mysql/plugin_group_replication.h
 )
 
 SET(HEADERS 
@@ -40,11 +41,10 @@ SET(HEADERS
   my_sys.h 
   my_xml.h
   mysql_embed.h
-  my_pthread.h
+  my_thread.h
   decimal.h
   errmsg.h
   my_global.h
-  my_net.h 
   my_getopt.h
   sslopt-longopts.h
   my_dir.h 
@@ -53,13 +53,11 @@ SET(HEADERS
   sql_common.h
   keycache.h
   m_ctype.h
-  my_attribute.h 
   my_compiler.h
   mysql_com_server.h
   my_byteorder.h
   byte_order_generic.h
   byte_order_generic_x86.h
-  byte_order_generic_x86_64.h
   little_endian.h
   big_endian.h
   ${HEADERS_GEN_CONFIGURE}

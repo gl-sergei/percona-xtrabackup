@@ -26,6 +26,7 @@ Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA 02111-1307 USA
 
 #include "common.h"
 #include "xtrabackup.h"
+#include "srv0srv.h"
 
 /* TODO: copy-pasted shared definitions from the XtraDB bitmap write code.
 Remove these on the first opportunity, i.e. single-binary XtraBackup.  */
@@ -355,8 +356,8 @@ log_online_setup_bitmap_file_range(
 
 	bitmap_files->files =
 		static_cast<log_online_bitmap_file_range_t::files_t *>
-		(ut_malloc(bitmap_files->count
-			   * sizeof(bitmap_files->files[0])));
+		(ut_malloc_nokey(bitmap_files->count
+				 * sizeof(bitmap_files->files[0])));
 	memset(bitmap_files->files, 0,
 	       bitmap_files->count * sizeof(bitmap_files->files[0]));
 
@@ -438,7 +439,7 @@ log_online_open_bitmap_file_read_only(
 	log_online_bitmap_file_t*	bitmap_file)	/*!<out: opened bitmap
 							file */
 {
-	ibool	success	= FALSE;
+	bool	success	= FALSE;
 
 	xb_ad(name[0] != '\0');
 
@@ -447,6 +448,7 @@ log_online_open_bitmap_file_read_only(
 		= os_file_create_simple_no_error_handling(0, bitmap_file->name,
 							  OS_FILE_OPEN,
 							  OS_FILE_READ_ONLY,
+							  srv_read_only_mode,
 							  &success);
 	if (UNIV_UNLIKELY(!success)) {
 
@@ -923,7 +925,7 @@ xb_page_bitmap_range_init(
 	byte			search_page[MODIFIED_PAGE_BLOCK_SIZE];
 	xb_page_bitmap_range	*result
 		= static_cast<xb_page_bitmap_range *>
-		(ut_malloc(sizeof(*result)));
+		(ut_malloc_nokey(sizeof(*result)));
 
 	memset(result, 0, sizeof(*result));
 	result->bitmap = bitmap;

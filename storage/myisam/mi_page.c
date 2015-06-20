@@ -1,4 +1,4 @@
-/* Copyright (c) 2000, 2010, Oracle and/or its affiliates. All rights reserved.
+/* Copyright (c) 2000, 2013, Oracle and/or its affiliates. All rights reserved.
 
    This program is free software; you can redistribute it and/or modify
    it under the terms of the GNU General Public License as published by
@@ -19,7 +19,7 @@
 
 	/* Fetch a key-page in memory */
 
-uchar *_mi_fetch_keypage(register MI_INFO *info, MI_KEYDEF *keyinfo,
+uchar *_mi_fetch_keypage(MI_INFO *info, MI_KEYDEF *keyinfo,
 			 my_off_t page, int level, 
                          uchar *buff, int return_buffer)
 {
@@ -61,13 +61,12 @@ uchar *_mi_fetch_keypage(register MI_INFO *info, MI_KEYDEF *keyinfo,
 
 	/* Write a key-page on disk */
 
-int _mi_write_keypage(register MI_INFO *info, register MI_KEYDEF *keyinfo,
+int _mi_write_keypage(MI_INFO *info, MI_KEYDEF *keyinfo,
 		      my_off_t page, int level, uchar *buff)
 {
-  reg3 uint length;
+  uint length;
   DBUG_ENTER("_mi_write_keypage");
 
-#ifndef FAST					/* Safety check */
   if (page < info->s->base.keystart ||
       page+keyinfo->block_length > info->state->key_file_length ||
       (page & (MI_MIN_KEY_BLOCK_LENGTH-1)))
@@ -81,7 +80,6 @@ int _mi_write_keypage(register MI_INFO *info, register MI_KEYDEF *keyinfo,
   }
   DBUG_PRINT("page",("write page at: %lu",(long) page));
   DBUG_DUMP("buff",(uchar*) buff,mi_getint(buff));
-#endif
 
   if ((length=keyinfo->block_length) > IO_SIZE*2 &&
       info->state->key_file_length != page+length)
@@ -96,7 +94,7 @@ int _mi_write_keypage(register MI_INFO *info, register MI_KEYDEF *keyinfo,
 
 	/* Remove page from disk */
 
-int _mi_dispose(register MI_INFO *info, MI_KEYDEF *keyinfo, my_off_t pos,
+int _mi_dispose(MI_INFO *info, MI_KEYDEF *keyinfo, my_off_t pos,
                 int level)
 {
   my_off_t old_link;
@@ -118,7 +116,7 @@ int _mi_dispose(register MI_INFO *info, MI_KEYDEF *keyinfo, my_off_t pos,
 
 	/* Make new page on disk */
 
-my_off_t _mi_new(register MI_INFO *info, MI_KEYDEF *keyinfo, int level)
+my_off_t _mi_new(MI_INFO *info, MI_KEYDEF *keyinfo, int level)
 {
   my_off_t pos;
   uchar buff[8];

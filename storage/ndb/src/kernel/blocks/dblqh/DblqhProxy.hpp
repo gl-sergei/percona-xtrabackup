@@ -1,4 +1,4 @@
-/* Copyright (c) 2008, 2010, Oracle and/or its affiliates. All rights reserved.
+/* Copyright (c) 2008, 2014, Oracle and/or its affiliates. All rights reserved.
 
    This program is free software; you can redistribute it and/or modify
    it under the terms of the GNU General Public License as published by
@@ -29,6 +29,9 @@
 #include <signaldata/LqhTransReq.hpp>
 #include <signaldata/LqhTransConf.hpp>
 #include <signaldata/EmptyLcp.hpp>
+
+#define JAM_FILE_ID 445
+
 
 class DblqhProxy : public LocalProxy {
 public:
@@ -307,7 +310,8 @@ protected:
      * Is this entry valid, or has it been made obsolete by
      *   a new LQH_TRANSREQ (i.e a new TC-failure)
      */
-    bool m_valid; 
+    bool m_valid;
+    Uint32 m_maxInstanceId;
     LqhTransReq m_req;
     LqhTransConf m_conf; // latest conf
     Ss_LQH_TRANSREQ() {
@@ -467,11 +471,15 @@ protected:
   void sendLCP_COMPLETE_REP(Signal*);
 
   void checkSendEMPTY_LCP_CONF_impl(Signal* signal);
-  void checkSendEMPTY_LCP_CONF(Signal* signal) {
+  void checkSendEMPTY_LCP_CONF(Signal* signal)
+  {
     if (c_lcpRecord.m_empty_lcp_req.isclear())
       return;
     checkSendEMPTY_LCP_CONF_impl(signal);
   }
 };
+
+
+#undef JAM_FILE_ID
 
 #endif

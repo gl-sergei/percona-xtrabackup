@@ -1,3 +1,8 @@
+# The include statement below is a temp one for tests that are yet to
+#be ported to run with InnoDB,
+#but needs to be kept for tests that would need MyISAM in future.
+--source include/force_myisam_default.inc
+
 --source include/not_embedded.inc
 --source include/have_multi_ndb.inc
 
@@ -150,6 +155,43 @@ DROP USER 'user3'@'localhost';
 
 DROP TABLE t1;
 
+--echo === test restart of mysqld ===
+connection server1;
+--let $mysqld_name=mysqld.1.1
+--source include/restart_mysqld.inc
+--source include/ndb_wait_connected.inc
+flush privileges;
+
+--echo === test truncate ===
+#
+# bug#13346955
+#
+# a personal note is that I think that it should be disallowed
+# to truncate one of these tables...
+#
+truncate mysql.proxies_priv;
+flush privileges;
+
+--echo === test mysql_upgrade ===
+#
+# BUG#16226274 MYSQL_UPGRADE FAILED WHEN USING DISTRIBUTED GRANTS
+#
+
+let $log_file = $MYSQLTEST_VARDIR/tmp/ndb_dist_priv_upgrade.log;
+--echo mysql_upgrade first mysqld...
+--exec $MYSQL_UPGRADE --skip-verbose --force > $log_file 2>&1
+--echo mysql_upgrade second mysqld...
+--exec $MYSQL_UPGRADE --defaults-group-suffix=.2.1 --skip-verbose --force >> $log_file 2>&1
+--echo show that tables still are in NDB
+--disable_query_log ONCE
+SELECT table_name FROM information_schema.tables
+  WHERE table_schema = 'mysql' AND
+        table_type = 'BASE TABLE' AND
+        engine = 'NDBCLUSTER' AND
+        table_name IN ('user', 'db', 'tables_priv', 'columns_priv',
+                       'procs_priv', 'proxies_priv', 'host')
+  ORDER BY table_name;
+
 # Restore local privileges
 connection server1;
 call mysql.mysql_cluster_backup_privileges();
@@ -172,7 +214,6 @@ drop table mysql.db_backup;
 drop table mysql.tables_priv_backup;
 drop table mysql.columns_priv_backup;
 drop table mysql.procs_priv_backup;
-drop table mysql.host_backup;
 
 # Drop the distributed backup tables
 drop table mysql.ndb_user_backup;
@@ -180,7 +221,6 @@ drop table mysql.ndb_db_backup;
 drop table mysql.ndb_tables_priv_backup;
 drop table mysql.ndb_columns_priv_backup;
 drop table mysql.ndb_procs_priv_backup;
-drop table mysql.ndb_host_backup;
 
 # Drop the function and sprocs
 drop function mysql.mysql_cluster_privileges_are_distributed;
@@ -199,7 +239,6 @@ drop table mysql.db_backup;
 drop table mysql.tables_priv_backup;
 drop table mysql.columns_priv_backup;
 drop table mysql.procs_priv_backup;
-drop table mysql.host_backup;
 
 # The distributed backup tables should already have been dropped
 --error ER_NO_SUCH_TABLE

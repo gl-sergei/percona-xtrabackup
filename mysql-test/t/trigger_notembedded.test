@@ -1,3 +1,8 @@
+# The include statement below is a temp one for tests that are yet to
+#be ported to run with InnoDB,
+#but needs to be kept for tests that would need MyISAM in future.
+--source include/force_myisam_default.inc
+
 # Test case(s) in this file contain(s) GRANT/REVOKE statements, which are not
 # supported in embedded server. So, this test should not be run on embedded
 # server.
@@ -324,6 +329,7 @@ INSERT INTO t1 VALUES(6);
 # Check that SHOW TRIGGERS statement provides "Definer" column.
 #
 
+--replace_column 6 #
 SHOW TRIGGERS;
 
 #
@@ -382,6 +388,7 @@ SELECT trigger_name, definer FROM INFORMATION_SCHEMA.TRIGGERS ORDER BY trigger_n
 
 --echo
 
+--replace_column 17 #
 SELECT * FROM INFORMATION_SCHEMA.TRIGGERS ORDER BY trigger_name;
 
 #
@@ -946,7 +953,10 @@ DROP DATABASE IF EXISTS mysqltest_db1;
 CREATE DATABASE mysqltest_db1;
 USE mysqltest_db1;
 
+set @orig_sql_mode= @@sql_mode;
+set sql_mode= (select replace(@@sql_mode,'NO_AUTO_CREATE_USER',''));
 GRANT ALL ON mysqltest_db1.* TO mysqltest_u1@localhost;
+set sql_mode= @orig_sql_mode;
 
 --connect(con1,localhost,mysqltest_u1,,mysqltest_db1)
 

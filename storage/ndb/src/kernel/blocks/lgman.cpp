@@ -1,13 +1,13 @@
-/*
-   Copyright (c) 2005, 2011, Oracle and/or its affiliates. All rights reserved.
+/* Copyright (c) 2005, 2014, Oracle and/or its affiliates. All rights reserved.
 
-   This program is free software; you can redistribute it and/or modify
-   it under the terms of the GNU General Public License as published by
-   the Free Software Foundation; version 2 of the License.
+   This program is free software; you can redistribute it and/or
+   modify it under the terms of the GNU General Public License
+   as published by the Free Software Foundation; version 2 of
+   the License.
 
    This program is distributed in the hope that it will be useful,
    but WITHOUT ANY WARRANTY; without even the implied warranty of
-   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
    GNU General Public License for more details.
 
    You should have received a copy of the GNU General Public License
@@ -30,12 +30,16 @@
 #include <signaldata/GetTabInfo.hpp>
 #include <signaldata/NodeFailRep.hpp>
 #include <signaldata/DbinfoScan.hpp>
+#include <signaldata/CallbackSignal.hpp>
 #include "dbtup/Dbtup.hpp"
 
 #include <EventLogger.hpp>
 extern EventLogger * g_eventLogger;
 
 #include <record_types.hpp>
+
+#define JAM_FILE_ID 441
+
 
 /**
  * ---<a>-----<b>-----<c>-----<d>---> (time)
@@ -101,6 +105,7 @@ Lgman::Lgman(Block_context & ctx) :
   addRecSignal(GSN_END_LCP_CONF, &Lgman::execEND_LCP_CONF);
 
   addRecSignal(GSN_GET_TABINFOREQ, &Lgman::execGET_TABINFOREQ);
+  addRecSignal(GSN_CALLBACK_ACK, &Lgman::execCALLBACK_ACK);
 
   m_last_lsn = 1;
   m_logfile_group_hash.setSize(10);
@@ -215,13 +220,8 @@ Lgman::sendSTTORRY(Signal* signal)
 {
   signal->theData[0] = 0;
   signal->theData[3] = 1;
-  signal->theData[4] = 2;
-  signal->theData[5] = 3;
-  signal->theData[6] = 4;
-  signal->theData[7] = 5;
-  signal->theData[8] = 6;
-  signal->theData[9] = 255; // No more start phases from missra
-  sendSignal(NDBCNTR_REF, GSN_STTORRY, signal, 10, JBB);
+  signal->theData[4] = 255; // No more start phases from missra
+  sendSignal(NDBCNTR_REF, GSN_STTORRY, signal, 5, JBB);
 }
 
 void
@@ -260,6 +260,7 @@ Lgman::execCONTINUEB(Signal* signal){
     break;
   }
   case LgmanContinueB::FIND_LOG_HEAD:
+  {
     jam();
     Ptr<Logfile_group> ptr;
     if(ptrI != RNIL)
@@ -274,6 +275,7 @@ Lgman::execCONTINUEB(Signal* signal){
       init_run_undo_log(signal);
     }
     break;
+  }
   case LgmanContinueB::EXECUTE_UNDO_RECORD:
     jam();
     execute_undo_record(signal);
@@ -621,7 +623,7 @@ Lgman::execCREATE_FILEGROUP_IMPL_REQ(Signal* signal){
     }
     
     m_logfile_group_hash.add(ptr);
-    m_logfile_group_list.add(ptr);
+    m_logfile_group_list.addLast(ptr);
 
     if ((getNodeState().getNodeRestartInProgress() &&
          getNodeState().starting.restartType !=
@@ -738,7 +740,7 @@ Lgman::drop_filegroup_drop_files(Signal* signal,
   {
     jam();
     metalist.remove(file_ptr);
-    list.add(file_ptr);
+    list.addLast(file_ptr);
     file_ptr.p->m_create.m_senderRef = ref;
     file_ptr.p->m_create.m_senderData = data;
     create_file_abort(signal, ptr, file_ptr);
@@ -850,7 +852,7 @@ Lgman::execCREATE_FILE_IMPL_REQ(Signal* signal)
     new (file_ptr.p) Undofile(req, ptr.i);
 
     Local_undofile_list tmp(m_file_pool, ptr.p->m_meta_files);
-    tmp.add(file_ptr);
+    tmp.addLast(file_ptr);
     
     open_file(signal, file_ptr, req->requestInfo, &handle);
     return;
@@ -913,7 +915,7 @@ Lgman::open_file(Signal* signal, Ptr<Undofile> ptr,
 void
 Lgman::execFSWRITEREQ(Signal* signal)
 {
-  jamEntry();
+  jamNoBlock();
   Ptr<Undofile> ptr;
   Ptr<GlobalPage> page_ptr;
   FsReadWriteReq* req= (FsReadWriteReq*)signal->getDataPtr();
@@ -948,7 +950,7 @@ Lgman::execFSWRITEREQ(Signal* signal)
 void
 Lgman::execFSOPENREF(Signal* signal)
 {
-  jamEntry();
+  jamNoBlock();
 
   Ptr<Undofile> ptr;  
   Ptr<Logfile_group> lg_ptr;
@@ -1028,9 +1030,9 @@ Lgman::create_file_commit(Signal* signal,
      (lg_ptr.p->m_state & Logfile_group::LG_ONLINE))
   {
     jam();
-    Local_undofile_list free(m_file_pool, lg_ptr.p->m_files);
+    Local_undofile_list free_list(m_file_pool, lg_ptr.p->m_files);
     Local_undofile_list meta(m_file_pool, lg_ptr.p->m_meta_files);
-    first= free.isEmpty();
+    first= free_list.isEmpty();
     meta.remove(ptr);
     if(!first)
     {
@@ -1039,10 +1041,10 @@ Lgman::create_file_commit(Signal* signal,
        */
       Ptr<Undofile> curr;
       m_file_pool.getPtr(curr, lg_ptr.p->m_file_pos[HEAD].m_ptr_i);
-      if(free.next(curr))
-	free.insert(ptr, curr); // inserts before (that's why the extra next)
+      if(free_list.next(curr))
+        free_list.insertBefore(ptr, curr);
       else
-	free.add(ptr);
+        free_list.addLast(ptr);
 
       ptr.p->m_state = Undofile::FS_ONLINE | Undofile::FS_EMPTY;
     }
@@ -1051,7 +1053,7 @@ Lgman::create_file_commit(Signal* signal,
       /**
        * First file isn't empty as it can be written to at any time
        */
-      free.add(ptr);
+      free_list.addLast(ptr);
       ptr.p->m_state = Undofile::FS_ONLINE;
       lg_ptr.p->m_state |= Logfile_group::LG_FLUSH_THREAD;
       signal->theData[0] = LgmanContinueB::FLUSH_LOG;
@@ -1201,7 +1203,9 @@ Lgman::alloc_logbuffer_memory(Ptr<Logfile_group> ptr, Uint32 bytes)
 {
   Uint32 pages= (((bytes + 3) >> 2) + File_formats::NDB_PAGE_SIZE_WORDS - 1)
     / File_formats::NDB_PAGE_SIZE_WORDS;
+#if defined VM_TRACE || defined ERROR_INSERT
   Uint32 requested= pages;
+#endif
   {
     Page_map map(m_data_buffer_pool, ptr.p->m_buffer_pages);
     while(pages)
@@ -1408,7 +1412,7 @@ Logfile_client::sync_lsn(Signal* signal,
 	list(m_lgman->m_log_waiter_pool, ptr.p->m_log_sync_waiters);
       
       empty= list.isEmpty();
-      if(!list.seize(wait))
+      if (!list.seizeLast(wait))
 	return -1;
       
       wait.p->m_block= m_block;
@@ -1518,9 +1522,10 @@ Lgman::process_log_sync_waiters(Signal* signal, Ptr<Logfile_group> ptr)
     removed= true;
     Uint32 block = waiter.p->m_block;
     CallbackPtr & callback = waiter.p->m_callback;
-    sendCallbackConf(signal, block, callback, logfile_group_id);
+    sendCallbackConf(signal, block, callback, logfile_group_id,
+                     LgmanContinueB::PROCESS_LOG_SYNC_WAITERS, 0);
     
-    list.releaseFirst(waiter);
+    list.releaseFirst(/* waiter */);
   }
   
   if(removed && !list.isEmpty())
@@ -1544,7 +1549,7 @@ Lgman::get_log_buffer(Ptr<Logfile_group> ptr, Uint32 sz)
   page=m_shared_page_pool.getPtr(ptr.p->m_pos[PRODUCER].m_current_pos.m_ptr_i);
   
   Uint32 total_free= ptr.p->m_free_buffer_words;
-  assert(total_free >= sz);
+  ndbrequire(total_free >= sz);
   Uint32 pos= ptr.p->m_pos[PRODUCER].m_current_pos.m_idx;
   Uint32 free= File_formats::UNDO_PAGE_WORDS - pos;
 
@@ -1643,7 +1648,7 @@ Logfile_client::get_log_buffer(Signal* signal, Uint32 sz,
 	list(m_lgman->m_log_waiter_pool, ptr.p->m_log_buffer_waiters);
       
       empty= list.isEmpty();
-      if(!list.seize(wait))
+      if (!list.seizeFirst(wait))
       {
 	return -1;
       }      
@@ -1882,6 +1887,19 @@ Lgman::flush_log(Signal* signal, Ptr<Logfile_group> ptr, Uint32 force)
   }
 }
 
+/*
+ * Overloaded UNDO buffer creates waiters for buffer space.
+ * As in direct return from Logfile_client::get_log_buffer()
+ * the FREE_BUFFER_MARGIN allows for a possible NOOP entry
+ * when the logged entry does not fit on current page.
+ *
+ * In non-MT case the entry is added in same time-slice.
+ * In MT case callback is via signals.  Here the problem is
+ * that we cannot account for multiple NOOP entries created
+ * in non-deterministic order.  So we serialize processing
+ * to one entry at a time via CALLBACK_ACK signals.  This all
+ * happens in memory at commit and should not have major impact.
+ */
 void
 Lgman::process_log_buffer_waiters(Signal* signal, Ptr<Logfile_group> ptr)
 {
@@ -1909,24 +1927,54 @@ Lgman::process_log_buffer_waiters(Signal* signal, Ptr<Logfile_group> ptr)
     Uint32 block = waiter.p->m_block;
     CallbackPtr & callback = waiter.p->m_callback;
     ptr.p->m_callback_buffer_words += sz;
-    sendCallbackConf(signal, block, callback, logfile_group_id);
+    sendCallbackConf(signal, block, callback, logfile_group_id,
+                     LgmanContinueB::PROCESS_LOG_BUFFER_WAITERS, 0);
 
-    list.releaseFirst(waiter);
+    list.releaseFirst(/* waiter */);
   }
   
   if (removed && !list.isEmpty())
   {
     jam();
     ptr.p->m_state |= Logfile_group::LG_WAITERS_THREAD;
-    signal->theData[0] = LgmanContinueB::PROCESS_LOG_BUFFER_WAITERS;
-    signal->theData[1] = ptr.i;
-    sendSignal(reference(), GSN_CONTINUEB, signal, 2, JBB);
+    // continue via CALLBACK_ACK
   }
   else
   {
     jam();
     ptr.p->m_state &= ~(Uint32)Logfile_group::LG_WAITERS_THREAD;
   }
+}
+
+void
+Lgman::execCALLBACK_ACK(Signal* signal)
+{
+  BlockReference senderRef = signal->getSendersBlockRef();
+  BlockNumber senderBlock = refToMain(senderRef);
+
+  const CallbackAck* ack = (const CallbackAck*)signal->getDataPtr();
+  Uint32 logfile_group_id = ack->senderData;
+  Uint32 callbackInfo = ack->callbackInfo;
+
+  Ptr<Logfile_group> ptr;
+  ndbrequire(m_logfile_group_hash.find(ptr, logfile_group_id));
+
+  // using ContinueB as convenience
+
+  switch (callbackInfo) {
+  case LgmanContinueB::PROCESS_LOG_BUFFER_WAITERS:
+    jam();
+    ndbrequire(senderBlock == DBTUP || senderBlock == LGMAN);
+    break;
+  // no PROCESS_LOG_SYNC_WAITERS yet (or ever)
+  default:
+    ndbrequire(false);
+    break;
+  }
+
+  signal->theData[0] = callbackInfo;
+  signal->theData[1] = ptr.i;
+  sendSignal(reference(), GSN_CONTINUEB, signal, 2, JBB);
 }
 
 #define REALLY_SLOW_FS 0
@@ -2131,7 +2179,7 @@ Lgman::execLCP_FRAG_ORD(Signal* signal)
 void
 Lgman::exec_lcp_frag_ord(Signal* signal, SimulatedBlock* client_block)
 {
-  jamEntry();
+  jamBlock(client_block);
 
   LcpFragOrd * ord = (LcpFragOrd *)signal->getDataPtr();
   Uint32 lcp_id= ord->lcpId;
@@ -2145,7 +2193,7 @@ Lgman::exec_lcp_frag_ord(Signal* signal, SimulatedBlock* client_block)
     File_formats::Undofile::UNDO_LCP : File_formats::Undofile::UNDO_LCP_FIRST;
   if(!ptr.isNull() && ! (ptr.p->m_state & Logfile_group::LG_CUT_LOG_THREAD))
   {
-    jam();
+    jamBlock(client_block);
     ptr.p->m_state |= Logfile_group::LG_CUT_LOG_THREAD;
     signal->theData[0] = LgmanContinueB::CUT_LOG_TAIL;
     signal->theData[1] = ptr.i;
@@ -2687,14 +2735,14 @@ Lgman::execFSREADCONF(Signal* signal)
        * File has highest lsn, add last
        */
       jam();
-      files.add(ptr);
+      files.addLast(ptr);
     }
     else
     {
       /**
        * Insert file in correct position in file list
        */
-      files.insert(ptr, loop);
+      files.insertBefore(ptr, loop);
     }
   }
   find_log_head(signal, lg_ptr);
@@ -2852,70 +2900,74 @@ Lgman::init_run_undo_log(Signal* signal)
    */
   Ptr<Logfile_group> group;
   Logfile_group_list& list= m_logfile_group_list;
-  Logfile_group_list tmp(m_logfile_group_pool);
-
+  Logfile_group_list::Head tmpHead;
   bool found_any = false;
-
-  list.first(group);
-  while(!group.isNull())
   {
-    Ptr<Logfile_group> ptr= group;
-    list.next(group);
-    list.remove(ptr);
+    Logfile_group_list::Local tmp(m_logfile_group_pool, tmpHead);
 
-    if (ptr.p->m_state & Logfile_group::LG_ONLINE)
-    {
-      /**
-       * No logfiles in group
-       */
-      jam();
-      tmp.addLast(ptr);
-      continue;
-    }
-    
-    found_any = true;
 
+    list.first(group);
+    while (!group.isNull())
     {
+      Ptr<Logfile_group> ptr= group;
+      list.next(group);
+      list.remove(ptr);
+
+      if (ptr.p->m_state & Logfile_group::LG_ONLINE)
+      {
+        /**
+         * No logfiles in group
+         */
+        jam();
+        tmp.addLast(ptr);
+        continue;
+      }
+
+      found_any = true;
+
+      {
+        /**
+         * Init buffer pointers
+         */
+        ptr.p->m_free_buffer_words -= File_formats::UNDO_PAGE_WORDS;
+        ptr.p->m_pos[CONSUMER].m_current_page.m_idx = 0; // 0 more pages read
+        ptr.p->m_pos[PRODUCER].m_current_page.m_idx = 0; // 0 more pages read
+
+        Uint32 page = ptr.p->m_pos[CONSUMER].m_current_pos.m_ptr_i;
+        File_formats::Undofile::Undo_page* pageP =
+          (File_formats::Undofile::Undo_page*)m_shared_page_pool.getPtr(page);
+
+        ptr.p->m_pos[CONSUMER].m_current_pos.m_idx = pageP->m_words_used;
+        ptr.p->m_pos[PRODUCER].m_current_pos.m_idx = 1;
+        ptr.p->m_last_read_lsn++;
+      }
+
       /**
-       * Init buffer pointers
+       * Start producer thread
        */
-      ptr.p->m_free_buffer_words -= File_formats::UNDO_PAGE_WORDS;
-      ptr.p->m_pos[CONSUMER].m_current_page.m_idx = 0; // 0 more pages read
-      ptr.p->m_pos[PRODUCER].m_current_page.m_idx = 0; // 0 more pages read
-      
-      Uint32 page = ptr.p->m_pos[CONSUMER].m_current_pos.m_ptr_i;
-      File_formats::Undofile::Undo_page* pageP = 
-	(File_formats::Undofile::Undo_page*)m_shared_page_pool.getPtr(page);
-      
-      ptr.p->m_pos[CONSUMER].m_current_pos.m_idx = pageP->m_words_used;
-      ptr.p->m_pos[PRODUCER].m_current_pos.m_idx = 1;
-      ptr.p->m_last_read_lsn++;
+      signal->theData[0] = LgmanContinueB::READ_UNDO_LOG;
+      signal->theData[1] = ptr.i;
+      sendSignal(reference(), GSN_CONTINUEB, signal, 2, JBB);
+    
+      /**
+       * Insert in correct position in list of logfile_group's
+       */
+      Ptr<Logfile_group> pos;
+      for (tmp.first(pos); !pos.isNull(); tmp.next(pos))
+        if (ptr.p->m_last_read_lsn >= pos.p->m_last_read_lsn)
+          break;
+    
+      if (pos.isNull())
+        tmp.addLast(ptr);
+      else
+        tmp.insertBefore(ptr, pos);
+    
+      ptr.p->m_state =
+        Logfile_group::LG_EXEC_THREAD | Logfile_group::LG_READ_THREAD;
     }
-    
-    /**
-     * Start producer thread
-     */
-    signal->theData[0] = LgmanContinueB::READ_UNDO_LOG;
-    signal->theData[1] = ptr.i;
-    sendSignal(reference(), GSN_CONTINUEB, signal, 2, JBB);
-    
-    /**
-     * Insert in correct postion in list of logfile_group's
-     */
-    Ptr<Logfile_group> pos;
-    for(tmp.first(pos); !pos.isNull(); tmp.next(pos))
-      if(ptr.p->m_last_read_lsn >= pos.p->m_last_read_lsn)
-	break;
-    
-    if(pos.isNull())
-      tmp.add(ptr);
-    else
-      tmp.insert(ptr, pos);
-    
-    ptr.p->m_state = 
-      Logfile_group::LG_EXEC_THREAD | Logfile_group::LG_READ_THREAD;
   }
-  list = tmp;
+  ndbassert(list.isEmpty());
+  list.appendList(tmpHead);
 
   if (found_any == false)
   {
@@ -3308,9 +3360,9 @@ Lgman::get_next_undo_record(Uint64 * this_lsn)
     {
       m_logfile_group_list.remove(ptr);
       if(sort.isNull())
-	m_logfile_group_list.add(ptr);
+        m_logfile_group_list.addLast(ptr);
       else
-	m_logfile_group_list.insert(ptr, sort);
+        m_logfile_group_list.insertBefore(ptr, sort);
     }
   }
   return record;

@@ -1,4 +1,7 @@
 include/master-slave.inc
+Warnings:
+Note	####	Sending passwords in plain text without SSL/TLS is extremely insecure.
+Note	####	Storing MySQL user name or password information in the master info repository is not secure and is therefore not recommended. Please consider using the USER and PASSWORD connection options for START SLAVE; see the 'START SLAVE Syntax' in the MySQL Manual for more information.
 [connection master]
 --- Doing pre test cleanup --- 
 DROP TABLE IF EXISTS t1;
@@ -47,7 +50,7 @@ t1	CREATE TABLE `t1` (
   `f` float DEFAULT '0',
   `total` bigint(20) unsigned DEFAULT NULL,
   `y` year(4) DEFAULT NULL,
-  `t` date NOT NULL DEFAULT '0000-00-00',
+  `t` date NOT NULL,
   PRIMARY KEY (`t`)
 ) /*!50100 TABLESPACE ts1 STORAGE DISK */ ENGINE=ndbcluster DEFAULT CHARSET=latin1
 /*!50100 PARTITION BY RANGE (YEAR(t))
@@ -69,7 +72,7 @@ t1	CREATE TABLE `t1` (
   `f` float DEFAULT '0',
   `total` bigint(20) unsigned DEFAULT NULL,
   `y` year(4) DEFAULT NULL,
-  `t` date NOT NULL DEFAULT '0000-00-00',
+  `t` date NOT NULL,
   PRIMARY KEY (`t`)
 ) /*!50100 TABLESPACE ts1 STORAGE DISK */ ENGINE=ndbcluster DEFAULT CHARSET=latin1
 /*!50100 PARTITION BY RANGE (YEAR(t))
@@ -133,7 +136,7 @@ t1	CREATE TABLE `t1` (
   `f` float DEFAULT '0',
   `total` bigint(20) unsigned DEFAULT NULL,
   `y` year(4) DEFAULT NULL,
-  `t` date NOT NULL DEFAULT '0000-00-00',
+  `t` date NOT NULL,
   PRIMARY KEY (`t`)
 ) /*!50100 TABLESPACE ts1 STORAGE DISK */ ENGINE=ndbcluster DEFAULT CHARSET=latin1
 /*!50100 PARTITION BY RANGE (YEAR(t))
@@ -156,7 +159,7 @@ t1	CREATE TABLE `t1` (
   `f` float DEFAULT '0',
   `total` bigint(20) unsigned DEFAULT NULL,
   `y` year(4) DEFAULT NULL,
-  `t` date NOT NULL DEFAULT '0000-00-00',
+  `t` date NOT NULL,
   PRIMARY KEY (`t`)
 ) /*!50100 TABLESPACE ts1 STORAGE DISK */ ENGINE=ndbcluster DEFAULT CHARSET=latin1
 /*!50100 PARTITION BY RANGE (YEAR(t))
@@ -406,7 +409,7 @@ t1	CREATE TABLE `t1` (
   `f` float DEFAULT '0',
   `total` bigint(20) unsigned DEFAULT NULL,
   `y` year(4) DEFAULT NULL,
-  `t` date NOT NULL DEFAULT '0000-00-00',
+  `t` date NOT NULL,
   PRIMARY KEY (`t`)
 ) /*!50100 TABLESPACE ts1 STORAGE DISK */ ENGINE=ndbcluster DEFAULT CHARSET=latin1
 /*!50100 PARTITION BY HASH ( YEAR(t))
@@ -422,7 +425,7 @@ t1	CREATE TABLE `t1` (
   `f` float DEFAULT '0',
   `total` bigint(20) unsigned DEFAULT NULL,
   `y` year(4) DEFAULT NULL,
-  `t` date NOT NULL DEFAULT '0000-00-00',
+  `t` date NOT NULL,
   PRIMARY KEY (`t`)
 ) /*!50100 TABLESPACE ts1 STORAGE DISK */ ENGINE=ndbcluster DEFAULT CHARSET=latin1
 /*!50100 PARTITION BY HASH ( YEAR(t))
@@ -481,7 +484,7 @@ t1	CREATE TABLE `t1` (
   `f` float DEFAULT '0',
   `total` bigint(20) unsigned DEFAULT NULL,
   `y` year(4) DEFAULT NULL,
-  `t` date NOT NULL DEFAULT '0000-00-00',
+  `t` date NOT NULL,
   PRIMARY KEY (`t`)
 ) /*!50100 TABLESPACE ts1 STORAGE DISK */ ENGINE=ndbcluster DEFAULT CHARSET=latin1
 /*!50100 PARTITION BY HASH ( YEAR(t))
@@ -499,7 +502,7 @@ t1	CREATE TABLE `t1` (
   `f` float DEFAULT '0',
   `total` bigint(20) unsigned DEFAULT NULL,
   `y` year(4) DEFAULT NULL,
-  `t` date NOT NULL DEFAULT '0000-00-00',
+  `t` date NOT NULL,
   PRIMARY KEY (`t`)
 ) /*!50100 TABLESPACE ts1 STORAGE DISK */ ENGINE=ndbcluster DEFAULT CHARSET=latin1
 /*!50100 PARTITION BY HASH ( YEAR(t))
@@ -643,7 +646,7 @@ t1	CREATE TABLE `t1` (
   `bc` char(63) DEFAULT NULL,
   `d` decimal(10,4) DEFAULT '0.0000',
   `f` float DEFAULT '0',
-  `total` bigint(20) unsigned NOT NULL DEFAULT '0',
+  `total` bigint(20) unsigned NOT NULL,
   `y` year(4) DEFAULT NULL,
   `t` date DEFAULT NULL,
   PRIMARY KEY (`id`,`total`)
@@ -661,7 +664,7 @@ t1	CREATE TABLE `t1` (
   `bc` char(63) DEFAULT NULL,
   `d` decimal(10,4) DEFAULT '0.0000',
   `f` float DEFAULT '0',
-  `total` bigint(20) unsigned NOT NULL DEFAULT '0',
+  `total` bigint(20) unsigned NOT NULL,
   `y` year(4) DEFAULT NULL,
   `t` date DEFAULT NULL,
   PRIMARY KEY (`id`,`total`)
@@ -720,7 +723,7 @@ t1	CREATE TABLE `t1` (
   `bc` char(63) DEFAULT NULL,
   `d` decimal(10,4) DEFAULT '0.0000',
   `f` float DEFAULT '0',
-  `total` bigint(20) unsigned NOT NULL DEFAULT '0',
+  `total` bigint(20) unsigned NOT NULL,
   `y` year(4) DEFAULT NULL,
   `t` date DEFAULT NULL,
   PRIMARY KEY (`id`,`total`)
@@ -738,7 +741,7 @@ t1	CREATE TABLE `t1` (
   `bc` char(63) DEFAULT NULL,
   `d` decimal(10,4) DEFAULT '0.0000',
   `f` float DEFAULT '0',
-  `total` bigint(20) unsigned NOT NULL DEFAULT '0',
+  `total` bigint(20) unsigned NOT NULL,
   `y` year(4) DEFAULT NULL,
   `t` date DEFAULT NULL,
   PRIMARY KEY (`id`,`total`)

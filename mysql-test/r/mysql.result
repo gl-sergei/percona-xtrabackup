@@ -398,6 +398,8 @@ WARNING: --server-arg option not supported in this configuration.
 | 1 |
 +---+
 SET @@global.sql_mode='';
+Warnings:
+Warning	3129	Unsetting sql mode 'NO_AUTO_CREATE_USER' is deprecated. It will be made read-only in a future release.
 Warning (Code 1286): Unknown storage engine 'nonexistent'
 Warning (Code 1266): Using storage engine MyISAM for table 't2'
 Warning (Code 1286): Unknown storage engine 'nonexistent2'
@@ -508,11 +510,20 @@ Connected
 #
 # Bug#12688860 : SECURITY RECOMMENDATION: PASSWORDS ON CLI
 #
-Warning: Using a password on the command line interface can be insecure.
+mysql: [Warning] Using a password on the command line interface can be insecure.
 1
 1
-Warning: Using a password on the command line interface can be insecure.
+mysql: [Warning] Using a password on the command line interface can be insecure.
 1
 1
+ERROR 1243 (HY000) at line 15: Unknown prepared statement handler (x) given to EXECUTE
+a
+1
+2
+#
+# Bug #16102788: INDETERMINATE BEHAVIOR DUE TO EMPTY OPTION VALUES
+#
+mysql: [ERROR] mysql: Empty value for 'port' specified
+mysql: [ERROR] mysql: Empty value for 'port' specified
 
 End of tests

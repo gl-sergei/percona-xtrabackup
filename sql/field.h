@@ -1,7 +1,7 @@
 #ifndef FIELD_INCLUDED
 #define FIELD_INCLUDED
 
-/* Copyright (c) 2000, 2014, Oracle and/or its affiliates. All rights reserved.
+/* Copyright (c) 2000, 2015, Oracle and/or its affiliates. All rights reserved.
 
    This program is free software; you can redistribute it and/or modify
    it under the terms of the GNU General Public License as published by
@@ -16,12 +16,24 @@
    along with this program; if not, write to the Free Software
    Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301  USA */
 
-#include "mysqld.h"                             /* system_charset_info */
-#include "table.h"                              /* TABLE */
-#include "sql_string.h"                         /* String */
-#include "my_decimal.h"                         /* my_decimal */
-#include "sql_error.h"                          /* Sql_condition */
-#include "mysql_version.h"                      /* FRM_VER */
+#include "my_global.h"
+
+#include "my_base.h"                            // ha_storage_media
+#include "my_compare.h"                         // portable_sizeof_char_ptr
+#include "my_time.h"                            // MYSQL_TIME_NOTE_TRUNCATED
+#include "binary_log_funcs.h"                   // my_time_binary_length
+#include "handler.h"                            // column_format_type
+#include "mysqld.h"                             // system_charset_info
+#include "mysqld_error.h"                       // ER_*
+#include "sql_error.h"                          // Sql_condition
+#include "sql_string.h"                         // String
+#include "table.h"                              // TABLE
+#include "mysql_version.h"                      // FRM_VER
+
+class Create_field;
+class Protocol;
+class Relay_log_info;
+class Send_field;
 
 /*
 
@@ -73,12 +85,6 @@ Field (abstract)
             +--Field_datetimef
 */
 
-
-class Send_field;
-class Protocol;
-class Create_field;
-class Relay_log_info;
-class Field;
 
 enum enum_check_fields
 {
@@ -149,6 +155,12 @@ enum type_conversion_status
   TYPE_ERR_OOM
 };
 
+/*
+  Some defines for exit codes for ::is_equal class functions.
+*/
+#define IS_EQUAL_NO 0
+#define IS_EQUAL_YES 1
+#define IS_EQUAL_PACK_LENGTH 2
 
 #define STORAGE_TYPE_MASK 7
 #define COLUMN_FORMAT_MASK 7
@@ -156,6 +168,8 @@ enum type_conversion_status
 
 #define my_charset_numeric      my_charset_latin1
 #define MY_REPERTOIRE_NUMERIC   MY_REPERTOIRE_ASCII
+
+#define FRM_VER_TRUE_VARCHAR (FRM_VER+4) /* 10 */
 
 struct st_cache_field;
 type_conversion_status field_conv(Field *to,Field *from);
@@ -425,8 +439,8 @@ inline enum_field_types real_type_to_type(enum_field_types real_type)
    @param is_unsigned True if the source integer is an unsigned value.
 */
 template<bool Is_big_endian>
-void copy_integer(uchar *to, int to_length,
-                  const uchar* from, int from_length,
+void copy_integer(uchar *to, size_t to_length,
+                  const uchar* from, size_t from_length,
                   bool is_unsigned)
 {
   if (Is_big_endian)
@@ -444,11 +458,64 @@ void copy_integer(uchar *to, int to_length,
       to[0]= sign_byte;
     else
       to[0]= static_cast<char>(sign_byte ^ 128); // Reverse the sign bit.
-    for (int i= 1, j= from_length - 2; i < to_length; ++i, --j)
+    for (size_t i= 1, j= from_length - 2; i < to_length; ++i, --j)
       to[i]= from[j];
   }
 }
 
+
+/**
+  This class is used for recording the information of
+  generated column. It will be created during define a
+  generated column or the table is opened.
+
+  If one field contains such an object, it means the field
+  is a genereated one.
+*/
+class Generated_column: public Sql_alloc
+{
+public:
+  Item *expr_item;
+  LEX_STRING expr_str;
+  /* It's used to free the items created in parsing generated expression */
+  Item *item_free_list;
+  List<Field> base_columns_list;
+  Generated_column() 
+  : expr_item(0), item_free_list(0),
+    field_type(MYSQL_TYPE_LONG),
+    stored_in_db(FALSE)
+  {
+    expr_str.str= NULL;
+    expr_str.length= 0;
+  };
+  ~Generated_column() {}
+  enum_field_types get_real_type() const
+  {
+    return field_type;
+  }
+
+  void set_field_type(enum_field_types fld_type)
+  {
+    field_type= fld_type;
+  }
+
+  bool get_field_stored() const
+  {
+    return stored_in_db;
+  }
+  void set_field_stored(bool stored)
+  {
+    stored_in_db= stored;
+  }
+private:
+  /*
+    The following data is only updated by the parser and read
+    when a Create_field object is created/initialized.
+  */
+  enum_field_types field_type;   /* Real field type*/
+  bool stored_in_db;             /* Indication that the field is 
+                                    phisically stored in the database*/
+};
 
 class Field
 {
@@ -482,12 +549,40 @@ public:
 
   uchar		*ptr;			// Position to field in record
 
-protected:
+private:
   /**
      Byte where the @c NULL bit is stored inside a record. If this Field is a
      @c NOT @c NULL field, this member is @c NULL.
   */
-  uchar		*null_ptr;
+  uchar *m_null_ptr;
+
+  /**
+    Flag: if the NOT-NULL field can be temporary NULL.
+  */
+  bool m_is_tmp_nullable;
+
+  /**
+    This is a flag with the following semantics:
+      - it can be changed only when m_is_tmp_nullable is true;
+      - it specifies if this field in the first current record
+        (TABLE::record[0]) was set to NULL (temporary NULL).
+
+    This flag is used for trigger handling.
+  */
+  bool m_is_tmp_null;
+
+  /**
+    The value of THD::count_cuted_fields at the moment of setting
+    m_is_tmp_null attribute.
+  */
+  enum_check_fields m_count_cuted_fields_saved;
+
+protected:
+  const uchar *get_null_ptr() const
+  { return m_null_ptr; }
+
+  uchar *get_null_ptr() 
+  { return m_null_ptr; }
 
 public:
   /*
@@ -514,7 +609,8 @@ public:
   enum utype  { NONE,DATE,SHIELD,NOEMPTY,CASEUP,PNR,BGNR,PGNR,YES,NO,REL,
 		CHECK,EMPTY,UNKNOWN_FIELD,CASEDN,NEXT_NUMBER,INTERVAL_FIELD,
                 BIT_FIELD, TIMESTAMP_OLD_FIELD, CAPITALIZE, BLOB_FIELD,
-                TIMESTAMP_DN_FIELD, TIMESTAMP_UN_FIELD, TIMESTAMP_DNUN_FIELD};
+                TIMESTAMP_DN_FIELD, TIMESTAMP_UN_FIELD, TIMESTAMP_DNUN_FIELD,
+                GENERATED_FIELD= 128 };
   enum geometry_type
   {
     GEOM_GEOMETRY = 0, GEOM_POINT = 1, GEOM_LINESTRING = 2, GEOM_POLYGON = 3,
@@ -539,13 +635,86 @@ public:
    */
   bool is_created_from_null_item;
 
+private:
+  enum enum_pushed_warnings
+  {
+    BAD_NULL_ERROR_PUSHED= 1,
+    NO_DEFAULT_FOR_FIELD_PUSHED= 2,
+    NO_DEFAULT_FOR_VIEW_FIELD_PUSHED= 4
+  };
+
+  /*
+    Bitmask specifying which warnings have been already pushed in order
+    not to repeat the same warning for the collmn multiple times.
+    Uses values of enum_pushed_warnings to control pushed warnings.
+  */
+  unsigned int m_warnings_pushed;
+
+public:
+  /* Generated column data */
+  Generated_column *gcol_info;
+  /*
+    Indication that the field is phycically stored in tables 
+    rather than just generated on SQL queries.
+    As of now, FALSE can only be set for virtual generated columns.
+  */
+  bool stored_in_db;
+
   Field(uchar *ptr_arg,uint32 length_arg,uchar *null_ptr_arg,
         uchar null_bit_arg, utype unireg_check_arg,
         const char *field_name_arg);
-  virtual ~Field() {}
+
+  virtual ~Field()
+  { }
+
+  void reset_warnings()
+  { m_warnings_pushed= 0; }
+
+  /**
+    Turn on temporary nullability for the field.
+  */
+  void set_tmp_nullable()
+  {
+    m_is_tmp_nullable= true;
+  }
+
+  /**
+    Turn off temporary nullability for the field.
+  */
+  void reset_tmp_nullable()
+  {
+    m_is_tmp_nullable= false;
+  }
+
+  /**
+    Reset temporary NULL value for field
+  */
+  void reset_tmp_null()
+  {
+    m_is_tmp_null= false;
+  }
+
+  void set_tmp_null();
+
+  /**
+    @return temporary NULL-ability flag.
+    @retval true if NULL can be assigned temporary to the Field.
+    @retval false if NULL can not be assigned even temporary to the Field.
+  */
+  bool is_tmp_nullable() const
+  { return m_is_tmp_nullable; }
+
+  /**
+    @return whether Field has temporary value NULL.
+    @retval true if the Field has temporary value NULL.
+    @retval false if the Field's value is NOT NULL, or if the temporary
+    NULL-ability flag is reset.
+  */
+  bool is_tmp_null() const
+  { return is_tmp_nullable() && m_is_tmp_null; }
 
   /* Store functions returns 1 on overflow and -1 on fatal error */
-  virtual type_conversion_status store(const char *to, uint length,
+  virtual type_conversion_status store(const char *to, size_t length,
                                        const CHARSET_INFO *cs)=0;
   virtual type_conversion_status store(double nr)=0;
   virtual type_conversion_status store(longlong nr, bool unsigned_val)=0;
@@ -593,7 +762,7 @@ public:
   {
     return store_time(ltime, 0);
   }
-  type_conversion_status store(const char *to, uint length,
+  type_conversion_status store(const char *to, size_t length,
                                const CHARSET_INFO *cs,
                                enum_check_fields check_level);
   virtual double val_real(void)=0;
@@ -673,7 +842,7 @@ public:
   static Item_result result_merge_type(enum_field_types);
   virtual bool eq(Field *field)
   {
-    return (ptr == field->ptr && null_ptr == field->null_ptr &&
+    return (ptr == field->ptr && m_null_ptr == field->m_null_ptr &&
             null_bit == field->null_bit && field->type() == type());
   }
   virtual bool eq_def(Field *field);
@@ -704,8 +873,10 @@ public:
 
   /*
     data_length() return the "real size" of the data in memory.
+    Useful only for variable length datatypes where it's overloaded.
+    By default assume the length is constant.
   */
-  virtual uint32 data_length() { return pack_length(); }
+  virtual uint32 data_length(uint row_offset= 0) { return pack_length(); }
   virtual uint32 sort_length() const { return pack_length(); }
 
   /**
@@ -776,20 +947,13 @@ public:
     tm.tv_usec= 0;
     store_timestamp(&tm);
   }
+
   virtual void set_default()
   {
     if (has_insert_default_function())
-    {
       evaluate_insert_default_function();
-      return;
-    }
-
-    my_ptrdiff_t l_offset= (my_ptrdiff_t) (table->s->default_values -
-					  table->record[0]);
-    memcpy(ptr, ptr + l_offset, pack_length());
-    if (real_maybe_null())
-      *null_ptr= ((*null_ptr & (uchar) ~null_bit) |
-		  (null_ptr[l_offset] & null_bit));
+    else
+      copy_data(table->default_values_offset());
   }
 
 
@@ -850,6 +1014,8 @@ public:
   virtual int key_cmp(const uchar *str, uint length)
   { return cmp(ptr,str); }
   virtual uint decimals() const { return 0; }
+  virtual bool is_text_key_type() const { return false; }
+
   /*
     Caller beware: sql_type can change str.Ptr, so check
     ptr() to see if it changed if you are using your own buffer
@@ -869,11 +1035,17 @@ public:
   bool is_temporal_with_date_and_time() const
   { return is_temporal_type_with_date_and_time(type()); }
 
+  /**
+    Check whether the full table's row is NULL or the Field has value NULL.
+
+    @return    true if the full table's row is NULL or the Field has value NULL
+               false if neither table's row nor the Field has value NULL
+  */
   bool is_null(my_ptrdiff_t row_offset= 0) const
   {
     /*
       if the field is NULLable, it returns NULLity based
-      on null_ptr[row_offset] value. Otherwise it returns
+      on m_null_ptr[row_offset] value. Otherwise it returns
       NULL flag depending on TABLE::null_row value.
 
       The table may have been marked as containing only NULL values
@@ -886,48 +1058,82 @@ public:
       Do not change the order of testing. Fields may be associated
       with a TABLE object without being part of the current row.
       For NULL value check to work for these fields, they must
-      have a valid null_ptr, and this pointer must be checked before
+      have a valid m_null_ptr, and this pointer must be checked before
       TABLE::null_row. 
-
     */
-    return real_maybe_null() ?
-      MY_TEST(null_ptr[row_offset] & null_bit) : table->null_row;
+    if (real_maybe_null())
+      return MY_TEST(m_null_ptr[row_offset] & null_bit);
+
+    if (is_tmp_nullable())
+      return m_is_tmp_null;
+
+    return table->null_row;
   }
 
+  /**
+    Check whether the Field has value NULL (temporary or actual).
+
+    @return   true if the Field has value NULL (temporary or actual)
+              false if the Field has value NOT NULL.
+  */
   bool is_real_null(my_ptrdiff_t row_offset= 0) const
-  { return real_maybe_null() ? MY_TEST(null_ptr[row_offset] & null_bit) : false; }
+  {
+    if (real_maybe_null())
+      return MY_TEST(m_null_ptr[row_offset] & null_bit);
 
+    if (is_tmp_nullable())
+      return m_is_tmp_null;
+
+    return false;
+  }
+
+  /**
+    Check if the Field has value NULL or the record specified by argument
+    has value NULL for this Field.
+
+    @return    true if the Field has value NULL or the record has value NULL
+               for thois Field.
+  */
   bool is_null_in_record(const uchar *record) const
-  { return real_maybe_null() ? MY_TEST(record[null_offset()] & null_bit) : false; }
-
-  void set_null(my_ptrdiff_t row_offset= 0)
   {
     if (real_maybe_null())
-      null_ptr[row_offset]|= null_bit;
+      return MY_TEST(record[null_offset()] & null_bit);
+
+    return is_tmp_nullable() ? m_is_tmp_null : false;
   }
 
-  void set_notnull(my_ptrdiff_t row_offset= 0)
-  {
-    if (real_maybe_null())
-      null_ptr[row_offset]&= (uchar) ~null_bit;
-  }
+  void set_null(my_ptrdiff_t row_offset= 0);
+
+  void set_notnull(my_ptrdiff_t row_offset= 0);
+
+  type_conversion_status check_constraints(int mysql_errno);
+
+  /**
+    Remember the value of THD::count_cuted_fields to handle possible
+    NOT-NULL constraint errors after BEFORE-trigger execution is finished.
+    We should save the value of THD::count_cuted_fields before starting
+    BEFORE-trigger processing since during triggers execution the
+    value of THD::count_cuted_fields could be changed.
+  */
+  void set_count_cuted_fields(enum_check_fields count_cuted_fields)
+  { m_count_cuted_fields_saved= count_cuted_fields; }
 
   bool maybe_null(void) const
-  { return real_maybe_null() || table->maybe_null; }
+  { return real_maybe_null() || table->is_nullable(); }
 
   /// @return true if this field is NULL-able, false otherwise.
   bool real_maybe_null(void) const
-  { return null_ptr != 0; }
+  { return m_null_ptr != NULL; }
 
   uint null_offset(const uchar *record) const
-  { return (uint) (null_ptr - record); }
+  { return (uint) (m_null_ptr - record); }
 
   uint null_offset() const
   { return null_offset(table->record[0]); }
 
   void set_null_ptr(uchar *p_null_ptr, uint p_null_bit)
   {
-    null_ptr= p_null_ptr;
+    m_null_ptr= p_null_ptr;
     null_bit= p_null_bit;
   }
 
@@ -969,7 +1175,7 @@ public:
 
     @param length Number of bytes to write.
   */
-  virtual void make_sort_key(uchar *buff, uint length) = 0;
+  virtual void make_sort_key(uchar *buff, size_t length) = 0;
   virtual bool optimize_range(uint idx, uint part);
   /*
     This should be true for fields which, when compared with constant
@@ -979,7 +1185,7 @@ public:
     'a_column BETWEEN date_const, date_const'.
   */
   virtual bool can_be_compared_as_longlong() const { return false; }
-  virtual void free() {}
+  virtual void mem_free() {}
   virtual Field *new_field(MEM_ROOT *root, TABLE *new_table,
                            bool keep_type);
   virtual Field *new_key_field(MEM_ROOT *root, TABLE *new_table,
@@ -987,7 +1193,7 @@ public:
                                uint new_null_bit);
 
   Field *new_key_field(MEM_ROOT *root, TABLE *new_table, uchar *new_ptr)
-  { return new_key_field(root, new_table, new_ptr, null_ptr, null_bit); }
+  { return new_key_field(root, new_table, new_ptr, m_null_ptr, null_bit); }
 
   /**
      Makes a shallow copy of the Field object.
@@ -1010,23 +1216,30 @@ public:
      @param mem_root MEM_ROOT to use for memory allocation.
      @retval NULL If memory allocation failed.
    */
-  virtual Field *clone(MEM_ROOT *mem_root) const =0;
-  inline void move_field(uchar *ptr_arg,uchar *null_ptr_arg,uchar null_bit_arg)
+  virtual Field *clone(MEM_ROOT *mem_root) const = 0;
+
+  void move_field(uchar *ptr_arg, uchar *null_ptr_arg, uchar null_bit_arg)
   {
-    ptr=ptr_arg; null_ptr=null_ptr_arg; null_bit=null_bit_arg;
+    ptr= ptr_arg;
+    m_null_ptr= null_ptr_arg;
+    null_bit= null_bit_arg;
   }
-  inline void move_field(uchar *ptr_arg) { ptr=ptr_arg; }
+
+  void move_field(uchar *ptr_arg)
+  { ptr= ptr_arg; }
+
   virtual void move_field_offset(my_ptrdiff_t ptr_diff)
   {
-    ptr=ADD_TO_PTR(ptr,ptr_diff, uchar*);
-    if (null_ptr)
-      null_ptr=ADD_TO_PTR(null_ptr,ptr_diff,uchar*);
+    ptr= ADD_TO_PTR(ptr, ptr_diff, uchar*);
+    if (real_maybe_null())
+      m_null_ptr= ADD_TO_PTR(m_null_ptr, ptr_diff, uchar*);
   }
-  virtual void get_image(uchar *buff, uint length, const CHARSET_INFO *cs)
-    { memcpy(buff,ptr,length); }
-  virtual void set_image(const uchar *buff,uint length,
-                         const CHARSET_INFO *cs)
-    { memcpy(ptr,buff,length); }
+
+  virtual void get_image(uchar *buff, size_t length, const CHARSET_INFO *cs)
+  { memcpy(buff, ptr, length); }
+
+  virtual void set_image(const uchar *buff, size_t length, const CHARSET_INFO *cs)
+  { memcpy(ptr, buff, length); }
 
 
   /*
@@ -1055,12 +1268,12 @@ public:
       Number of copied bytes (excluding padded zero bytes -- see above).
   */
 
-  virtual uint get_key_image(uchar *buff, uint length, imagetype type)
+  virtual size_t get_key_image(uchar *buff, size_t length, imagetype type)
   {
     get_image(buff, length, &my_charset_bin);
     return length;
   }
-  virtual void set_key_image(const uchar *buff,uint length)
+  virtual void set_key_image(const uchar *buff, size_t length)
     { set_image(buff,length, &my_charset_bin); }
   inline longlong val_int_offset(uint row_offset)
     {
@@ -1114,16 +1327,24 @@ public:
 
   virtual uint packed_col_length(const uchar *to, uint length)
   { return length;}
-  virtual uint max_packed_col_length(uint max_length)
-  { return max_length;}
+
+  /**
+    This is a wrapper around pack_length() used by filesort() to determine
+    how many bytes we need for packing "addon fields".
+    @returns maximum size of a row when stored in the filesort buffer.
+   */
+  virtual uint max_packed_col_length()
+  { return pack_length(); }
 
   uint offset(uchar *record)
   {
     return (uint) (ptr - record);
   }
-  void copy_from_tmp(int offset);
+
+  void copy_data(my_ptrdiff_t src_record_offset);
+
   uint fill_cache_field(struct st_cache_field *copy);
-  virtual bool get_date(MYSQL_TIME *ltime,uint fuzzydate);
+  virtual bool get_date(MYSQL_TIME *ltime, my_time_flags_t fuzzydate);
   virtual bool get_time(MYSQL_TIME *ltime);
   virtual const CHARSET_INFO *charset(void) const { return &my_charset_bin; }
   virtual const CHARSET_INFO *charset_for_protocol(void) const
@@ -1145,8 +1366,37 @@ public:
   { return DERIVATION_IMPLICIT; }
   virtual uint repertoire(void) const { return MY_REPERTOIRE_UNICODE30; }
   virtual void set_derivation(enum Derivation derivation_arg) { }
-  bool set_warning(Sql_condition::enum_warning_level, unsigned int code,
-                   int cuted_increment) const;
+
+  /**
+    Produce warning or note about data saved into field.
+
+    @param level            - level of message (Note/Warning/Error)
+    @param code             - error code of message to be produced
+    @param cut_increment    - whenever we should increase cut fields count
+
+    @note
+      This function won't produce warning and increase cut fields counter
+      if count_cuted_fields == CHECK_FIELD_IGNORE for current thread.
+
+      if count_cuted_fields == CHECK_FIELD_IGNORE then we ignore notes.
+      This allows us to avoid notes in optimization, like
+      convert_constant_item().
+
+    @retval
+      1 if count_cuted_fields == CHECK_FIELD_IGNORE and error level is not NOTE
+    @retval
+      0 otherwise
+  */
+  bool set_warning(Sql_condition::enum_severity_level level, unsigned int code,
+                   int cut_increment)
+  {
+    return set_warning(level, code, cut_increment, NULL, NULL);
+  }
+
+  bool set_warning(Sql_condition::enum_severity_level level, uint code,
+                   int cut_increment, const char *view_db,
+                   const char *view_name);
+
   inline bool check_overflow(int op_result)
   {
     return (op_result == E_DEC_OVERFLOW);
@@ -1182,7 +1432,7 @@ public:
     return field_length / charset()->mbmaxlen;
   }
 
-  virtual geometry_type get_geometry_type()
+  virtual geometry_type get_geometry_type() const
   {
     /* shouldn't get here. */
     DBUG_ASSERT(0);
@@ -1236,7 +1486,21 @@ public:
 
   /* Hash value */
   virtual void hash(ulong *nr, ulong *nr2);
-  friend int cre_myisam(char * name, register TABLE *form, uint options,
+
+  /**
+    Get the upper limit of the MySQL integral and floating-point type.
+
+    @return maximum allowed value for the field
+  */
+  virtual ulonglong get_max_int_value() const
+  {
+    DBUG_ASSERT(false);
+    return 0ULL;
+  }
+
+  /* Return pointer to the actual data in memory */
+  virtual void get_ptr(uchar **str) { *str= ptr; }
+  friend int cre_myisam(char * name, TABLE *form, uint options,
 			ulonglong auto_increment_value);
   friend class Copy_field;
   friend class Item_avg_field;
@@ -1288,7 +1552,7 @@ protected:
       val = sint2korr(from);
     else
 #endif
-      shortget(val, from);
+      shortget(&val, from);
 
 #ifdef WORDS_BIGENDIAN
     if (low_byte_first_to)
@@ -1333,7 +1597,7 @@ protected:
       val = sint4korr(from);
     else
 #endif
-      longget(val, from);
+      longget(&val, from);
 
 #ifdef WORDS_BIGENDIAN
     if (low_byte_first_to)
@@ -1355,7 +1619,7 @@ protected:
       val = sint8korr(from);
     else
 #endif
-      longlongget(val, from);
+      longlongget(&val, from);
 
 #ifdef WORDS_BIGENDIAN
     if (low_byte_first_to)
@@ -1440,7 +1704,7 @@ public:
   type_conversion_status store_decimal(const my_decimal *);
   type_conversion_status store_time(MYSQL_TIME *ltime, uint8 dec);
   my_decimal *val_decimal(my_decimal *);
-  bool get_date(MYSQL_TIME *ltime, uint fuzzydate);
+  bool get_date(MYSQL_TIME *ltime, my_time_flags_t fuzzydate);
   bool get_time(MYSQL_TIME *ltime);
   uint is_equal(Create_field *new_field);
   uint row_pack_length() const { return pack_length(); }
@@ -1451,10 +1715,10 @@ public:
     return length;
   }
   type_conversion_status check_int(const CHARSET_INFO *cs,
-                                   const char *str, int length,
+                                   const char *str, size_t length,
                                    const char *int_end, int error);
   type_conversion_status get_int(const CHARSET_INFO *cs,
-                                 const char *from, uint len,
+                                 const char *from, size_t len,
                                  longlong *rnd, ulonglong unsigned_max,
                                  longlong signed_min, longlong signed_max);
 };
@@ -1478,7 +1742,7 @@ public:
   type_conversion_status store(double nr);
   type_conversion_status store(longlong nr, bool unsigned_val)=0;
   type_conversion_status store_decimal(const my_decimal *);
-  type_conversion_status store(const char *to, uint length,
+  type_conversion_status store(const char *to, size_t length,
                                const CHARSET_INFO *cs)=0;
   uint repertoire(void) const
   {
@@ -1502,17 +1766,18 @@ public:
 
 class Field_longstr :public Field_str
 {
-protected:
+private:
   type_conversion_status report_if_important_data(const char *ptr,
                                                   const char *end,
-                                                  bool count_spaces) const;
+                                                  bool count_spaces);
+protected:
   type_conversion_status
     check_string_copy_error(const char *well_formed_error_pos,
                             const char *cannot_convert_error_pos,
                             const char *from_end_pos,
                             const char *end,
                             bool count_spaces,
-                            const CHARSET_INFO *cs) const;
+                            const CHARSET_INFO *cs);
 public:
   Field_longstr(uchar *ptr_arg, uint32 len_arg, uchar *null_ptr_arg,
                 uchar null_bit_arg, utype unireg_check_arg,
@@ -1541,7 +1806,7 @@ public:
   type_conversion_status store_decimal(const my_decimal *);
   type_conversion_status store_time(MYSQL_TIME *ltime, uint8 dec);
   my_decimal *val_decimal(my_decimal *);
-  bool get_date(MYSQL_TIME *ltime, uint fuzzydate);
+  bool get_date(MYSQL_TIME *ltime, my_time_flags_t fuzzydate);
   bool get_time(MYSQL_TIME *ltime);
   bool truncate(double *nr, double max_length);
   uint32 max_display_length() { return field_length; }
@@ -1566,7 +1831,7 @@ public:
   enum ha_base_keytype key_type() const
   { return zerofill ? HA_KEYTYPE_BINARY : HA_KEYTYPE_NUM; }
   type_conversion_status reset(void);
-  type_conversion_status store(const char *to, uint length,
+  type_conversion_status store(const char *to, size_t length,
                                const CHARSET_INFO *charset);
   type_conversion_status store(double nr);
   type_conversion_status store(longlong nr, bool unsigned_val);
@@ -1574,7 +1839,7 @@ public:
   longlong val_int(void);
   String *val_str(String*,String *);
   int cmp(const uchar *,const uchar *);
-  void make_sort_key(uchar *buff, uint length);
+  void make_sort_key(uchar *buff, size_t length);
   void overflow(bool negative);
   bool zero_pack() const { return 0; }
   void sql_type(String &str) const;
@@ -1627,7 +1892,7 @@ public:
   type_conversion_status reset(void);
   type_conversion_status store_value(const my_decimal *decimal_value);
   void set_value_on_overflow(my_decimal *decimal_value, bool sign);
-  type_conversion_status store(const char *to, uint length,
+  type_conversion_status store(const char *to, size_t length,
                                const CHARSET_INFO *charset);
   type_conversion_status store(double nr);
   type_conversion_status store(longlong nr, bool unsigned_val);
@@ -1636,11 +1901,11 @@ public:
   double val_real(void);
   longlong val_int(void);
   my_decimal *val_decimal(my_decimal *);
-  bool get_date(MYSQL_TIME *ltime, uint fuzzydate);
+  bool get_date(MYSQL_TIME *ltime, my_time_flags_t fuzzydate);
   bool get_time(MYSQL_TIME *ltime);
   String *val_str(String*, String *);
   int cmp(const uchar *, const uchar *);
-  void make_sort_key(uchar *buff, uint length);
+  void make_sort_key(uchar *buff, size_t length);
   bool zero_pack() const { return 0; }
   void sql_type(String &str) const;
   uint32 max_display_length() { return field_length; }
@@ -1678,7 +1943,7 @@ public:
   enum_field_types type() const { return MYSQL_TYPE_TINY;}
   enum ha_base_keytype key_type() const
     { return unsigned_flag ? HA_KEYTYPE_BINARY : HA_KEYTYPE_INT8; }
-  type_conversion_status store(const char *to, uint length,
+  type_conversion_status store(const char *to, size_t length,
                                const CHARSET_INFO *charset);
   type_conversion_status store(double nr);
   type_conversion_status store(longlong nr, bool unsigned_val);
@@ -1688,7 +1953,7 @@ public:
   String *val_str(String*,String *);
   bool send_binary(Protocol *protocol);
   int cmp(const uchar *,const uchar *);
-  void make_sort_key(uchar *buff, uint length);
+  void make_sort_key(uchar *buff, size_t length);
   uint32 pack_length() const { return 1; }
   void sql_type(String &str) const;
   uint32 max_display_length() { return 4; }
@@ -1713,6 +1978,11 @@ public:
     *to= *from;
     return from + 1;
   }
+
+  virtual ulonglong get_max_int_value() const
+  {
+    return unsigned_flag ? 0xFFULL : 0x7FULL;
+  }
 };
 
 
@@ -1735,7 +2005,7 @@ public:
   enum_field_types type() const { return MYSQL_TYPE_SHORT;}
   enum ha_base_keytype key_type() const
     { return unsigned_flag ? HA_KEYTYPE_USHORT_INT : HA_KEYTYPE_SHORT_INT;}
-  type_conversion_status store(const char *to, uint length,
+  type_conversion_status store(const char *to, size_t length,
                                const CHARSET_INFO *charset);
   type_conversion_status store(double nr);
   type_conversion_status store(longlong nr, bool unsigned_val);
@@ -1745,7 +2015,7 @@ public:
   String *val_str(String*,String *);
   bool send_binary(Protocol *protocol);
   int cmp(const uchar *,const uchar *);
-  void make_sort_key(uchar *buff, uint length);
+  void make_sort_key(uchar *buff, size_t length);
   uint32 pack_length() const { return 2; }
   void sql_type(String &str) const;
   uint32 max_display_length() { return 6; }
@@ -1768,6 +2038,11 @@ public:
   {
     return unpack_int16(to, from, low_byte_first);
   }
+
+  virtual ulonglong get_max_int_value() const
+  {
+    return unsigned_flag ? 0xFFFFULL : 0x7FFFULL;
+  }
 };
 
 class Field_medium :public Field_num {
@@ -1784,7 +2059,7 @@ public:
   enum_field_types type() const { return MYSQL_TYPE_INT24;}
   enum ha_base_keytype key_type() const
     { return unsigned_flag ? HA_KEYTYPE_UINT24 : HA_KEYTYPE_INT24; }
-  type_conversion_status store(const char *to, uint length,
+  type_conversion_status store(const char *to, size_t length,
                                const CHARSET_INFO *charset);
   type_conversion_status store(double nr);
   type_conversion_status store(longlong nr, bool unsigned_val);
@@ -1798,7 +2073,7 @@ public:
   String *val_str(String*,String *);
   bool send_binary(Protocol *protocol);
   int cmp(const uchar *,const uchar *);
-  void make_sort_key(uchar *buff, uint length);
+  void make_sort_key(uchar *buff, size_t length);
   uint32 pack_length() const { return 3; }
   void sql_type(String &str) const;
   uint32 max_display_length() { return 8; }
@@ -1820,6 +2095,11 @@ public:
                               uint param_data, bool low_byte_first)
   {
     return Field::unpack(to, from, param_data, low_byte_first);
+  }
+
+  virtual ulonglong get_max_int_value() const
+  {
+    return unsigned_flag ? 0xFFFFFFULL : 0x7FFFFFULL;
   }
 };
 
@@ -1846,7 +2126,7 @@ public:
   enum_field_types type() const { return MYSQL_TYPE_LONG;}
   enum ha_base_keytype key_type() const
     { return unsigned_flag ? HA_KEYTYPE_ULONG_INT : HA_KEYTYPE_LONG_INT; }
-  type_conversion_status store(const char *to, uint length,
+  type_conversion_status store(const char *to, size_t length,
                                const CHARSET_INFO *charset);
   type_conversion_status store(double nr);
   type_conversion_status store(longlong nr, bool unsigned_val);
@@ -1860,7 +2140,7 @@ public:
   bool send_binary(Protocol *protocol);
   String *val_str(String*,String *);
   int cmp(const uchar *,const uchar *);
-  void make_sort_key(uchar *buff, uint length);
+  void make_sort_key(uchar *buff, size_t length);
   uint32 pack_length() const { return PACK_LENGTH; }
   void sql_type(String &str) const;
   uint32 max_display_length() { return MY_INT32_NUM_DECIMAL_DIGITS; }
@@ -1884,10 +2164,14 @@ public:
   {
     return unpack_int32(to, from, low_byte_first);
   }
+
+  virtual ulonglong get_max_int_value() const
+  {
+    return unsigned_flag ? 0xFFFFFFFFULL : 0x7FFFFFFFULL;
+  }
 };
 
 
-#ifdef HAVE_LONG_LONG
 class Field_longlong :public Field_num {
 public:
   static const int PACK_LENGTH= 8;
@@ -1910,7 +2194,7 @@ public:
   enum_field_types type() const { return MYSQL_TYPE_LONGLONG;}
   enum ha_base_keytype key_type() const
     { return unsigned_flag ? HA_KEYTYPE_ULONGLONG : HA_KEYTYPE_LONGLONG; }
-  type_conversion_status store(const char *to, uint length,
+  type_conversion_status store(const char *to, size_t length,
                                const CHARSET_INFO *charset);
   type_conversion_status store(double nr);
   type_conversion_status store(longlong nr, bool unsigned_val);
@@ -1924,7 +2208,7 @@ public:
   String *val_str(String*,String *);
   bool send_binary(Protocol *protocol);
   int cmp(const uchar *,const uchar *);
-  void make_sort_key(uchar *buff, uint length);
+  void make_sort_key(uchar *buff, size_t length);
   uint32 pack_length() const { return PACK_LENGTH; }
   void sql_type(String &str) const;
   bool can_be_compared_as_longlong() const { return true; }
@@ -1949,8 +2233,12 @@ public:
   {
     return unpack_int64(to, from, low_byte_first);
   }
+
+  virtual ulonglong get_max_int_value() const
+  {
+    return unsigned_flag ? 0xFFFFFFFFFFFFFFFFULL : 0x7FFFFFFFFFFFFFFFULL;
+  }
 };
-#endif
 
 
 class Field_float :public Field_real {
@@ -1970,7 +2258,7 @@ public:
     {}
   enum_field_types type() const { return MYSQL_TYPE_FLOAT;}
   enum ha_base_keytype key_type() const { return HA_KEYTYPE_FLOAT; }
-  type_conversion_status store(const char *to, uint length,
+  type_conversion_status store(const char *to, size_t length,
                                const CHARSET_INFO *charset);
   type_conversion_status store(double nr);
   type_conversion_status store(longlong nr, bool unsigned_val);
@@ -1984,7 +2272,7 @@ public:
   String *val_str(String*,String *);
   bool send_binary(Protocol *protocol);
   int cmp(const uchar *,const uchar *);
-  void make_sort_key(uchar *buff, uint length);
+  void make_sort_key(uchar *buff, size_t length);
   uint32 pack_length() const { return sizeof(float); }
   uint row_pack_length() const { return pack_length(); }
   void sql_type(String &str) const;
@@ -1996,6 +2284,15 @@ public:
     DBUG_ASSERT(type() == MYSQL_TYPE_FLOAT);
     return new Field_float(*this);
   }
+
+  virtual ulonglong get_max_int_value() const
+  {
+    /*
+      We use the maximum as per IEEE754-2008 standard, 2^24
+    */
+    return 0x1000000ULL;
+  }
+
 private:
   int do_save_field_metadata(uchar *first_byte);
 };
@@ -2023,7 +2320,7 @@ public:
     {not_fixed= not_fixed_arg; }
   enum_field_types type() const { return MYSQL_TYPE_DOUBLE;}
   enum ha_base_keytype key_type() const { return HA_KEYTYPE_DOUBLE; }
-  type_conversion_status store(const char *to, uint length,
+  type_conversion_status store(const char *to, size_t length,
                                const CHARSET_INFO *charset);
   type_conversion_status store(double nr);
   type_conversion_status store(longlong nr, bool unsigned_val);
@@ -2037,7 +2334,7 @@ public:
   String *val_str(String*,String *);
   bool send_binary(Protocol *protocol);
   int cmp(const uchar *,const uchar *);
-  void make_sort_key(uchar *buff, uint length);
+  void make_sort_key(uchar *buff, size_t length);
   uint32 pack_length() const { return sizeof(double); }
   uint row_pack_length() const { return pack_length(); }
   void sql_type(String &str) const;
@@ -2049,6 +2346,15 @@ public:
     DBUG_ASSERT(type() == MYSQL_TYPE_DOUBLE);
     return new Field_double(*this);
   }
+
+  virtual ulonglong get_max_int_value() const
+  {
+    /*
+      We use the maximum as per IEEE754-2008 standard, 2^53
+    */
+    return 0x20000000000000ULL;
+  }
+
 private:
   int do_save_field_metadata(uchar *first_byte);
 };
@@ -2066,7 +2372,7 @@ public:
 	       unireg_check_arg, field_name_arg, cs)
     {}
   enum_field_types type() const { return MYSQL_TYPE_NULL;}
-  type_conversion_status store(const char *to, uint length,
+  type_conversion_status store(const char *to, size_t length,
                                const CHARSET_INFO *cs)
   {
     null[0]= 1;
@@ -2090,7 +2396,7 @@ public:
   String *val_str(String *value,String *value2)
   { value2->length(0); return value2;}
   int cmp(const uchar *a, const uchar *b) { return 0;}
-  void make_sort_key(uchar *buff, uint length)  {}
+  void make_sort_key(uchar *buff, size_t length)  {}
   uint32 pack_length() const { return 0; }
   void sql_type(String &str) const;
   uint32 max_display_length() { return 4; }
@@ -2124,8 +2430,8 @@ protected:
     The value must be already properly rounded or truncated
     and checked for being a valid TIME/DATE/DATETIME value.
 
-    @param IN   ltime   MYSQL_TIME value.
-    @param OUT  error   Error flag vector, set in case of error.
+    @param[in]  ltime   MYSQL_TIME value.
+    @param[out] error   Error flag vector, set in case of error.
     @retval     false   In case of success.
     @retval     true    In case of error.
   */
@@ -2136,8 +2442,8 @@ protected:
     Low level routine to store a MYSQL_TIME value into a field
     with rounding according to the field decimals() value.
 
-    @param IN   ltime   MYSQL_TIME value.
-    @param OUT  error   Error flag vector, set in case of error.
+    @param[in]  ltime   MYSQL_TIME value.
+    @param[out] error   Error flag vector, set in case of error.
     @retval     false   In case of success.
     @retval     true    In case of error.    
   */
@@ -2148,8 +2454,8 @@ protected:
     Store a temporal value in lldiv_t into a field,
     with rounding according to the field decimals() value.
 
-    @param IN   lld     Temporal value.
-    @param OUT  warning Warning flag vector.
+    @param[in]  lld     Temporal value.
+    @param[out] warning Warning flag vector.
     @retval     false   In case of success.
     @retval     true    In case of error.    
   */
@@ -2158,15 +2464,15 @@ protected:
   /**
     Convert a string to MYSQL_TIME, according to the field type.
 
-    @param IN   str     String
-    @param IN   len     String length
-    @param IN   cs      String character set
-    @param OUT  ltime   The value is stored here
-    @param OUT  status  Conversion status
+    @param[in]  str     String
+    @param[in]  len     String length
+    @param[in]  cs      String character set
+    @param[out] ltime   The value is stored here
+    @param[out] status  Conversion status
     @retval     false   Conversion went fine, ltime contains a valid time
     @retval     true    Conversion failed, ltime was reset and contains nothing
   */
-  virtual bool convert_str_to_TIME(const char *str, uint len,
+  virtual bool convert_str_to_TIME(const char *str, size_t len,
                                    const CHARSET_INFO *cs,
                                    MYSQL_TIME *ltime, 
                                    MYSQL_TIME_STATUS *status)= 0;
@@ -2175,11 +2481,11 @@ protected:
     into MYSQL_TIME, according to the field type. Nanoseconds
     are rounded to milliseconds and added to ltime->second_part.
 
-    @param IN   nr            Number
-    @param IN   unsigned_val  SIGNED/UNSIGNED flag
-    @param IN   nanoseconds   Fractional part in nanoseconds
-    @param OUT  ltime         The value is stored here
-    @param OUT  status        Conversion status
+    @param[in]  nr            Number
+    @param[in]  unsigned_val  SIGNED/UNSIGNED flag
+    @param[in]  nanoseconds   Fractional part in nanoseconds
+    @param[out] ltime         The value is stored here
+    @param[out] status        Conversion status
     @retval     false         On success
     @retval     true          On error
   */
@@ -2192,9 +2498,9 @@ protected:
   /**
     Convert an integer number into MYSQL_TIME, according to the field type.
 
-    @param IN   nr            Number
-    @param IN   unsigned_val  SIGNED/UNSIGNED flag
-    @param OUT  ltime         The value is stored here
+    @param[in]  nr            Number
+    @param[in]  unsigned_val  SIGNED/UNSIGNED flag
+    @param[out] ltime         The value is stored here
     @retval     false         On success
     @retval     true          On error
   */
@@ -2217,7 +2523,7 @@ protected:
     check_date(), number_to_datetime(), str_to_datetime().
 
     Flags depend on the session sql_mode settings, such as
-    MODE_NO_ZERO_DATE, MODE_NO_ZERO_IN_DATE.
+    MODE_STRICT_ALL_TABLES, MODE_STRICT_TRANS_TABLES.
     Also, Field_newdate, Field_datetime, Field_datetimef add TIME_FUZZY_DATE
     to the session sql_mode settings, to allow relaxed date format,
     while Field_timestamp, Field_timestampf do not.
@@ -2225,7 +2531,7 @@ protected:
     @param  thd  THD
     @retval      sql_mode flags mixed with the field type flags.
   */
-  virtual ulonglong date_flags(const THD *thd)
+  virtual my_time_flags_t date_flags(const THD *thd)
   {
     return 0;
   }
@@ -2234,7 +2540,7 @@ protected:
     check_date(), number_to_datetime(), str_to_datetime().
     Similar to the above when we don't have a THD value.
   */
-  inline ulonglong date_flags()
+  my_time_flags_t date_flags()
   {
     return date_flags(table ? table->in_use : current_thd);
   }
@@ -2242,13 +2548,13 @@ protected:
   /**
     Set a single warning using make_truncated_value_warning().
     
-    @param IN  level           Warning level (error, warning, note)
-    @param IN  code            Warning code
-    @param IN  str             Warning parameter
-    @param IN  ts_type         Timestamp type (time, date, datetime, none)
-    @param IN  cuted_inctement Incrementing of cut field counter
+    @param[in] level           Warning level (error, warning, note)
+    @param[in] code            Warning code
+    @param[in] str             Warning parameter
+    @param[in] ts_type         Timestamp type (time, date, datetime, none)
+    @param[in] cuted_inctement Incrementing of cut field counter
   */
-  void set_datetime_warning(Sql_condition::enum_warning_level level, uint code,
+  void set_datetime_warning(Sql_condition::enum_severity_level level, uint code,
                             ErrConvString str,
                             timestamp_type ts_type, int cuted_increment);
 public:
@@ -2299,7 +2605,7 @@ public:
   const CHARSET_INFO *charset() const { return &my_charset_numeric; }
   bool can_be_compared_as_longlong() const { return true; }
   bool binary() const { return true; }
-  type_conversion_status store(const char *str, uint len,
+  type_conversion_status store(const char *str, size_t len,
                                const CHARSET_INFO *cs);
   type_conversion_status store_decimal(const my_decimal *decimal);
   type_conversion_status store(longlong nr, bool unsigned_val);
@@ -2330,13 +2636,13 @@ protected:
     @retval   True on error: we get a zero value but flags disallow zero dates.
     @retval   False on success.
   */
-  bool get_internal_check_zero(MYSQL_TIME *ltime, uint fuzzydate);
+  bool get_internal_check_zero(MYSQL_TIME *ltime, my_time_flags_t fuzzydate);
   
   type_conversion_status convert_number_to_TIME(longlong nr, bool unsigned_val,
                                                 int nanoseconds,
                                                 MYSQL_TIME *ltime,
                                                 int *warning);
-  bool convert_str_to_TIME(const char *str, uint len, const CHARSET_INFO *cs,
+  bool convert_str_to_TIME(const char *str, size_t len, const CHARSET_INFO *cs,
                            MYSQL_TIME *ltime, MYSQL_TIME_STATUS *status);
   type_conversion_status store_internal_with_round(MYSQL_TIME *ltime,
                                                    int *warnings);
@@ -2489,7 +2795,7 @@ public:
 
   uint decimals() const { return dec; }
   const CHARSET_INFO *sort_charset() const { return &my_charset_bin; }
-  void make_sort_key(uchar *to, uint length) { memcpy(to, ptr, length); }
+  void make_sort_key(uchar *to, size_t length) { memcpy(to, ptr, length); }
   int cmp(const uchar *a_ptr, const uchar *b_ptr)
   {
     return memcmp(a_ptr, b_ptr, pack_length());
@@ -2507,7 +2813,7 @@ public:
 */
 class Field_timestamp :public Field_temporal_with_date_and_time {
 protected:
-  ulonglong date_flags(const THD *thd);
+  my_time_flags_t date_flags(const THD *thd);
   type_conversion_status store_internal(const MYSQL_TIME *ltime, int *error);
   bool get_date_internal(MYSQL_TIME *ltime);
   void store_timestamp_internal(const struct timeval *tm);
@@ -2527,13 +2833,13 @@ public:
   }
   longlong val_int(void);
   int cmp(const uchar *,const uchar *);
-  void make_sort_key(uchar *buff, uint length);
+  void make_sort_key(uchar *buff, size_t length);
   uint32 pack_length() const { return PACK_LENGTH; }
   void sql_type(String &str) const;
   bool zero_pack() const { return 0; }
   /* Get TIMESTAMP field value as seconds since begging of Unix Epoch */
   bool get_timestamp(struct timeval *tm, int *warnings);
-  bool get_date(MYSQL_TIME *ltime,uint fuzzydate);
+  bool get_date(MYSQL_TIME *ltime, my_time_flags_t fuzzydate);
   Field_timestamp *clone(MEM_ROOT *mem_root) const {
     DBUG_ASSERT(type() == MYSQL_TYPE_TIMESTAMP);
     return new (mem_root) Field_timestamp(*this);
@@ -2566,7 +2872,7 @@ class Field_timestampf :public Field_temporal_with_date_and_timef {
 protected:
   bool get_date_internal(MYSQL_TIME *ltime);
   type_conversion_status store_internal(const MYSQL_TIME *ltime, int *error);
-  ulonglong date_flags(const THD *thd);
+  my_time_flags_t date_flags(const THD *thd);
   void store_timestamp_internal(const struct timeval *tm);
 public:
   static const int PACK_LENGTH= 8;
@@ -2620,7 +2926,7 @@ public:
 
   type_conversion_status reset();
   type_conversion_status store_packed(longlong nr);
-  bool get_date(MYSQL_TIME *ltime, uint fuzzydate);
+  bool get_date(MYSQL_TIME *ltime, my_time_flags_t fuzzydate);
   void sql_type(String &str) const;
 
   bool get_timestamp(struct timeval *tm, int *warnings);
@@ -2638,7 +2944,7 @@ public:
 		unireg_check_arg, field_name_arg, 1, 1)
     {}
   enum_field_types type() const { return MYSQL_TYPE_YEAR;}
-  type_conversion_status store(const char *to,uint length,
+  type_conversion_status store(const char *to, size_t length,
                                const CHARSET_INFO *charset);
   type_conversion_status store(double nr);
   type_conversion_status store(longlong nr, bool unsigned_val);
@@ -2663,7 +2969,7 @@ public:
 class Field_newdate :public Field_temporal_with_date {
 protected:
   static const int PACK_LENGTH= 3;
-  ulonglong date_flags(const THD *thd);
+  my_time_flags_t date_flags(const THD *thd);
   bool get_date_internal(MYSQL_TIME *ltime);
   type_conversion_status store_internal(const MYSQL_TIME *ltime, int *error);
 
@@ -2693,11 +2999,11 @@ public:
   String *val_str(String*,String *);
   bool send_binary(Protocol *protocol);
   int cmp(const uchar *,const uchar *);
-  void make_sort_key(uchar *buff, uint length);
+  void make_sort_key(uchar *buff, size_t length);
   uint32 pack_length() const { return PACK_LENGTH; }
   void sql_type(String &str) const;
   bool zero_pack() const { return 1; }
-  bool get_date(MYSQL_TIME *ltime,uint fuzzydate);
+  bool get_date(MYSQL_TIME *ltime, my_time_flags_t fuzzydate);
   Field_newdate *clone(MEM_ROOT *mem_root) const
   {
     DBUG_ASSERT(type() == MYSQL_TYPE_DATE);
@@ -2718,7 +3024,7 @@ public:
 */
 class Field_time_common :public Field_temporal {
 protected:
-  bool convert_str_to_TIME(const char *str, uint len, const CHARSET_INFO *cs,
+  bool convert_str_to_TIME(const char *str, size_t len, const CHARSET_INFO *cs,
                            MYSQL_TIME *ltime, MYSQL_TIME_STATUS *status);
   /**
     @todo: convert_number_to_TIME returns conversion status through
@@ -2771,7 +3077,7 @@ public:
     { }
   type_conversion_status store_time(MYSQL_TIME *ltime, uint8 dec);
   String *val_str(String*, String *);
-  bool get_date(MYSQL_TIME *ltime, uint fuzzydate);
+  bool get_date(MYSQL_TIME *ltime, my_time_flags_t fuzzydate);
   longlong val_date_temporal();
   bool send_binary(Protocol *protocol);
 };
@@ -2806,7 +3112,7 @@ public:
   longlong val_time_temporal();
   bool get_time(MYSQL_TIME *ltime);
   int cmp(const uchar *,const uchar *);
-  void make_sort_key(uchar *buff, uint length);
+  void make_sort_key(uchar *buff, size_t length);
   uint32 pack_length() const { return 3; }
   void sql_type(String &str) const;
   bool zero_pack() const { return 1; }
@@ -2894,7 +3200,7 @@ public:
   void sql_type(String &str) const;
   bool zero_pack() const { return 1; }
   const CHARSET_INFO *sort_charset(void) const { return &my_charset_bin; }
-  void make_sort_key(uchar *to, uint length) { memcpy(to, ptr, length); }
+  void make_sort_key(uchar *to, size_t length) { memcpy(to, ptr, length); }
   int cmp(const uchar *a_ptr, const uchar *b_ptr)
   {
     return memcmp(a_ptr, b_ptr, pack_length());
@@ -2910,7 +3216,7 @@ class Field_datetime :public Field_temporal_with_date_and_time {
 protected:
   type_conversion_status store_internal(const MYSQL_TIME *ltime, int *error);
   bool get_date_internal(MYSQL_TIME *ltime);
-  ulonglong date_flags(const THD *thd);
+  my_time_flags_t date_flags(const THD *thd);
   void store_timestamp_internal(const struct timeval *tm);
 
 public:
@@ -2952,9 +3258,7 @@ public:
                                        0, NONE, field_name_arg, 0)
     {}
   enum_field_types type() const { return MYSQL_TYPE_DATETIME;}
-#ifdef HAVE_LONG_LONG
   enum ha_base_keytype key_type() const { return HA_KEYTYPE_ULONGLONG; }
-#endif
   using Field_temporal_with_date_and_time::store; // Make -Woverloaded-virtual
   type_conversion_status store(longlong nr, bool unsigned_val);
   type_conversion_status store_packed(longlong nr);
@@ -2966,11 +3270,11 @@ public:
   longlong val_int(void);
   String *val_str(String*,String *);
   int cmp(const uchar *,const uchar *);
-  void make_sort_key(uchar *buff, uint length);
+  void make_sort_key(uchar *buff, size_t length);
   uint32 pack_length() const { return PACK_LENGTH; }
   void sql_type(String &str) const;
   bool zero_pack() const { return 1; }
-  bool get_date(MYSQL_TIME *ltime,uint fuzzydate);
+  bool get_date(MYSQL_TIME *ltime, my_time_flags_t fuzzydate);
   Field_datetime *clone(MEM_ROOT *mem_root) const
   {
     DBUG_ASSERT(type() == MYSQL_TYPE_DATETIME);
@@ -3002,7 +3306,7 @@ class Field_datetimef :public Field_temporal_with_date_and_timef {
 protected:
   bool get_date_internal(MYSQL_TIME *ltime);
   type_conversion_status store_internal(const MYSQL_TIME *ltime, int *error);
-  ulonglong date_flags(const THD *thd);
+  my_time_flags_t date_flags(const THD *thd);
   void store_timestamp_internal(const struct timeval *tm);
 
 public:
@@ -3064,7 +3368,7 @@ public:
   type_conversion_status store_packed(longlong nr);
   type_conversion_status reset();
   longlong val_date_temporal();
-  bool get_date(MYSQL_TIME *ltime, uint fuzzydate);
+  bool get_date(MYSQL_TIME *ltime, my_time_flags_t fuzzydate);
   void sql_type(String &str) const;
 };
 
@@ -3087,10 +3391,10 @@ public:
 
   enum_field_types type() const
   {
-    return ((can_alter_field_type && orig_table &&
-             orig_table->s->db_create_options & HA_OPTION_PACK_RECORD &&
+    return ((can_alter_field_type && table && table->s &&
+             table->s->db_create_options & HA_OPTION_PACK_RECORD &&
 	     field_length >= 4) &&
-            orig_table->s->frm_version < FRM_VER_TRUE_VARCHAR ?
+            table->s->frm_version < FRM_VER_TRUE_VARCHAR ?
 	    MYSQL_TYPE_VAR_STRING : MYSQL_TYPE_STRING);
   }
   bool match_collation_to_optimize_range() const { return true; }
@@ -3103,7 +3407,7 @@ public:
                           (has_charset() ? ' ' : 0));
     return TYPE_OK;
   }
-  type_conversion_status store(const char *to,uint length,
+  type_conversion_status store(const char *to, size_t length,
                                const CHARSET_INFO *charset);
   type_conversion_status store(longlong nr, bool unsigned_val);
   /* QQ: To be deleted */
@@ -3113,7 +3417,7 @@ public:
   String *val_str(String*,String *);
   my_decimal *val_decimal(my_decimal *);
   int cmp(const uchar *,const uchar *);
-  void make_sort_key(uchar *buff, uint length);
+  void make_sort_key(uchar *buff, size_t length);
   void sql_type(String &str) const;
   virtual uchar *pack(uchar *to, const uchar *from,
                       uint max_length, bool low_byte_first);
@@ -3133,7 +3437,7 @@ public:
                my_bool insert_or_update);
   int pack_cmp(const uchar *b,uint key_length,my_bool insert_or_update);
   uint packed_col_length(const uchar *to, uint length);
-  uint max_packed_col_length(uint max_length);
+  uint max_packed_col_length();
   enum_field_types real_type() const { return MYSQL_TYPE_STRING; }
   bool has_charset(void) const
   { return charset() == &my_charset_bin ? FALSE : TRUE; }
@@ -3146,7 +3450,8 @@ public:
     DBUG_ASSERT(real_type() == MYSQL_TYPE_STRING);
     return new Field_string(*this);
   }
-  virtual uint get_key_image(uchar *buff,uint length, imagetype type);
+  virtual size_t get_key_image(uchar *buff, size_t length, imagetype type);
+  virtual bool is_text_key_type() const { return binary() ? false : true; }
 private:
   int do_save_field_metadata(uchar *first_byte);
 };
@@ -3199,7 +3504,7 @@ public:
     return (uint32) field_length + (field_charset == &my_charset_bin ?
                                     length_bytes : 0);
   }
-  type_conversion_status store(const char *to,uint length,
+  type_conversion_status store(const char *to, size_t length,
                                const CHARSET_INFO *charset);
   type_conversion_status store(longlong nr, bool unsigned_val);
   /* QQ: To be deleted */
@@ -3213,9 +3518,9 @@ public:
   {
     return cmp_max(a, b, ~0L);
   }
-  void make_sort_key(uchar *buff, uint length);
-  uint get_key_image(uchar *buff,uint length, imagetype type);
-  void set_key_image(const uchar *buff,uint length);
+  void make_sort_key(uchar *buff, size_t length);
+  size_t get_key_image(uchar *buff, size_t length, imagetype type);
+  void set_key_image(const uchar *buff, size_t length);
   void sql_type(String &str) const;
   virtual uchar *pack(uchar *to, const uchar *from,
                       uint max_length, bool low_byte_first);
@@ -3225,8 +3530,8 @@ public:
   int key_cmp(const uchar *,const uchar*);
   int key_cmp(const uchar *str, uint length);
   uint packed_col_length(const uchar *to, uint length);
-  uint max_packed_col_length(uint max_length);
-  uint32 data_length();
+
+  uint32 data_length(uint row_offset= 0);
   enum_field_types real_type() const { return MYSQL_TYPE_VARCHAR; }
   bool has_charset(void) const
   { return charset() == &my_charset_bin ? FALSE : TRUE; }
@@ -3246,20 +3551,25 @@ public:
   }
   uint is_equal(Create_field *new_field);
   void hash(ulong *nr, ulong *nr2);
+  void get_ptr(uchar **str)
+  {
+    *str= ptr + length_bytes;
+  }
+  virtual bool is_text_key_type() const { return binary() ? false : true; }
 private:
   int do_save_field_metadata(uchar *first_byte);
 };
 
 
 class Field_blob :public Field_longstr {
-  virtual type_conversion_status store_internal(const char *from, uint length,
+  virtual type_conversion_status store_internal(const char *from, size_t length,
                                                 const CHARSET_INFO *cs);
   /**
     Copy value to memory storage.
   */
-  type_conversion_status store_to_mem(const char *from, uint length,
+  type_conversion_status store_to_mem(const char *from, size_t length,
                                       const CHARSET_INFO *cs,
-                                      uint max_length,
+                                      size_t max_length,
                                       Blob_mem_storage *blob_storage);
 protected:
   /**
@@ -3278,7 +3588,7 @@ protected:
   void store_ptr_and_length(const char *from, uint32 length)
   {
     store_length(length);
-    bmove(ptr + packlength, &from, sizeof(char *));
+    memmove(ptr + packlength, &from, sizeof(char *));
   }
   
 public:
@@ -3316,7 +3626,7 @@ public:
   bool match_collation_to_optimize_range() const { return true; }
   enum ha_base_keytype key_type() const
     { return binary() ? HA_KEYTYPE_VARBINARY2 : HA_KEYTYPE_VARTEXT2; }
-  type_conversion_status store(const char *to, uint length,
+  type_conversion_status store(const char *to, size_t length,
                                const CHARSET_INFO *charset);
   type_conversion_status store(double nr);
   type_conversion_status store(longlong nr, bool unsigned_val);
@@ -3332,7 +3642,7 @@ public:
   int key_cmp(const uchar *,const uchar*);
   int key_cmp(const uchar *str, uint length);
   uint32 key_length() const { return 0; }
-  void make_sort_key(uchar *buff, uint length);
+  void make_sort_key(uchar *buff, size_t length);
   uint32 pack_length() const
   { return (uint32) (packlength + portable_sizeof_char_ptr); }
 
@@ -3358,7 +3668,7 @@ public:
     return TYPE_OK;
   }
   void reset_fields() { memset(&value, 0, sizeof(value)); }
-  uint32 get_field_buffer_size(void) { return value.alloced_length(); }
+  size_t get_field_buffer_size() { return value.alloced_length(); }
 #ifndef WORDS_BIGENDIAN
   static
 #endif
@@ -3371,6 +3681,7 @@ public:
   {
     store_length(ptr, packlength, number);
   }
+  uint32 data_length(uint row_offset= 0) { return get_length(row_offset); }
   inline uint32 get_length(uint row_offset= 0)
   { return get_length(ptr+row_offset, this->packlength, table->s->db_low_byte_first); }
   uint32 get_length(const uchar *ptr, uint packlength, bool low_byte_first);
@@ -3400,8 +3711,8 @@ public:
     {
       set_ptr_offset(0, length, data);
     }
-  uint get_key_image(uchar *buff,uint length, imagetype type);
-  void set_key_image(const uchar *buff,uint length);
+  size_t get_key_image(uchar *buff, size_t length, imagetype type);
+  void set_key_image(const uchar *buff, size_t length);
   void sql_type(String &str) const;
   inline bool copy()
   {
@@ -3410,6 +3721,7 @@ public:
     if (value.copy((char*) tmp, get_length(), charset()))
     {
       Field_blob::reset();
+      my_error(ER_OUTOFMEMORY, MYF(ME_FATALERROR), get_length());
       return 1;
     }
     tmp=(uchar*) value.ptr();
@@ -3429,8 +3741,8 @@ public:
   virtual const uchar *unpack(uchar *to, const uchar *from,
                               uint param_data, bool low_byte_first);
   uint packed_col_length(const uchar *col_ptr, uint length);
-  uint max_packed_col_length(uint max_length);
-  void free() { value.free(); }
+  uint max_packed_col_length();
+  void mem_free() { value.mem_free(); }
   inline void clear_temporary() { memset(&value, 0, sizeof(value)); }
   friend type_conversion_status field_conv(Field *to,Field *from);
   bool has_charset(void) const
@@ -3440,14 +3752,14 @@ public:
   uint is_equal(Create_field *new_field);
   inline bool in_read_set() { return bitmap_is_set(table->read_set, field_index); }
   inline bool in_write_set() { return bitmap_is_set(table->write_set, field_index); }
+  virtual bool is_text_key_type() const { return binary() ? false : true; }
 private:
   int do_save_field_metadata(uchar *first_byte);
 };
 
 
-#ifdef HAVE_SPATIAL
 class Field_geom :public Field_blob {
-  virtual type_conversion_status store_internal(const char *from, uint length,
+  virtual type_conversion_status store_internal(const char *from, size_t length,
                                                 const CHARSET_INFO *cs);
 public:
   enum geometry_type geom_type;
@@ -3484,18 +3796,17 @@ public:
     return maybe_null() ? TYPE_OK : TYPE_ERR_NULL_CONSTRAINT_VIOLATION;
   }
 
-  geometry_type get_geometry_type() { return geom_type; };
+  geometry_type get_geometry_type() const { return geom_type; };
   Field_geom *clone(MEM_ROOT *mem_root) const {
     DBUG_ASSERT(type() == MYSQL_TYPE_GEOMETRY);
     return new (mem_root) Field_geom(*this);
   }
-  Field_geom *clone() const { 
+  Field_geom *clone() const {
     DBUG_ASSERT(type() == MYSQL_TYPE_GEOMETRY);
     return new Field_geom(*this);
   }
   uint is_equal(Create_field *new_field);
 };
-#endif /*HAVE_SPATIAL*/
 
 
 class Field_enum :public Field_str {
@@ -3521,7 +3832,7 @@ public:
   enum Item_result cmp_type () const { return INT_RESULT; }
   enum Item_result cast_to_int_type () const { return INT_RESULT; }
   enum ha_base_keytype key_type() const;
-  type_conversion_status store(const char *to,uint length,
+  type_conversion_status store(const char *to, size_t length,
                                const CHARSET_INFO *charset);
   type_conversion_status store(double nr);
   type_conversion_status store(longlong nr, bool unsigned_val);
@@ -3530,7 +3841,7 @@ public:
   longlong val_int(void);
   String *val_str(String*,String *);
   int cmp(const uchar *,const uchar *);
-  void make_sort_key(uchar *buff, uint length);
+  void make_sort_key(uchar *buff, size_t length);
   uint32 pack_length() const { return (uint32) packlength; }
   void store_type(ulonglong value);
   void sql_type(String &str) const;
@@ -3566,19 +3877,19 @@ private:
 class Field_set :public Field_enum {
 public:
   Field_set(uchar *ptr_arg, uint32 len_arg, uchar *null_ptr_arg,
-	    uchar null_bit_arg,
-	    enum utype unireg_check_arg, const char *field_name_arg,
-	    uint32 packlength_arg,
-	    TYPELIB *typelib_arg, const CHARSET_INFO *charset_arg)
+            uchar null_bit_arg,
+            enum utype unireg_check_arg, const char *field_name_arg,
+            uint32 packlength_arg,
+            TYPELIB *typelib_arg, const CHARSET_INFO *charset_arg)
     :Field_enum(ptr_arg, len_arg, null_ptr_arg, null_bit_arg,
-		    unireg_check_arg, field_name_arg,
+                unireg_check_arg, field_name_arg,
                 packlength_arg,
                 typelib_arg,charset_arg),
-      empty_set_string("", 0, charset_arg)
-    {
-      flags= (flags & ~ENUM_FLAG) | SET_FLAG;
-    }
-  type_conversion_status store(const char *to, uint length,
+     empty_set_string("", 0, charset_arg)
+  {
+    flags= (flags & ~ENUM_FLAG) | SET_FLAG;
+  }
+  type_conversion_status store(const char *to, size_t length,
                                const CHARSET_INFO *charset);
   type_conversion_status store(double nr)
   {
@@ -3639,7 +3950,7 @@ public:
       clr_rec_bits(bit_ptr, bit_ofs, bit_len);
     return TYPE_OK;
   }
-  type_conversion_status store(const char *to, uint length,
+  type_conversion_status store(const char *to, size_t length,
                                const CHARSET_INFO *charset);
   type_conversion_status store(double nr);
   type_conversion_status store(longlong nr, bool unsigned_val);
@@ -3664,14 +3975,14 @@ public:
   { return cmp_binary((uchar *) a, (uchar *) b); }
   int key_cmp(const uchar *str, uint length);
   int cmp_offset(uint row_offset);
-  void get_image(uchar *buff, uint length, const CHARSET_INFO *cs)
+  void get_image(uchar *buff, size_t length, const CHARSET_INFO *cs)
   { get_key_image(buff, length, itRAW); }   
-  void set_image(const uchar *buff,uint length, const CHARSET_INFO *cs)
+  void set_image(const uchar *buff, size_t length, const CHARSET_INFO *cs)
   { Field_bit::store((char *) buff, length, cs); }
-  uint get_key_image(uchar *buff, uint length, imagetype type);
-  void set_key_image(const uchar *buff, uint length)
+  size_t get_key_image(uchar *buff, size_t length, imagetype type);
+  void set_key_image(const uchar *buff, size_t length)
   { Field_bit::store((char*) buff, length, &my_charset_bin); }
-  void make_sort_key(uchar *buff, uint length)
+  void make_sort_key(uchar *buff, size_t length)
   { get_key_image(buff, length, itRAW); }
   uint32 pack_length() const { return (uint32) (field_length + 7) / 8; }
   uint32 pack_length_in_rec() const { return bytes_in_rec; }
@@ -3735,7 +4046,7 @@ public:
                     uchar null_bit_arg,
                     enum utype unireg_check_arg, const char *field_name_arg);
   enum ha_base_keytype key_type() const { return HA_KEYTYPE_BINARY; }
-  type_conversion_status store(const char *to, uint length,
+  type_conversion_status store(const char *to, size_t length,
                                const CHARSET_INFO *charset);
   type_conversion_status store(double nr) { return Field_bit::store(nr); }
   type_conversion_status store(longlong nr, bool unsigned_val)
@@ -3774,13 +4085,14 @@ public:
     At various stages in execution this can be length of field in bytes or
     max number of characters. 
   */
-  ulong length;
+  size_t length;
   /*
     The value of `length' as set by parser: is the number of characters
     for most of the types, or of bytes for BLOBs or numeric types.
   */
-  uint32 char_length;
-  uint  decimals, flags, pack_length, key_length;
+  size_t char_length;
+  uint  decimals, flags;
+  size_t pack_length, key_length;
   Field::utype unireg_check;
   TYPELIB *interval;			// Which interval to use
   TYPELIB *save_interval;               // Temporary copy for the above
@@ -3792,6 +4104,16 @@ public:
 
   uint8 row,col,sc_length,interval_id;	// For rea_create_table
   uint	offset,pack_flag;
+
+  /* Generated column expression information */
+  Generated_column *gcol_info;
+  /*
+    Indication that the field is phycically stored in tables 
+    rather than just generated on SQL queries.
+    As of now, FALSE can only be set for virtual generated columns.
+  */
+  bool stored_in_db;
+
   Create_field() :after(NULL) {}
   Create_field(Field *field, Field *orig_field);
   /* Used to make a clone of this object for ALTER/CREATE TABLE */
@@ -3809,7 +4131,8 @@ public:
             const char *length, const char *decimals, uint type_modifier,
             Item *default_value, Item *on_update_value, LEX_STRING *comment,
             const char *change, List<String> *interval_list,
-            const CHARSET_INFO *cs, uint uint_geom_type);
+            const CHARSET_INFO *cs, uint uint_geom_type,
+            Generated_column *gcol_info= NULL);
 
   ha_storage_media field_storage_type() const
   {
@@ -3857,6 +4180,23 @@ public:
   uchar *from_null_ptr,*to_null_ptr;
   my_bool *null_row;
   uint	from_bit,to_bit;
+  String tmp;					// For items
+
+  Copy_field()
+   :m_from_field(NULL),
+    m_to_field(NULL)
+  { }
+
+  ~Copy_field()
+  { }
+
+  void set(Field *to, Field *from, bool save);	// Field to field
+  void set(uchar *to, Field *from);		// Field to string
+
+private:
+  void (*m_do_copy)(Copy_field *);
+  void (*m_do_copy2)(Copy_field *);		// Used to handle null values
+
   /**
     Number of bytes in the fields pointed to by 'from_ptr' and
     'to_ptr'. Usually this is the number of bytes that are copied from
@@ -3874,20 +4214,41 @@ public:
     only copies the length-bytes (1 or 2) + the actual length of the
     text instead of from/to_length bytes. @see get_copy_func()
   */
-  uint from_length,to_length;
-  Field *from_field,*to_field;
-  String tmp;					// For items
+  uint m_from_length;
+  uint m_to_length;
+  Field *m_from_field;
+  Field *m_to_field;
 
-  Copy_field() {}
-  ~Copy_field() {}
-  void set(Field *to,Field *from,bool save);	// Field to field 
-  void set(uchar *to,Field *from);		// Field to string
-  void (*do_copy)(Copy_field *);
-  void (*do_copy2)(Copy_field *);		// Used to handle null values
+  void check_and_set_temporary_null()
+  {
+    if (m_from_field &&
+        m_from_field->is_tmp_null() &&
+        !m_to_field->is_tmp_null())
+    {
+      m_to_field->set_tmp_nullable();
+      m_to_field->set_tmp_null();
+    }
+  }
+
+public:
+  void invoke_do_copy(Copy_field *f);
+  void invoke_do_copy2(Copy_field *f);
+
+  Field *from_field()
+  { return m_from_field; }
+
+  Field *to_field()
+  { return m_to_field; }
+
+  uint from_length() const
+  { return m_from_length; }
+
+  uint to_length() const
+  { return m_to_length; }
 };
 
 
-Field *make_field(TABLE_SHARE *share, uchar *ptr, uint32 field_length,
+Field *make_field(TABLE_SHARE *share, uchar *ptr, size_t field_length,
 		  uchar *null_pos, uchar null_bit,
 		  uint pack_flag, enum_field_types field_type,
 		  const CHARSET_INFO *cs,
@@ -3896,7 +4257,7 @@ Field *make_field(TABLE_SHARE *share, uchar *ptr, uint32 field_length,
 		  TYPELIB *interval, const char *field_name);
 uint pack_length_to_packflag(uint type);
 enum_field_types get_blob_type_from_length(ulong length);
-uint32 calc_pack_length(enum_field_types type,uint32 length);
+size_t calc_pack_length(enum_field_types type, size_t length);
 type_conversion_status set_field_to_null(Field *field);
 type_conversion_status set_field_to_null_with_conversions(Field *field,
                                                           bool no_conversions);
@@ -3923,7 +4284,6 @@ type_conversion_status set_field_to_null_with_conversions(Field *field,
 #define FIELDFLAG_NO_DEFAULT		16384   /* sql */
 #define FIELDFLAG_SUM			((uint) 32768)// predit: +#fieldflag
 #define FIELDFLAG_MAYBE_NULL		((uint) 32768)// sql
-#define FIELDFLAG_HEX_ESCAPE		((uint) 0x10000)
 #define FIELDFLAG_PACK_SHIFT		3
 #define FIELDFLAG_DEC_SHIFT		8
 #define FIELDFLAG_MAX_DEC		31
@@ -3949,6 +4309,5 @@ type_conversion_status set_field_to_null_with_conversions(Field *field,
 #define f_maybe_null(x)		(x & FIELDFLAG_MAYBE_NULL)
 #define f_no_default(x)		(x & FIELDFLAG_NO_DEFAULT)
 #define f_bit_as_char(x)        ((x) & FIELDFLAG_TREAT_BIT_AS_CHAR)
-#define f_is_hex_escape(x)      ((x) & FIELDFLAG_HEX_ESCAPE)
 
 #endif /* FIELD_INCLUDED */

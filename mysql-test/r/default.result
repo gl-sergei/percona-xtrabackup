@@ -1,5 +1,6 @@
 drop table if exists t1,t2,t3,t4,t5,t6;
 drop database if exists mysqltest;
+SET sql_mode = 'NO_ENGINE_SUBSTITUTION';
 CREATE TABLE t1 (a varchar(30) binary NOT NULL DEFAULT ' ',
 b varchar(1) binary NOT NULL DEFAULT ' ',
 c varchar(4) binary NOT NULL DEFAULT '0000',
@@ -63,7 +64,7 @@ y varchar(5) binary NOT NULL DEFAULT ' ',
 z varchar(20) binary NOT NULL DEFAULT ' ',
 a1 varchar(30) binary NOT NULL DEFAULT ' ',
 b1 tinyblob NULL)
-ENGINE=MyISAM DEFAULT CHARACTER SET = latin1 COLLATE latin1_bin;
+DEFAULT CHARACTER SET = latin1 COLLATE latin1_bin;
 SHOW CREATE TABLE t2;
 Table	Create Table
 t2	CREATE TABLE `t2` (
@@ -95,7 +96,7 @@ t2	CREATE TABLE `t2` (
   `z` varchar(20) COLLATE latin1_bin NOT NULL DEFAULT ' ',
   `a1` varchar(30) COLLATE latin1_bin NOT NULL DEFAULT ' ',
   `b1` tinyblob
-) ENGINE=MyISAM DEFAULT CHARSET=latin1 COLLATE=latin1_bin
+) ENGINE=InnoDB DEFAULT CHARSET=latin1 COLLATE=latin1_bin
 INSERT into t2 (b) values ('1');
 SHOW WARNINGS;
 Level	Code	Message
@@ -219,4 +220,5 @@ a
 NULL
 10
 drop table t1, t2;
+SET sql_mode = default;
 End of 5.0 tests.

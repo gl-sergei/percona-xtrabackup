@@ -1,6 +1,5 @@
 /*
-   Copyright (C) 2003-2006, 2008 MySQL AB, 2008-2010 Sun Microsystems, Inc.
-    All rights reserved. Use is subject to license terms.
+   Copyright (c) 2003, 2014, Oracle and/or its affiliates. All rights reserved.
 
    This program is free software; you can redistribute it and/or modify
    it under the terms of the GNU General Public License as published by
@@ -31,6 +30,9 @@
 
 #include <NdbMutex.h>
 
+#define JAM_FILE_ID 292
+
+
 template <class T> class Array;
 
 //#define ARRAY_CHUNK_GUARD
@@ -42,7 +44,17 @@ template <class T> class Array;
 template <class T>
 class ArrayPool {
 public:
-  ArrayPool();
+  typedef void (CallBack)(ArrayPool<T>& pool);
+
+  /* 
+    'seizeErrorHandler' is called in case of out of memory errors. Observe 
+    that the pool is not locked when seizeErrorHandler is called.
+    A function pointer rather than a virtual function is used here, because 
+    a virtual function would require explicit instantiations of ArrayPool for 
+    all T types. That would again require all T types to define the nextChunk, 
+    lastChunk and chunkSize fields. This is curently not the case.
+  */
+  explicit ArrayPool(CallBack* seizeErrorHandler=NULL);
   ~ArrayPool();
   
   /**
@@ -99,6 +111,7 @@ public:
   void getPtr(ConstPtr<T> &) const;
   void getPtr(Ptr<T> &, bool CrashOnBoundaryError);
   void getPtr(ConstPtr<T> &, bool CrashOnBoundaryError) const;
+  void getPtrIgnoreAlloc(Ptr<T> &);
   
   /**
    * Get pointer for i value
@@ -166,6 +179,11 @@ public:
   struct Cache
   {
     Cache(Uint32 a0 = 512, Uint32 a1 = 256) { m_first_free = RNIL; m_free_cnt = 0; m_alloc_cnt = a0; m_max_free_cnt = a1; }
+    void init_cache(Uint32 a0, Uint32 a1)
+    {
+      m_alloc_cnt = a0;
+      m_max_free_cnt = a1;
+    }
     Uint32 m_first_free;
     Uint32 m_free_cnt;
     Uint32 m_alloc_cnt;
@@ -248,22 +266,33 @@ public:
 #endif
 
 protected:
-  Uint32 firstFree;
+  T * theArray;
   Uint32 size;
+  /*
+   * Protect size and theArray which are very seldomly updated from
+   * updates of often updated variables such as firstFree, noOfFree.
+   * Protect here means to have them on separate CPU cache lines to
+   * avoid false CPU cache line sharing.
+   */
+  char protect_read_var[NDB_CL_PADSZ(sizeof(Uint32) + sizeof(void*))];
+  Uint32 firstFree;
   Uint32 noOfFree;
   Uint32 noOfFreeMin;
-  T * theArray;
-  void * alloc_ptr;
 #ifdef ARRAY_GUARD
+  bool chunk;
   Uint32 bitmaskSz;
   Uint32 *theAllocatedBitmask;
-  bool chunk;
 #endif
+  void * alloc_ptr;
+  // Call this function if a seize request fails.
+  CallBack* const seizeErrHand;
 };
 
 template <class T>
 inline
-ArrayPool<T>::ArrayPool(){
+ArrayPool<T>::ArrayPool(CallBack* seizeErrorHandler):
+  seizeErrHand(seizeErrorHandler)
+{
   firstFree = RNIL;
   size = 0;
   noOfFree = 0;
@@ -711,6 +740,26 @@ ArrayPool<T>::getConstPtr(Uint32 i, bool CrashOnBoundaryError) const {
     return 0;
   }
 }
+
+/**
+   getPtrIgnoreAlloc
+
+   getPtr, without array_guard /theAllocatedBitmask checks
+   Useful when looking at elements in the pool which may or may not
+   be allocated.
+   Retains the range check.
+*/
+template <class T>
+inline
+void
+ArrayPool<T>::getPtrIgnoreAlloc(Ptr<T> & ptr){
+  Uint32 i = ptr.i;
+  if(likely (i < size)){
+    ptr.p = &theArray[i];
+  } else {
+    ErrorReporter::handleAssert("ArrayPool<T>::getPtr", __FILE__, __LINE__);
+  }
+}
   
 /**
  * Allocate an object from pool - update Ptr
@@ -752,6 +801,10 @@ ArrayPool<T>::seize(Ptr<T> & ptr){
   }
   ptr.i = RNIL;
   ptr.p = NULL;
+  if (seizeErrHand != NULL)
+  {
+    (*seizeErrHand)(*this);
+  }
   return false;
 }
 
@@ -799,6 +852,10 @@ ArrayPool<T>::seizeId(Ptr<T> & ptr, Uint32 i){
   }
   ptr.i = RNIL;
   ptr.p = NULL;
+  if (seizeErrHand != NULL)
+  {
+    (*seizeErrHand)(*this);
+  }
   return false;
 }
 
@@ -835,6 +892,10 @@ ArrayPool<T>::seizeN(Uint32 n){
     curr = theArray[curr].nextPool;
   }
   if(sz != n){
+    if (seizeErrHand != NULL)
+    {
+      (*seizeErrHand)(*this);
+    }
     return RNIL;
   }
   const Uint32 base = curr - n;
@@ -1132,6 +1193,10 @@ ArrayPool<T>::seizeChunk(Uint32 & cnt, Ptr<T> & ptr)
   }
 
   ptr.p = NULL;
+  if (seizeErrHand != NULL)
+  {
+    (*seizeErrHand)(*this);
+  }
   return false;
 }
 
@@ -1212,6 +1277,10 @@ ArrayPool<T>::seize(LockFun l, Cache& c, Ptr<T> & p)
     c.m_free_cnt = tmp - 1;
     DUMP("LOCKED", "\n");
     return true;
+  }
+  if (seizeErrHand != NULL)
+  {
+    (*seizeErrHand)(*this);
   }
   return false;
 }
@@ -1385,13 +1454,15 @@ UnsafeArrayPool<T>::getPtrForce(ConstPtr<T> & ptr, Uint32 i) const{
 template <class T>
 class SafeArrayPool : public ArrayPool<T> {
 public:
-  SafeArrayPool(NdbMutex* mutex = 0);
+  SafeArrayPool();
   ~SafeArrayPool();
   int lock();
   int unlock();
   bool seize(Ptr<T>&);
   void release(Uint32 i);
   void release(Ptr<T>&);
+
+  void setMutex(NdbMutex* mutex = 0);
 
 private:
   NdbMutex* m_mutex;
@@ -1403,7 +1474,16 @@ private:
 
 template <class T>
 inline
-SafeArrayPool<T>::SafeArrayPool(NdbMutex* mutex)
+SafeArrayPool<T>::SafeArrayPool()
+{
+  m_mutex = 0;
+  m_mutex_owner = false;
+}
+
+template <class T>
+inline
+void
+SafeArrayPool<T>::setMutex(NdbMutex* mutex)
 {
   if (mutex != 0) {
     m_mutex = mutex;
@@ -1458,7 +1538,7 @@ void
 SafeArrayPool<T>::release(Uint32 i)
 {
   int ret = lock();
-  assert(ret == 0);
+  require(ret == 0);
   ArrayPool<T>::release(i);
   unlock();
 }
@@ -1469,9 +1549,12 @@ void
 SafeArrayPool<T>::release(Ptr<T>& ptr)
 {
   int ret = lock();
-  assert(ret == 0);
+  require(ret == 0);
   ArrayPool<T>::release(ptr);
   unlock();
 }
+
+
+#undef JAM_FILE_ID
 
 #endif

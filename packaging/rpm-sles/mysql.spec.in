@@ -14,6 +14,8 @@
 # Free Software Foundation, Inc., 51 Franklin St, Fifth Floor, Boston
 # MA  02110-1301  USA.
 
+%global milestone       rc
+%global mysql_version   @VERSION@
 
 %global mysql_vendor    Oracle and/or its affiliates
 %global mysqldatadir    /var/lib/mysql
@@ -32,7 +34,7 @@
 %{!?compilation_comment_debug:   %global compilation_comment_debug MySQL Community Server - Debug (GPL)}
 %{!?src_base:                    %global src_base mysql}
 
-%global src_dir               %{src_base}-%{version}
+%global src_dir               %{src_base}-%{version}%{?milestone:-%{milestone}}
 
 # multiarch
 %global multiarchs            ppc %{power64} %{ix86} x86_64 %{sparc}
@@ -69,25 +71,24 @@
 Name:           mysql-%{product_suffix}
 Summary:        A very fast and reliable SQL database server
 Group:          Applications/Databases
-Version:        @VERSION@
-Release:        2%{?commercial:.1}%{?dist}
+Version:        @MYSQL_NO_DASH_VERSION@
+Release:        0.2%{?milestone:.%{milestone}}%{?commercial:.1}%{?dist}
 License:        Copyright (c) 2000, @MYSQL_COPYRIGHT_YEAR@, %{mysql_vendor}. All rights reserved. Under %{?license_type} license as shown in the Description field.
 Source0:        https://cdn.mysql.com/Downloads/MySQL-@MYSQL_BASE_VERSION@/%{src_dir}.tar.gz
 URL:            http://www.mysql.com/
 Packager:       MySQL Release Engineering <mysql-build@oss.oracle.com>
 Vendor:         %{mysql_vendor}
-Source1:        mysql-systemd-start
-Source2:        mysqld.service
-Source3:        mysql.conf
 Source4:        my_config.h
+Source10:       http://downloads.sourceforge.net/boost/@BOOST_PACKAGE_NAME@.tar.bz2
 Source90:       filter-provides.sh
 Source91:       filter-requires.sh
-BuildRequires:  cmake
+BuildRequires:  cmake >= 2.8.2
 BuildRequires:  perl
 BuildRequires:  libaio-devel
 BuildRequires:  ncurses-devel
 BuildRequires:  openssl-devel
 BuildRequires:  zlib-devel
+%{?sles11:BuildRequires: gcc47 gcc47-c++}
 %if 0%{?systemd}
 BuildRequires:  systemd
 BuildRequires:  pkgconfig(systemd)
@@ -296,11 +297,11 @@ Requires:       mysql-community-common = %{version}-%{release}
 Obsoletes:      MySQL-shared < %{version}-%{release}
 Obsoletes:      mysql-libs < %{version}-%{release}
 Obsoletes:      mariadb-libs
-Obsoletes:      libmysqlclient18 < %{version}-%{release}
-Obsoletes:      libmysqlclient_r18 < %{version}-%{release}
+Obsoletes:      libmysqlclient20 < %{version}-%{release}
+Obsoletes:      libmysqlclient_r20 < %{version}-%{release}
 Provides:       mysql-libs = %{version}-%{release}
-Provides:       libmysqlclient18 = %{version}-%{release}
-Provides:       libmysqlclient_r18 = %{version}-%{release}
+Provides:       libmysqlclient20 = %{version}-%{release}
+Provides:       libmysqlclient_r20 = %{version}-%{release}
 
 %description    libs
 This package contains the shared libraries for MySQL client
@@ -355,7 +356,7 @@ This package contains files needed for developing applications using
 the embedded version of the MySQL server.
 
 %prep
-%setup -q -T -a 0 -c -n %{src_dir}
+%setup -q -T -a 0 -a 10 -c -n %{src_dir}
 pushd %{src_dir}
 
 %build
@@ -369,6 +370,8 @@ if [ "x$(id -u)" = "x0" ] ; then
 fi
 %endif
 
+%{?sles11:export CC=/usr/bin/gcc-4.7}
+%{?sles11:export CXX=/usr/bin/g++-4.7}
 
 # Build debug versions of mysqld and libmysqld.a
 mkdir debug
@@ -380,8 +383,14 @@ mkdir debug
            -DBUILD_CONFIG=mysql_release \
            -DINSTALL_LAYOUT=RPM \
            -DCMAKE_BUILD_TYPE=Debug \
+           -DWITH_BOOST=.. \
            -DCMAKE_C_FLAGS="$optflags" \
            -DCMAKE_CXX_FLAGS="$optflags" \
+%if 0%{?systemd}
+           -DWITH_SYSTEMD=1 \
+           -DSYSTEMD_SERVICE_NAME="mysql" \
+           -DSYSTEMD_PID_DIR="/var/run/mysql" \
+%endif
            -DWITH_INNODB_MEMCACHED=1 \
            -DINSTALL_LIBDIR="%{_lib}/mysql" \
            -DINSTALL_PLUGINDIR="%{_lib}/mysql/plugin" \
@@ -405,8 +414,14 @@ mkdir release
            -DBUILD_CONFIG=mysql_release \
            -DINSTALL_LAYOUT=RPM \
            -DCMAKE_BUILD_TYPE=RelWithDebInfo \
+           -DWITH_BOOST=.. \
            -DCMAKE_C_FLAGS="%{optflags}" \
            -DCMAKE_CXX_FLAGS="%{optflags}" \
+%if 0%{?systemd}
+           -DWITH_SYSTEMD=1 \
+           -DSYSTEMD_SERVICE_NAME="mysql" \
+           -DSYSTEMD_PID_DIR="/var/run/mysql" \
+%endif
            -DWITH_INNODB_MEMCACHED=1 \
            -DINSTALL_LIBDIR="%{_lib}/mysql" \
            -DINSTALL_PLUGINDIR="%{_lib}/mysql/plugin" \
@@ -429,6 +444,8 @@ MBD=$RPM_BUILD_DIR/%{src_dir}
 install -d -m 0755 %{buildroot}/var/lib/mysql
 install -d -m 0755 %{buildroot}/var/run/mysql
 install -d -m 0750 %{buildroot}/var/log/mysql
+install -d -m 0750 %{buildroot}/var/lib/mysql-files
+
 
 # Install all binaries
 cd $MBD/release
@@ -439,12 +456,9 @@ install -D -m 0644 $MBD/release/support-files/mysql-log-rotate %{buildroot}%{_sy
 install -D -m 0644 $MBD/release/packaging/rpm-sles/my.cnf %{buildroot}%{_sysconfdir}/my.cnf
 install -d %{buildroot}%{_sysconfdir}/my.cnf.d
 %if 0%{?systemd}
-install -D -m 0755 %{SOURCE1} %{buildroot}%{_bindir}/mysql-systemd-start
-install -D -m 0644 %{SOURCE2} %{buildroot}%{_unitdir}/mysql.service
 %else
 install -D -m 0755 $MBD/release/packaging/rpm-sles/mysql.init %{buildroot}%{_sysconfdir}/init.d/mysql
 %endif
-install -D -m 0644 %{SOURCE3} %{buildroot}%{_prefix}/lib/tmpfiles.d/mysql.conf
 
 # Make library links
 install -d -m 0755 %{buildroot}%{_sysconfdir}/ld.so.conf.d
@@ -459,15 +473,9 @@ install -p -m 0644 %{SOURCE4} %{buildroot}/%{_includedir}/mysql/my_config.h
 
 # Remove files pages we explicitly do not want to package
 rm -rf %{buildroot}%{_infodir}/mysql.info*
-rm -rf %{buildroot}%{_datadir}/mysql/binary-configure
 rm -rf %{buildroot}%{_datadir}/mysql/mysql.server
 rm -rf %{buildroot}%{_datadir}/mysql/mysqld_multi.server
-%if 0%{?systemd}
-rm -rf %{buildroot}%{_sysconfdir}/init.d/mysql
-%endif
 rm -rf %{buildroot}%{_bindir}/mysql_embedded
-rm -rf %{buildroot}%{_bindir}/mysql_setpermission
-rm -rf %{buildroot}%{_mandir}/man1/mysql_setpermission.1*
 rm -f %{buildroot}%{_datadir}/mysql/win_install_firewall.sql 
 
 # rcmysql symlink
@@ -557,8 +565,6 @@ fi
 %attr(644, root, root) %{_mandir}/man1/myisamchk.1*
 %attr(644, root, root) %{_mandir}/man1/myisamlog.1*
 %attr(644, root, root) %{_mandir}/man1/myisampack.1*
-%attr(644, root, root) %{_mandir}/man1/mysql_convert_table_format.1*
-%attr(644, root, root) %{_mandir}/man1/mysql_fix_extensions.1*
 %attr(644, root, root) %{_mandir}/man8/mysqld.8*
 %attr(644, root, root) %{_mandir}/man1/mysqld_multi.1*
 %attr(644, root, root) %{_mandir}/man1/mysqld_safe.1*
@@ -567,17 +573,14 @@ fi
 %attr(644, root, root) %{_mandir}/man1/mysql_plugin.1*
 %attr(644, root, root) %{_mandir}/man1/mysql_secure_installation.1*
 %attr(644, root, root) %{_mandir}/man1/mysql_upgrade.1*
-%attr(644, root, root) %{_mandir}/man1/mysqlhotcopy.1*
 %attr(644, root, root) %{_mandir}/man1/mysqlman.1*
 %attr(644, root, root) %{_mandir}/man1/mysql.server.1*
-%attr(644, root, root) %{_mandir}/man1/mysqltest.1*
 %attr(644, root, root) %{_mandir}/man1/mysql_tzinfo_to_sql.1*
-%attr(644, root, root) %{_mandir}/man1/mysql_zap.1*
-%attr(644, root, root) %{_mandir}/man1/mysqlbug.1*
 %attr(644, root, root) %{_mandir}/man1/perror.1*
 %attr(644, root, root) %{_mandir}/man1/replace.1*
 %attr(644, root, root) %{_mandir}/man1/resolve_stack_dump.1*
 %attr(644, root, root) %{_mandir}/man1/resolveip.1*
+%attr(644, root, root) %{_mandir}/man1/mysql_ssl_rsa_setup.1*
 
 %config(noreplace) %{_sysconfdir}/my.cnf
 %dir %{_sysconfdir}/my.cnf.d
@@ -588,26 +591,22 @@ fi
 %attr(755, root, root) %{_bindir}/myisamchk
 %attr(755, root, root) %{_bindir}/myisamlog
 %attr(755, root, root) %{_bindir}/myisampack
-%attr(755, root, root) %{_bindir}/mysql_convert_table_format
-%attr(755, root, root) %{_bindir}/mysql_fix_extensions
 %attr(755, root, root) %{_bindir}/mysql_install_db
 %attr(755, root, root) %{_bindir}/mysql_plugin
 %attr(755, root, root) %{_bindir}/mysql_secure_installation
 %attr(755, root, root) %{_bindir}/mysql_tzinfo_to_sql
 %attr(755, root, root) %{_bindir}/mysql_upgrade
-%attr(755, root, root) %{_bindir}/mysql_zap
-%attr(755, root, root) %{_bindir}/mysqlbug
-%attr(755, root, root) %{_bindir}/mysqld_multi
-%attr(755, root, root) %{_bindir}/mysqld_safe
 %attr(755, root, root) %{_bindir}/mysqldumpslow
-%attr(755, root, root) %{_bindir}/mysqlhotcopy
-%attr(755, root, root) %{_bindir}/mysqltest
 %attr(755, root, root) %{_bindir}/perror
 %attr(755, root, root) %{_bindir}/replace
 %attr(755, root, root) %{_bindir}/resolve_stack_dump
 %attr(755, root, root) %{_bindir}/resolveip
+%attr(755, root, root) %{_bindir}/mysql_ssl_rsa_setup
 %if 0%{?systemd}
-%attr(755, root, root) %{_bindir}/mysql-systemd-start
+%attr(755, root, root) %{_bindir}/mysqld_pre_systemd
+%else
+%attr(755, root, root) %{_bindir}/mysqld_multi
+%attr(755, root, root) %{_bindir}/mysqld_safe
 %endif
 %attr(755, root, root) %{_sbindir}/mysqld
 %attr(755, root, root) %{_sbindir}/mysqld-debug
@@ -616,20 +615,26 @@ fi
 %dir %{_libdir}/mysql/plugin
 %attr(755, root, root) %{_libdir}/mysql/plugin/adt_null.so
 %attr(755, root, root) %{_libdir}/mysql/plugin/auth_socket.so
+%attr(755, root, root) %{_libdir}/mysql/plugin/ha_example.so
 %attr(755, root, root) %{_libdir}/mysql/plugin/innodb_engine.so
 %attr(755, root, root) %{_libdir}/mysql/plugin/libmemcached.so
 %attr(755, root, root) %{_libdir}/mysql/plugin/mypluglib.so
 %attr(755, root, root) %{_libdir}/mysql/plugin/mysql_no_login.so
+%attr(755, root, root) %{_libdir}/mysql/plugin/rewrite_example.so
+%attr(755, root, root) %{_libdir}/mysql/plugin/rewriter.so
 %attr(755, root, root) %{_libdir}/mysql/plugin/semisync_master.so
 %attr(755, root, root) %{_libdir}/mysql/plugin/semisync_slave.so
 %attr(755, root, root) %{_libdir}/mysql/plugin/validate_password.so
 %dir %{_libdir}/mysql/plugin/debug
 %attr(755, root, root) %{_libdir}/mysql/plugin/debug/adt_null.so
 %attr(755, root, root) %{_libdir}/mysql/plugin/debug/auth_socket.so
+%attr(755, root, root) %{_libdir}/mysql/plugin/debug/ha_example.so
 %attr(755, root, root) %{_libdir}/mysql/plugin/debug/innodb_engine.so
 %attr(755, root, root) %{_libdir}/mysql/plugin/debug/libmemcached.so
 %attr(755, root, root) %{_libdir}/mysql/plugin/debug/mypluglib.so
 %attr(755, root, root) %{_libdir}/mysql/plugin/debug/mysql_no_login.so
+%attr(755, root, root) %{_libdir}/mysql/plugin/debug/rewrite_example.so
+%attr(755, root, root) %{_libdir}/mysql/plugin/debug/rewriter.so
 %attr(755, root, root) %{_libdir}/mysql/plugin/debug/semisync_master.so
 %attr(755, root, root) %{_libdir}/mysql/plugin/debug/semisync_slave.so
 %attr(755, root, root) %{_libdir}/mysql/plugin/debug/validate_password.so
@@ -638,27 +643,32 @@ fi
 %attr(755, root, root) %{_libdir}/mysql/plugin/authentication_pam.so
 %attr(755, root, root) %{_libdir}/mysql/plugin/thread_pool.so
 %attr(755, root, root) %{_libdir}/mysql/plugin/openssl_udf.so
-%attr(755, root, root) %{_libdir}/mysql/plugin/firewall.so 
-%attr(644, root, root) %{_datadir}/mysql/linux_install_firewall.sql 
+%attr(755, root, root) %{_libdir}/mysql/plugin/firewall.so
+%attr(644, root, root) %{_datadir}/mysql/linux_install_firewall.sql
 %attr(755, root, root) %{_libdir}/mysql/plugin/debug/audit_log.so
 %attr(755, root, root) %{_libdir}/mysql/plugin/debug/authentication_pam.so
 %attr(755, root, root) %{_libdir}/mysql/plugin/debug/thread_pool.so
 %attr(755, root, root) %{_libdir}/mysql/plugin/debug/openssl_udf.so
-%attr(755, root, root) %{_libdir}/mysql/plugin/debug/firewall.so 
+%attr(755, root, root) %{_libdir}/mysql/plugin/debug/firewall.so
 %endif
 %attr(644, root, root) %{_datadir}/mysql/fill_help_tables.sql
+%attr(644, root, root) %{_datadir}/mysql/mysql_sys_schema.sql
 %attr(644, root, root) %{_datadir}/mysql/mysql_system_tables.sql
 %attr(644, root, root) %{_datadir}/mysql/mysql_system_tables_data.sql
 %attr(644, root, root) %{_datadir}/mysql/mysql_test_data_timezone.sql
 %attr(644, root, root) %{_datadir}/mysql/my-*.cnf
 %attr(644, root, root) %{_datadir}/mysql/mysql-log-rotate
 %attr(644, root, root) %{_datadir}/mysql/mysql_security_commands.sql
+%attr(644, root, root) %{_datadir}/mysql/mysql_system_tables_fix_for_downgrade.sql
 %attr(644, root, root) %{_datadir}/mysql/dictionary.txt
 %attr(644, root, root) %{_datadir}/mysql/innodb_memcached_config.sql
+%attr(644, root, root) %{_datadir}/mysql/install_rewriter.sql
+%attr(644, root, root) %{_datadir}/mysql/install_rewriter_with_optional_columns.sql
+%attr(644, root, root) %{_datadir}/mysql/uninstall_rewriter.sql
 %attr(644, root, root) %{_datadir}/mysql/magic
-%attr(644, root, root) %{_prefix}/lib/tmpfiles.d/mysql.conf
 %if 0%{?systemd}
 %attr(644, root, root) %{_unitdir}/mysql.service
+%attr(644, root, root) %{_tmpfilesdir}/mysql.conf
 %else
 %attr(755, root, root) %{_sysconfdir}/init.d/mysql
 %endif
@@ -666,6 +676,7 @@ fi
 %dir %attr(755, mysql, mysql) /var/lib/mysql
 %dir %attr(755, mysql, mysql) /var/run/mysql
 %dir %attr(750, mysql, mysql) /var/log/mysql
+%dir %attr(750, mysql, mysql) /var/lib/mysql-files
 
 %files common
 %defattr(-, root, root, -)
@@ -700,13 +711,7 @@ fi
 %files client
 %defattr(-, root, root, -)
 %doc %{?license_files_server}
-%attr(755, root, root) %{_bindir}/msql2mysql
 %attr(755, root, root) %{_bindir}/mysql
-%attr(755, root, root) %{_bindir}/mysql_find_rows
-%attr(755, root, root) %{_bindir}/mysql_waitpid
-%attr(755, root, root) %{_bindir}/mysqlaccess
-# XXX: This should be moved to %{_sysconfdir}
-%attr(644, root, root) %{_bindir}/mysqlaccess.conf
 %attr(755, root, root) %{_bindir}/mysqladmin
 %attr(755, root, root) %{_bindir}/mysqlbinlog
 %attr(755, root, root) %{_bindir}/mysqlcheck
@@ -717,11 +722,7 @@ fi
 %attr(755, root, root) %{_bindir}/mysql_config
 %attr(755, root, root) %{_bindir}/mysql_config_editor
 
-%attr(644, root, root) %{_mandir}/man1/msql2mysql.1*
 %attr(644, root, root) %{_mandir}/man1/mysql.1*
-%attr(644, root, root) %{_mandir}/man1/mysql_find_rows.1*
-%attr(644, root, root) %{_mandir}/man1/mysql_waitpid.1*
-%attr(644, root, root) %{_mandir}/man1/mysqlaccess.1*
 %attr(644, root, root) %{_mandir}/man1/mysqladmin.1*
 %attr(644, root, root) %{_mandir}/man1/mysqlbinlog.1*
 %attr(644, root, root) %{_mandir}/man1/mysqlcheck.1*
@@ -750,8 +751,8 @@ fi
 %doc %{?license_files_server}
 %dir %attr(755, root, root) %{_libdir}/mysql
 %attr(644, root, root) %{_sysconfdir}/ld.so.conf.d/mysql-%{_arch}.conf
-%{_libdir}/mysql/libmysqlclient.so.18*
-%{_libdir}/mysql/libmysqlclient_r.so.18*
+%{_libdir}/mysql/libmysqlclient.so.20*
+%{_libdir}/mysql/libmysqlclient_r.so.20*
 
 %if 0%{?compatlib}
 %files libs-compat
@@ -778,12 +779,14 @@ fi
 %attr(755, root, root) %{_libdir}/mysql/plugin/auth_test_plugin.so
 %attr(644, root, root) %{_libdir}/mysql/plugin/daemon_example.ini
 %attr(755, root, root) %{_libdir}/mysql/plugin/libdaemon_example.so
+%attr(755, root, root) %{_libdir}/mysql/plugin/replication_observers_example_plugin.so
 %attr(755, root, root) %{_libdir}/mysql/plugin/qa_auth_client.so
 %attr(755, root, root) %{_libdir}/mysql/plugin/qa_auth_interface.so
 %attr(755, root, root) %{_libdir}/mysql/plugin/qa_auth_server.so
 %attr(755, root, root) %{_libdir}/mysql/plugin/debug/auth.so
 %attr(755, root, root) %{_libdir}/mysql/plugin/debug/auth_test_plugin.so
 %attr(755, root, root) %{_libdir}/mysql/plugin/debug/libdaemon_example.so
+%attr(755, root, root) %{_libdir}/mysql/plugin/debug/replication_observers_example_plugin.so
 %attr(755, root, root) %{_libdir}/mysql/plugin/debug/qa_auth_client.so
 %attr(755, root, root) %{_libdir}/mysql/plugin/debug/qa_auth_interface.so
 %attr(755, root, root) %{_libdir}/mysql/plugin/debug/qa_auth_server.so
@@ -815,17 +818,19 @@ fi
 %attr(755, root, root) %{_libdir}/mysql/libmysqld.so
 
 %changelog
-* Wed Jan 14 2015 Balasubramanian Kandasamy <balasubramanian.kandasamy@oracle.com> - 5.6.24-1
-- Add mysql_no_login.so plugin
-
-* Mon Oct 06 2014 Balasubramanian Kandasamy <balasubramanian.kandasamy@oracle.com> - 5.6.22-1
-- Backport to 5.6.22
-
-* Mon Oct 06 2014 Balasubramanian Kandasamy <balasubramanian.kandasamy@oracle.com> - 5.7.6-0.2.m16
+* Tue Feb 3 2015 Balasubramanian Kandasamy <balasubramanian.kandasamy@oracle.com> - 5.7.6-0.2.m16
 - Include boost sources
 - Add license info in each subpackage
+- Soname bump
+- Added mysql_ssl_rsa_setup
+- Include mysql-files directory
+
+* Thu Sep 18 2014 Balasubramanian Kandasamy <balasubramanian.kandasamy@oracle.com> - 5.7.6-0.2.m16
+- Provide replication_observers_example_plugin.so plugin
 
 * Tue Sep 02 2014 Bjorn Munch <bjorn.munch@oracle.com> - 5.7.6-0.1.m16
+
+* Tue Sep 2 2014 Bjorn Munch <bjorn.munch@oracle.com> - 5.7.6-0.1.m16
 - Updated for 5.7.6
 
 * Mon Sep 01 2014 Balasubramanian Kandasamy <balasubramanian.kandasamy@oracle.com> - 5.7.5-0.2.m15

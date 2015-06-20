@@ -218,54 +218,74 @@ include/start_slave.inc
 ####################### PART 2: SLAVE TESTS ###########################
 #######################################################################
 include/rpl_reset.inc
-call mtr.add_suppression("Slave I/O: Relay log write failure: could not queue event from master.*");
+call mtr.add_suppression("Slave I/O for channel '': Relay log write failure: could not queue event from master.*");
 call mtr.add_suppression("Error writing file .*");
 call mtr.add_suppression("Could not open .*");
 call mtr.add_suppression("MYSQL_BIN_LOG::open failed to sync the index file.");
 call mtr.add_suppression("Can't generate a unique log-filename .*");
 ###################### TEST #13
+SET GLOBAL binlog_error_action= IGNORE_ERROR;
 SET @old_debug=@@global.debug;
 include/stop_slave.inc
 SET GLOBAL debug="+d,error_unique_log_filename";
 START SLAVE io_thread;
 include/wait_for_slave_io_error.inc [errno=1595]
+Warnings:
+Warning	3129	Unsetting sql mode 'NO_AUTO_CREATE_USER' is deprecated. It will be made read-only in a future release.
 Last_IO_Error = 'Relay log write failure: could not queue event from master'
+Warnings:
+Warning	3090	Setting sql mode 'NO_AUTO_CREATE_USER' is deprecated. It will be made read-only in a future release.
 SET GLOBAL debug="-d,error_unique_log_filename";
 SET GLOBAL debug=@old_debug;
 include/rpl_restart_server.inc [server_number=2]
 ###################### TEST #14
+SET GLOBAL binlog_error_action= IGNORE_ERROR;
 SET @old_debug=@@global.debug;
 include/stop_slave.inc
 SET GLOBAL debug="+d,fault_injection_new_file_rotate_event";
 START SLAVE io_thread;
 include/wait_for_slave_io_error.inc [errno=1595]
+Warnings:
+Warning	3129	Unsetting sql mode 'NO_AUTO_CREATE_USER' is deprecated. It will be made read-only in a future release.
 Last_IO_Error = 'Relay log write failure: could not queue event from master'
+Warnings:
+Warning	3090	Setting sql mode 'NO_AUTO_CREATE_USER' is deprecated. It will be made read-only in a future release.
 SET GLOBAL debug="-d,fault_injection_new_file_rotate_event";
 SET GLOBAL debug=@old_debug;
 include/rpl_restart_server.inc [server_number=2]
 ###################### TEST #15
+SET GLOBAL binlog_error_action= IGNORE_ERROR;
 SET @old_debug=@@global.debug;
 include/stop_slave.inc
 SET GLOBAL debug="+d,fault_injection_registering_index";
 START SLAVE io_thread;
 include/wait_for_slave_io_error.inc [errno=1595]
+Warnings:
+Warning	3129	Unsetting sql mode 'NO_AUTO_CREATE_USER' is deprecated. It will be made read-only in a future release.
 Last_IO_Error = 'Relay log write failure: could not queue event from master'
+Warnings:
+Warning	3090	Setting sql mode 'NO_AUTO_CREATE_USER' is deprecated. It will be made read-only in a future release.
 SET GLOBAL debug="-d,fault_injection_registering_index";
 SET GLOBAL debug=@old_debug;
 include/rpl_restart_server.inc [server_number=2]
 ###################### TEST #16
+SET GLOBAL binlog_error_action= IGNORE_ERROR;
 SET @old_debug=@@global.debug;
 include/stop_slave.inc
 SET GLOBAL debug="+d,fault_injection_openning_index";
 START SLAVE io_thread;
 include/wait_for_slave_io_error.inc [errno=1595]
+Warnings:
+Warning	3129	Unsetting sql mode 'NO_AUTO_CREATE_USER' is deprecated. It will be made read-only in a future release.
 Last_IO_Error = 'Relay log write failure: could not queue event from master'
+Warnings:
+Warning	3090	Setting sql mode 'NO_AUTO_CREATE_USER' is deprecated. It will be made read-only in a future release.
 SET GLOBAL debug="-d,fault_injection_openning_index";
 SET GLOBAL debug=@old_debug;
 include/rpl_restart_server.inc [server_number=2]
 include/stop_slave_sql.inc
 Warnings:
-Note	1255	Slave already has been stopped
+Note	3084	Replication thread(s) for channel '' are already stopped.
 RESET SLAVE;
 RESET MASTER;
 include/rpl_end.inc

@@ -13,7 +13,7 @@
 # off cost-based choice for them.
 set @old_opt_switch=@@optimizer_switch;
 set optimizer_switch='subquery_materialization_cost_based=off';
-
+SET sql_mode = 'NO_ENGINE_SUBSTITUTION';
 # Initialise
 --disable_warnings
 drop table if exists t1,t2,t3,t4,t5,t6,t7,t8,t11,t12;
@@ -226,7 +226,11 @@ CREATE TABLE `t2` (
     ) ENGINE=MyISAM ROW_FORMAT=DYNAMIC;
 
 INSERT INTO t2 (mot,topic,date,pseudo) VALUES ('joce','40143','2002-10-22','joce'), ('joce','43506','2002-10-22','joce');
+
+--source include/turn_off_only_full_group_by.inc
 select numeropost as a FROM t1 GROUP BY (SELECT 1 FROM t1 HAVING a=1);
+--source include/restore_sql_mode_after_turn_off_only_full_group_by.inc
+
 SELECT numeropost,maxnumrep FROM t1 WHERE exists (SELECT 1 FROM t2 WHERE (mot='joce') AND date >= '2002-10-21' AND t1.numeropost = t2.topic) ORDER BY maxnumrep DESC LIMIT 0, 20;
 -- error ER_BAD_FIELD_ERROR
 SELECT (SELECT 1) as a FROM (SELECT 1 FROM t1 HAVING a=1) b;
@@ -259,8 +263,12 @@ CREATE TABLE `t1` (
 ) ENGINE=MyISAM ROW_FORMAT=FIXED;
 
 INSERT INTO t1 (numeropost,maxnumrep) VALUES (1,0),(2,1);
+
+--source include/turn_off_only_full_group_by.inc
 -- error ER_SUBQUERY_NO_1_ROW
 select numeropost as a FROM t1 GROUP BY (SELECT 1 FROM t1 HAVING a=1);
+--source include/restore_sql_mode_after_turn_off_only_full_group_by.inc
+
 -- error ER_SUBQUERY_NO_1_ROW
 select numeropost as a FROM t1 ORDER BY (SELECT 1 FROM t1 HAVING a=1);
 drop table t1;
@@ -364,27 +372,15 @@ INSERT INTO t1 (x) VALUES ((SELECT b FROM t3));
 INSERT INTO t1 (x) VALUES ((SELECT a FROM t2));
 select * from t1;
 insert into t2 values (1);
-let $row_count_before= `SELECT COUNT(*) FROM t1`;
-INSERT DELAYED INTO t1 (x) VALUES ((SELECT SUM(a) FROM t2));
-let $wait_condition= SELECT COUNT(*) <> $row_count_before FROM t1;
---source include/wait_condition.inc
-select * from t1;
 INSERT INTO t1 (x) select (SELECT SUM(a)+1 FROM t2) FROM t2;
 select * from t1;
 # After this, only data based on old t1 records should have been added.
 INSERT INTO t1 (x) select (SELECT SUM(x)+2 FROM t1) FROM t2;
 select * from t1;
 -- error ER_BAD_FIELD_ERROR
-INSERT DELAYED INTO t1 (x) VALUES ((SELECT SUM(x) FROM t2));
-let $row_count_before= `SELECT COUNT(*) FROM t1`;
-INSERT DELAYED INTO t1 (x) VALUES ((SELECT SUM(a) FROM t2));
-let $wait_condition= SELECT COUNT(*) <> $row_count_before FROM t1;
---source include/wait_condition.inc
+INSERT INTO t1 (x) VALUES ((SELECT SUM(x) FROM t2));
+INSERT INTO t1 (x) SELECT (SELECT SUM(a)+b FROM t2) from t3;
 select * from t1;
-#
-#TODO: should be uncommented after Bug#380 fix pushed
-#INSERT INTO t1 (x) SELECT (SELECT SUM(a)+b FROM t2) from t3;
-#select * from t1;
 drop table t1, t2, t3;
 
 #replace with subselects
@@ -401,17 +397,6 @@ replace into t1 (x, y) VALUES ((SELECT a FROM t3), (SELECT a+1 FROM t2));
 replace into t1 (x, y) VALUES ((SELECT a FROM t2), (SELECT a+1 FROM t2));
 select * from t1;
 replace into t1 (x, y) VALUES ((SELECT a FROM t2), (SELECT a+2 FROM t2));
-select * from t1;
-let $row_count_before= `SELECT COUNT(*) FROM t1`;
-replace DELAYED into t1 (x, y) VALUES ((SELECT a+3 FROM t2), (SELECT a FROM t2));
-# We get one additional row
-let $wait_condition= SELECT COUNT(*) <> $row_count_before FROM t1;
---source include/wait_condition.inc
-select * from t1;
-let $row_count_before= `SELECT COUNT(*) FROM t1 WHERE y = 2`;
-replace DELAYED into t1 (x, y) VALUES ((SELECT a+3 FROM t2), (SELECT a+1 FROM t2));
-let $wait_condition= SELECT COUNT(*) <> $row_count_before FROM t1 WHERE y = 2;
---source include/wait_condition.inc
 select * from t1;
 replace LOW_PRIORITY into t1 (x, y) VALUES ((SELECT a+1 FROM t2), (SELECT a FROM t2));
 select * from t1;
@@ -507,8 +492,10 @@ drop table t1,t2,t3;
 create table t1 (a float);
 -- error ER_NOT_SUPPORTED_YET
 select 10.5 IN (SELECT * from t1 LIMIT 1);
--- error ER_NOT_SUPPORTED_YET
+-- error ER_WRONG_USAGE
 select 10.5 IN (SELECT * from t1 LIMIT 1 UNION SELECT 1.5);
+-- error ER_NOT_SUPPORTED_YET
+select 10.5 IN (SELECT * from t1 UNION SELECT 1.5 LIMIT 1);
 drop table t1;
 
 create table t1 (a int, b int, c varchar(10));
@@ -801,7 +788,9 @@ CREATE TABLE `t1` (
   UNIQUE KEY `pseudo` (`pseudo`)
 ) ENGINE=MyISAM CHARSET=latin1 PACK_KEYS=1 ROW_FORMAT=DYNAMIC;
 INSERT INTO t1 (id,pseudo,email) VALUES (1,'test','test'),(2,'test1','test1');
+--source include/turn_off_only_full_group_by.inc
 SELECT pseudo as a, pseudo as b FROM t1 GROUP BY (SELECT a) ORDER BY (SELECT id*1);
+--source include/restore_sql_mode_after_turn_off_only_full_group_by.inc
 drop table if exists t1;
 
 (SELECT 1 as a) UNION (SELECT 1) ORDER BY (SELECT a+0);
@@ -825,7 +814,9 @@ create table t1 (s1 int);
 create table t2 (s1 int);
 insert into t1 values (1);
 insert into t2 values (1);
+--source include/turn_off_only_full_group_by.inc
 select * from t1 where exists (select s1 from t2 having max(t2.s1)=t1.s1);
+--source include/restore_sql_mode_after_turn_off_only_full_group_by.inc
 drop table t1,t2;
 
 #
@@ -1423,7 +1414,9 @@ SELECT a.howmanyvalues, (SELECT count(*) from t1 b where b.howmanyvalues = a.how
 CREATE INDEX t1_howmanyvalues_idx ON t1 (howmanyvalues);
 SELECT a.howmanyvalues, (SELECT count(*) from t1 b where b.howmanyvalues+1 = a.howmanyvalues+1) as mycount from t1 a group by a.howmanyvalues;
 SELECT a.howmanyvalues, (SELECT count(*) from t1 b where b.howmanyvalues = a.howmanyvalues) as mycount from t1 a group by a.howmanyvalues;
+--source include/turn_off_only_full_group_by.inc
 SELECT a.howmanyvalues, (SELECT count(*) from t1 b where b.howmanyvalues = a.avalue) as mycount from t1 a group by a.howmanyvalues;
+--source include/restore_sql_mode_after_turn_off_only_full_group_by.inc
 drop table t1;
 
 create table t1 (x int);
@@ -1658,6 +1651,7 @@ CREATE TABLE t5 (
   modifyDate timestamp NOT NULL
 );
 INSERT INTO t5 VALUES (5141,12,'2004-08-06','2004-08-06');
+--source include/turn_off_only_full_group_by.inc
 
 select
   count(distinct t2.userid) pass,
@@ -1691,6 +1685,7 @@ join
 group by
   groupstuff.groupname, colhead , t2.courseid;
 
+--source include/restore_sql_mode_after_turn_off_only_full_group_by.inc
 drop table t1, t2, t3, t4, t5;
 
 
@@ -2857,7 +2852,7 @@ DROP TABLE t1;
 # Bug#28377 grouping query with a correlated subquery in WHERE condition
 #
 
-CREATE TABLE t1 (id int NOT NULL, st CHAR(2), INDEX idx(id));
+CREATE TABLE t1 (id int NOT NULL, st CHAR(2), UNIQUE INDEX idx(id));
 INSERT INTO t1 VALUES
   (3,'FL'), (2,'GA'), (4,'FL'), (1,'GA'), (5,'NY'), (7,'FL'), (6,'NY');
 CREATE TABLE t2 (id int NOT NULL, INDEX idx(id));
@@ -3081,6 +3076,7 @@ DROP TABLE t1,t2;
 # Bug#33675 Usage of an uninitialized memory by filesort in a subquery
 #           caused server crash.
 #
+SET sql_mode = 'NO_ENGINE_SUBSTITUTION';
 create table t0(a int);
 insert into t0 values (0),(1),(2),(3),(4),(5),(6),(7),(8),(9);
 create table t1(f11 int, f12 int);
@@ -3096,7 +3092,7 @@ select count(*) from t1 where f12 =
 (select f22 from t2 where f22 = f12 order by f21 desc, f22, f23 limit 1);
 
 drop table t0,t1,t2;
-
+SET sql_mode = default;
 
 #
 # Bug#33794 "MySQL crashes executing specific query on specific dump"
@@ -3131,6 +3127,7 @@ CREATE TABLE t3 (
   PRIMARY KEY (f6)
 );
 INSERT INTO t3 VALUES (1,null), (2,null);
+--source include/turn_off_only_full_group_by.inc
 
 SELECT
   IF(t1.f1 = 'R', a1.f2, t2.f2) AS a4,
@@ -3150,6 +3147,7 @@ FROM
   t2, t3, t1 JOIN t2 a1 ON t1.f9 = a1.f4
 GROUP BY a4;
 
+--source include/restore_sql_mode_after_turn_off_only_full_group_by.inc
 DROP TABLE t1, t2, t3, t4;
 
 
@@ -3205,6 +3203,7 @@ INSERT INTO st1 VALUES (1,1), (2,1);
 
 CREATE TABLE st2 like t1;
 INSERT INTO st2 VALUES (1,1), (2,1);
+--source include/turn_off_only_full_group_by.inc
 
 # should have "impossible where"
 EXPLAIN
@@ -3217,6 +3216,7 @@ SELECT MAX(b), (SELECT COUNT(*) FROM st1,st2 WHERE st2.b <= t1.b)
 FROM t1 
 WHERE a = 230;
 
+--source include/restore_sql_mode_after_turn_off_only_full_group_by.inc
 DROP TABLE t1, st1, st2;
 
 --echo #
@@ -3231,7 +3231,7 @@ CREATE TABLE t2 (pk int PRIMARY KEY, int_key int);
 INSERT INTO t2 VALUES (3,3), (5,NULL), (7,3);
 
 --echo # should have eq_ref for t1, unless subquery materialization is used
---replace_column 1 x 2 x 5 x 6 x 7 x 8 x 9 x 10 x
+--replace_column 1 x 2 x 6 x 7 x 8 x 9 x 10 x 12 x
 EXPLAIN
 SELECT * FROM t2 outr
 WHERE outr.int_key NOT IN (SELECT t1.pk FROM t1, t2)  
@@ -3282,7 +3282,7 @@ select a, oref, a in (select max(ie)
 # This must have a trigcond
 explain extended
 select a, oref, a in (select max(ie) 
-  from t1 where oref=t2.oref group by grp) Z from t2;
+  from t1 where oref=t2.oref group by grp) z from t2;
 
 # This must not have a trigcond:
 explain extended
@@ -3325,7 +3325,7 @@ select oref, a, a in (select a from t1 where oref=t2.oref) Z from t2;
 # The next explain shows "using index" but that is just incorrect display
 # (there is a bug filed about this).
 explain extended 
-select oref, a, a in (select a from t1 where oref=t2.oref) Z from t2;
+select oref, a, a in (select a from t1 where oref=t2.oref) z from t2;
 
 flush status;
 select oref, a from t2 where a in (select a from t1 where oref=t2.oref);
@@ -3376,7 +3376,7 @@ from t3;
 # This must have trigcond in WHERE and HAVING:
 explain extended
 select a, oref, 
-       t3.a in (select t1.a from t1, t2 where t1.b=t2.a and t2.b=t3.oref) Z 
+       t3.a in (select t1.a from t1, t2 where t1.b=t2.a and t2.b=t3.oref) z 
 from t3;
 
 drop table t1, t2, t3;
@@ -3404,7 +3404,7 @@ from t3;
 --echo This must show a trig_cond:
 explain extended
 select a, oref, 
-       t3.a in (select t1.a from t1, t2 where t1.b=t2.a and t2.b=t3.oref) Z 
+       t3.a in (select t1.a from t1, t2 where t1.b=t2.a and t2.b=t3.oref) z 
 from t3;
 drop table t1,t2,t3;
 
@@ -3432,7 +3432,7 @@ select a, oref,
 --echo This must show a trig_cond:
 explain extended
 select a, oref, 
-       a in (select count(*) from t1 group by grp having grp=t2.oref) Z from t2;
+       a in (select count(*) from t1 group by grp having grp=t2.oref) z from t2;
 
 drop table t1, t2;
 
@@ -3459,18 +3459,18 @@ create table t1 (a int, b int, c int, key(a,b));
 insert into t1 select 2*A, 2*A, 100 from t3;
 
 # First test index subquery engine
-explain extended select a,b, oref, (a,b) in (select a,b from t1 where c=t2.oref) Z from t2;
-select a,b, oref, (a,b) in (select a,b from t1 where c=t2.oref) Z from t2;
+explain extended select a,b, oref, (a,b) in (select a,b from t1 where c=t2.oref) z from t2;
+select a,b, oref, (a,b) in (select a,b from t1 where c=t2.oref) z from t2;
 
 # Then check that we do turn off 'ref' scans in the subquery
 create table t4 (x int);
 insert into t4 select A.a + 10*B.a from t1 A, t1 B;
 explain extended 
   select a,b, oref, 
-         (a,b) in (select a,b from t1,t4 where c=t2.oref) Z 
+         (a,b) in (select a,b from t1,t4 where c=t2.oref) z 
   from t2;
 select a,b, oref, 
-       (a,b) in (select a,b from t1,t4 where c=t2.oref) Z 
+       (a,b) in (select a,b from t1,t4 where c=t2.oref) z 
 from t2;
 
 drop table t1,t2,t3,t4;
@@ -3509,7 +3509,7 @@ insert into t1 values ('new1', 1234, 10, NULL);
 # new1, 10, 10, NULL,
 select oref, a, b, (a,b) in (select ie1,ie2 from t1 where oref=t2.oref) Z from t2 where a=10 and b=10; 
 explain extended
-select oref, a, b, (a,b) in (select ie1,ie2 from t1 where oref=t2.oref) Z from t2 where a=10 and b=10; 
+select oref, a, b, (a,b) in (select ie1,ie2 from t1 where oref=t2.oref) z from t2 where a=10 and b=10; 
 drop table t1, t2;
 
 # Now test different column types:
@@ -3581,9 +3581,9 @@ oref=t2.oref group by grp having min(ie) > 1);
 #
 alter table t1 add index idx(ie);
 
-explain select oref, a, a in (select ie from t1 where oref=t2.oref) Z from t2;
+explain select oref, a, a in (select ie from t1 where oref=t2.oref) z from t2;
 
-select oref, a, a in (select ie from t1 where oref=t2.oref) Z from t2;
+select oref, a, a in (select ie from t1 where oref=t2.oref) z from t2;
 
 --sorted_result
 select oref, a from t2 where a in (select ie from t1 where oref=t2.oref); 
@@ -3594,9 +3594,9 @@ select oref, a from t2 where a not in (select ie from t1 where oref=t2.oref);
 alter table t1 drop index idx;
 alter table t1 add index idx(oref,ie);
 
-explain select oref, a, a in (select ie from t1 where oref=t2.oref) Z from t2;
+explain select oref, a, a in (select ie from t1 where oref=t2.oref) z from t2;
 
-select oref, a, a in (select ie from t1 where oref=t2.oref) Z from t2;
+select oref, a, a in (select ie from t1 where oref=t2.oref) z from t2;
 
 select oref, a from t2 where a in (select ie from t1 where oref=t2.oref); 
 
@@ -3605,12 +3605,12 @@ select oref, a from t2 where a not in (select ie from t1 where oref=t2.oref);
 explain 
 select oref, a, 
        a in (select min(ie) from t1 where oref=t2.oref 
-             group by grp having min(ie) > 1) Z 
+             group by grp having min(ie) > 1) z 
 from t2;
 
 select oref, a, 
        a in (select min(ie) from t1 where oref=t2.oref 
-             group by grp having min(ie) > 1) Z 
+             group by grp having min(ie) > 1) z 
 from t2;
 
 select oref, a from t2 where a in (select min(ie) from t1 where oref=t2.oref 
@@ -3668,9 +3668,9 @@ select oref, a, b from t2 where
 
 alter table t1 add index idx(ie1,ie2);
 
-explain select oref, a, b, (a,b) in (select ie1,ie2 from t1 where oref=t2.oref) Z from t2;
+explain select oref, a, b, (a,b) in (select ie1,ie2 from t1 where oref=t2.oref) z from t2;
 
-select oref, a, b, (a,b) in (select ie1,ie2 from t1 where oref=t2.oref) Z from t2;
+select oref, a, b, (a,b) in (select ie1,ie2 from t1 where oref=t2.oref) z from t2;
 
 --sorted_result
 select oref, a, b from t2 where (a,b) in (select ie1,ie2 from t1 where oref=t2.oref); 
@@ -3678,7 +3678,7 @@ select oref, a, b from t2 where (a,b) in (select ie1,ie2 from t1 where oref=t2.o
 select oref, a, b from t2 where (a,b) not in (select ie1,ie2 from t1 where oref=t2.oref);
 
 explain extended 
-select oref, a, b, (a,b) in (select ie1,ie2 from t1 where oref=t2.oref) Z from t2;
+select oref, a, b, (a,b) in (select ie1,ie2 from t1 where oref=t2.oref) z from t2;
 
 drop table t1,t2;
 
@@ -3703,9 +3703,9 @@ insert into t2 values
   ('aa', 1),
   ('bb', NULL);
 
-explain select oref, a, a in (select ie from t1 where oref=t2.oref) Z from t2;
+explain select oref, a, a in (select ie from t1 where oref=t2.oref) z from t2;
 
-select oref, a, a in (select ie from t1 where oref=t2.oref) Z from t2;
+select oref, a, a in (select ie from t1 where oref=t2.oref) z from t2;
 
 --sorted_result
 select oref, a from t2 where a in (select ie from t1 where oref=t2.oref);
@@ -3713,9 +3713,9 @@ select oref, a from t2 where a in (select ie from t1 where oref=t2.oref);
 select oref, a from t2 where a not in (select ie from t1 where oref=t2.oref);
 
 explain 
-select oref, a, a in (select min(ie) from t1 where oref=t2.oref group by grp) Z from t2;
+select oref, a, a in (select min(ie) from t1 where oref=t2.oref group by grp) z from t2;
 
-select oref, a, a in (select min(ie) from t1 where oref=t2.oref group by grp) Z from t2;
+select oref, a, a in (select min(ie) from t1 where oref=t2.oref group by grp) z from t2;
 
 drop table t1,t2;
 
@@ -3751,9 +3751,11 @@ INSERT INTO t2 SELECT * FROM t1;
 # given match possible
 SELECT a, MAX(b), (SELECT t.c FROM t1 AS t WHERE t1.a=t.a AND t.b=MAX(t1.b))
   as test FROM t1 GROUP BY a;
+--source include/turn_off_only_full_group_by.inc
 SELECT * FROM t1 GROUP by t1.a
   HAVING (MAX(t1.b) > (SELECT MAX(t2.b) FROM t2 WHERE t2.c < t1.c
                                                 HAVING MAX(t2.b+t1.a) < 10));
+--source include/restore_sql_mode_after_turn_off_only_full_group_by.inc
 
 SELECT a,b,c FROM t1 WHERE b in (9,3,4) ORDER BY b,c;
 
@@ -3935,13 +3937,16 @@ SELECT ROW(1,2) = (SELECT    1,    2), ROW(1,2) IN (SELECT    1,    2);
 CREATE TABLE t1 (a INT, b INT, c INT);
 INSERT INTO t1 VALUES (1,1,1), (1,1,1);
 
---error 1054
+# In the scalar subquery "SELECT COUNT(a)", "a" and "c" are outer
+# references whose qualifying query is the one which has "GROUP BY b",
+# so "c" is not dependent on the group column:
+--error ER_WRONG_FIELD_WITH_GROUP
 EXPLAIN EXTENDED 
-  SELECT c FROM 
+  SELECT cc FROM 
     ( SELECT 
       (SELECT COUNT(a) FROM 
         (SELECT COUNT(b) FROM t1) AS x GROUP BY c
-      ) FROM t1 GROUP BY b
+      ) AS cc FROM t1 GROUP BY b
     ) AS y;
 SHOW WARNINGS;
 
@@ -3960,14 +3965,14 @@ CREATE TABLE t3 LIKE t1;
 
 --echo # should have 1 impossible where and 2 dependent subqueries
 EXPLAIN
-SELECT 1 FROM t1
+SELECT COUNT(*) FROM t1
 WHERE NOT EXISTS (SELECT 1 FROM t2 WHERE 1 = (SELECT MIN(t2.b) FROM t3))
-ORDER BY count(*);
+ORDER BY COUNT(*);
 
 --echo # should not crash the next statement
-SELECT 1 FROM t1
+SELECT COUNT(*) FROM t1
 WHERE NOT EXISTS (SELECT 1 FROM t2 WHERE 1 = (SELECT MIN(t2.b) FROM t3))
-ORDER BY count(*);
+ORDER BY COUNT(*);
 
 --echo # should not crash: the crash is caused by the previous statement
 SELECT 1;
@@ -4503,9 +4508,7 @@ SELECT * FROM (
   SELECT a FROM t1 WHERE a = 2 
 ) t1a;
 
-# This was not allowed previously. Possibly, it should be allowed on the future.
-# For now, the intent is to keep the fix as non-intrusive as possible.
---error ER_PARSE_ERROR
+--error ER_DERIVED_MUST_HAVE_ALIAS
 SELECT * FROM ((SELECT 1 a) UNION SELECT 1 a);
 SELECT * FROM (SELECT 1 a UNION (SELECT 1 a)) alias;
 SELECT * FROM (SELECT 1 UNION SELECT 1) t1a;
@@ -4537,11 +4540,11 @@ SELECT * FROM (SELECT 1 a UNION SELECT 1 a ORDER BY a LIMIT 1) t1a;
 
 # Test of rule
 # table_factor:  '(' get_select_lex query_expression_body ')' opt_table_alias
-# UNION should not be allowed inside the parentheses, nor should
-# aliases after.
-# 
-SELECT * FROM t1 JOIN  (SELECT 1 UNION SELECT 1) alias ON 1;
---error ER_PARSE_ERROR
+SELECT * FROM t1 JOIN  (SELECT 1 UNION SELECT 1)  alias ON 1;
+SELECT * FROM t1 JOIN ((SELECT 1 UNION SELECT 1)) alias ON 1;
+--error ER_DERIVED_MUST_HAVE_ALIAS
+SELECT * FROM t1 JOIN  (SELECT 1 UNION SELECT 1)  ON 1;
+--error ER_DERIVED_MUST_HAVE_ALIAS
 SELECT * FROM t1 JOIN ((SELECT 1 UNION SELECT 1)) ON 1;
 --error ER_PARSE_ERROR
 SELECT * FROM t1 JOIN  (t1 t1a UNION SELECT 1)  ON 1;
@@ -4633,8 +4636,9 @@ SELECT ((SELECT 1 UNION SELECT 1 UNION SELECT 1));
 
 --error ER_PARSE_ERROR
 SELECT * FROM ( SELECT 1 UNION ( SELECT 1 UNION SELECT 1 ) );
---error ER_PARSE_ERROR
+--error ER_DERIVED_MUST_HAVE_ALIAS
 SELECT * FROM ( ( SELECT 1 UNION SELECT 1 ) UNION SELECT 1 );
+SELECT * FROM ( ( SELECT 1 UNION SELECT 1 ) UNION SELECT 1 ) a;
 SELECT * FROM ( SELECT 1 UNION SELECT 1 UNION SELECT 1 ) a;
 
 --error ER_PARSE_ERROR
@@ -4680,11 +4684,13 @@ DROP TABLE t1, t2;
 #
 CREATE TABLE t1 (a ENUM('rainbow'));
 INSERT INTO t1 VALUES (),(),(),(),();
-SELECT 1 FROM t1 GROUP BY (SELECT 1 FROM t1 ORDER BY AVG(LAST_INSERT_ID()));
+SELECT 1
+FROM t1 GROUP BY (SELECT COUNT(*) FROM t1 ORDER BY AVG(LAST_INSERT_ID()));
 DROP TABLE t1;
 CREATE TABLE t1 (a LONGBLOB);
 INSERT INTO t1 SET a = 'aaaa';
 INSERT INTO t1 SET a = 'aaaa';
+--error ER_AGGREGATE_ORDER_NON_AGG_QUERY
 SELECT 1 FROM t1 GROUP BY
   (SELECT LAST_INSERT_ID() FROM t1 ORDER BY MIN(a) ASC LIMIT 1);
 DROP TABLE t1;
@@ -6196,3 +6202,179 @@ DROP TABLE t1;
 
 set @@optimizer_switch=@old_opt_switch;
 # New tests go here.
+
+--echo #
+--echo # Bug #18486607 ASSERTION FAILED:
+--echo # IN_SUBQ_PRED->LEFT_EXPR->FIXED IN CONVERT_SUBQUERY_TO_SEMIJOIN 
+--echo #
+
+CREATE TABLE t1 (a INT);
+CREATE TABLE t2 (b INT);
+
+# not with prepared statements because of Bug#16926177
+--disable_ps_protocol
+SELECT (SELECT 1 FROM t2
+        WHERE a IN (SELECT 1 FROM t2)
+       ) AS scalar
+FROM t1
+GROUP BY a;
+--enable_ps_protocol
+
+DROP TABLE t1,t2;
+SET sql_mode = default;
+
+--echo #
+--echo # Bug #19179529 SEGMENTATION FAULT IN ADD_KEY_FIELD FOR ENGINES MYISAM AND MEMORY
+--echo #
+
+CREATE TABLE t1 (
+pk INTEGER PRIMARY KEY,
+col_int_key INTEGER NOT NULL,
+KEY (col_int_key)
+) ENGINE=MYISAM;
+
+SELECT
+( SELECT MIN(  1 ) AS SQ1_field1
+  FROM t1 AS SQ1_alias1 , t1 AS SQ1_alias2
+  WHERE  SQ1_alias2 . `pk` > alias1 . `col_int_key`  ) AS field1
+FROM t1 AS alias1 GROUP BY field1;
+
+DROP TABLE t1;
+
+--echo #
+--echo # Bug#19224430 	ASSERT FAILED IN JOIN::REPLACE_INDEX_SUBQUERY
+--echo #
+
+CREATE TABLE t1 (
+pk INTEGER,
+col_int_nokey INTEGER,
+col_int_key INTEGER,
+col_datetime_key DATETIME,
+PRIMARY KEY (pk),
+KEY (col_int_key),
+KEY (col_datetime_key)
+)  ENGINE=MEMORY;
+
+INSERT INTO t1 VALUES (1, 1, 7, '2001-11-04 19:07:55.051133');
+
+CREATE TABLE t2(field1 INT, field2 INT) ENGINE=MEMORY;
+
+# Because t1 is a one-row constant table, subquery is rewritten (MAX
+# is read during optimization, GROUP BY is removed) and then
+# index_subquery can be used.
+let $query=
+SELECT * FROM t2 WHERE (field1, field2) IN (
+  SELECT MAX(col_datetime_key), col_int_key
+  FROM t1
+  WHERE col_int_key > col_int_nokey
+  GROUP BY col_int_key);
+
+eval EXPLAIN $query;
+eval $query;
+
+DROP TABLE t1,t2;
+
+--echo #
+--echo # Bug#19416826 Assert failed in JOIN::make_tmp_tables_info
+--echo #
+
+CREATE TABLE t1 (
+  pk int NOT NULL,
+  col_int_nokey int DEFAULT NULL,
+  col_int_key int DEFAULT NULL,
+  col_varchar_key varchar(1) DEFAULT NULL,
+  col_varchar_nokey varchar(1) DEFAULT NULL,
+  PRIMARY KEY(pk),
+  KEY col_int_key(col_int_key),
+  KEY col_varchar_key(col_varchar_key, col_int_key)
+);
+
+INSERT INTO t1 VALUES
+(1,2,4,'v','v'),
+(2,150,62,'v','v'),
+(3,NULL,7,'c','c'),
+(4,2,1,NULL,NULL),
+(5,5,0,'x','x'),
+(6,3,7,'i','i'),
+(7,1,7,'e','e'),
+(8,4,1,'p','p'),
+(9,NULL,7,'s','s'),
+(10,2,1,'j','j'),
+(11,6,5,'z','z'),
+(12,6,2,'c','c'),
+(13,8,0,'a','a'),
+(14,2,1,'q','q'),
+(15,6,8,'y','y'),
+(16,8,1,NULL,NULL),
+(17,3,1,'r','r'),
+(18,3,9,'v','v'),
+(19,9,1,NULL,NULL),
+(20,6,5,'r','r');
+
+CREATE TABLE t2 (
+  pk int NOT NULL,
+  col_int_nokey int DEFAULT NULL,
+  col_int_key int DEFAULT NULL,
+  col_varchar_key varchar(1) DEFAULT NULL,
+  col_varchar_nokey varchar(1) DEFAULT NULL,
+  PRIMARY KEY(pk),
+  KEY col_int_key(col_int_key),
+  KEY col_varchar_key(col_varchar_key, col_int_key)
+);
+
+INSERT INTO t2 VALUES
+(10,NULL,8,'x','x'),
+(11,8,7,'d','d'),
+(12,1,1,'r','r'),
+(13,9,7,'f','f'),
+(14,4,9,'y','y'),
+(15,3,NULL,'u','u'),
+(16,2,1,'m','m'),
+(17,NULL,9,NULL,NULL),
+(18,2,2,'o','o'),
+(19,NULL,9,'w','w'),
+(20,6,2,'m','m'),
+(21,7,4,'q','q'),
+(22,2,0,NULL,NULL),
+(23,5,4,'d','d'),
+(24,7,8,'g','g'),
+(25,6,NULL,'x','x'),
+(26,6,NULL,'f','f'),
+(27,2,0,'p','p'),
+(28,9,NULL,'j','j'),
+(29,6,8,'c','c');
+
+--sorted_result
+SELECT alias1.col_varchar_nokey AS field1
+FROM (SELECT sq1_alias1.*
+      FROM t1 AS sq1_alias1 INNER JOIN t2 AS sq1_alias2
+           ON sq1_alias2.col_varchar_key = sq1_alias1.col_varchar_nokey) AS alias1
+     INNER JOIN t1 AS alias2
+     ON alias2.col_int_key = alias1.col_int_key
+WHERE (alias1.col_int_key, alias2.col_int_nokey) NOT IN
+        (SELECT sq2_alias1.pk AS sq2_field1, COUNT(sq2_alias2.pk) AS sq2_field2
+         FROM t2 AS sq2_alias1, t2 AS sq2_alias2
+         GROUP BY sq2_field1) AND
+      alias1.col_varchar_key <= 's'
+HAVING field1 != 'r'
+ORDER BY CONCAT(alias2.col_varchar_nokey, alias2.col_varchar_nokey) DESC, field1;
+
+DROP TABLE t1, t2;
+
+--echo # Bug#19778967: Assert failed in JOIN::optimize
+
+CREATE TABLE t1(a INTEGER);
+CREATE VIEW v1 AS SELECT * FROM t1;
+
+INSERT INTO t1 VALUES(0), (1);
+
+let $query=SELECT * FROM t1 WHERE a <ANY (SELECT a FROM v1);
+eval EXPLAIN $query;
+eval PREPARE s FROM "$query";
+
+EXECUTE s;
+EXECUTE s;
+
+DEALLOCATE PREPARE s;
+DROP VIEW v1;
+DROP TABLE t1;

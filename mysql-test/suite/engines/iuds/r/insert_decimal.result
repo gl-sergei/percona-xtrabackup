@@ -1,4 +1,7 @@
 DROP TABLE IF EXISTS t1,t2;
+SET sql_mode='NO_ENGINE_SUBSTITUTION';
+Warnings:
+Warning	3129	Unsetting sql mode 'NO_AUTO_CREATE_USER' is deprecated. It will be made read-only in a future release.
 CREATE TABLE t1(c1 DECIMAL(10,5) UNSIGNED NOT NULL, c2 DECIMAL(10,5) SIGNED NULL, c3 DECIMAL, c4 INT, UNIQUE INDEX idx(c1,c2));
 CREATE TABLE t2(c1 DECIMAL(10,0) SIGNED NOT NULL, c2 DECIMAL(10) UNSIGNED NULL, c3 DECIMAL, c4 INT);
 INSERT INTO t1 VALUES('00100.05000','-00100.05000','00100.05000',1);
@@ -1013,7 +1016,7 @@ ROUND(c1,c2)	TRUNCATE(c1,c2)
 1.133000	1.132000
 DROP TABLE t5;
 CREATE TABLE t7(c1 DECIMAL(66,0));
-ERROR 42000: Too big precision 66 specified for column 'c1'. Maximum is 65.
+ERROR 42000: Too-big precision 66 specified for 'c1'. Maximum is 65.
 CREATE TABLE t7(c1 DECIMAL(5,10));
 ERROR 42000: For float(M,D), double(M,D) or decimal(M,D), M must be >= D (column 'c1').
 DROP TABLE t1,t2;
@@ -2846,3 +2849,4 @@ DROP TABLE t5;
 CREATE TABLE t7(c1 DOUBLE(5,10));
 ERROR 42000: For float(M,D), double(M,D) or decimal(M,D), M must be >= D (column 'c1').
 DROP TABLE t1,t2;
+SET sql_mode=default;

@@ -1,5 +1,5 @@
 /*
-   Copyright (c) 2003, 2010, Oracle and/or its affiliates. All rights reserved.
+   Copyright (c) 2003, 2013, Oracle and/or its affiliates. All rights reserved.
 
    This program is free software; you can redistribute it and/or modify
    it under the terms of the GNU General Public License as published by
@@ -142,9 +142,9 @@ const GsnName SignalNames [] = {
   ,{ GSN_COPY_STATEREQ,          "COPY_STATEREQ" }
   ,{ GSN_COPY_TABCONF,           "COPY_TABCONF" }
   ,{ GSN_COPY_TABREQ,            "COPY_TABREQ" }
-  ,{ GSN_CREATE_FRAGCONF,        "CREATE_FRAGCONF" }
-  ,{ GSN_CREATE_FRAGREF,         "CREATE_FRAGREF" }
-  ,{ GSN_CREATE_FRAGREQ,         "CREATE_FRAGREQ" }
+  ,{ GSN_UPDATE_FRAG_STATECONF,  "UPDATE_FRAG_STATECONF" }
+  ,{ GSN_UPDATE_FRAG_STATEREF,   "UPDATE_FRAG_STATEREF" }
+  ,{ GSN_UPDATE_FRAG_STATEREQ,   "UPDATE_FRAG_STATEREQ" }
   ,{ GSN_DEBUG_SIG,              "DEBUG_SIG" }
   ,{ GSN_DIH_SCAN_TAB_REQ,       "DIH_SCAN_TAB_REQ" }
   ,{ GSN_DIH_SCAN_TAB_REF,       "DIH_SCAN_TAB_REF" }
@@ -259,9 +259,9 @@ const GsnName SignalNames [] = {
   ,{ GSN_NEXT_SCANREF,           "NEXT_SCANREF" }
   ,{ GSN_NEXT_SCANREQ,           "NEXT_SCANREQ" }
   ,{ GSN_NF_COMPLETEREP,         "NF_COMPLETEREP" }
-  ,{ GSN_OPEN_COMCONF,           "OPEN_COMCONF" }
-  ,{ GSN_OPEN_COMREF,            "OPEN_COMREF" }
-  ,{ GSN_OPEN_COMREQ,            "OPEN_COMREQ" }
+//  ,{ GSN_OPEN_COMCONF,           "OPEN_COMCONF" }
+//  ,{ GSN_OPEN_COMREF,            "OPEN_COMREF" }
+  ,{ GSN_OPEN_COMORD,            "OPEN_COMORD" }
   ,{ GSN_PACKED_SIGNAL,          "PACKED_SIGNAL" }
   ,{ GSN_PREP_FAILCONF,          "PREP_FAILCONF" }
   ,{ GSN_PREP_FAILREF,           "PREP_FAILREF" }
@@ -775,5 +775,32 @@ const GsnName SignalNames [] = {
   ,{ GSN_GET_CONFIG_REQ, "GET_CONFIG_REQ" }
   ,{ GSN_GET_CONFIG_REF, "GET_CONFIG_REF" }
   ,{ GSN_GET_CONFIG_CONF, "GET_CONFIG_CONF" }
+
+  ,{ GSN_ALLOC_NODEID_REQ, "ALLOC_NODEID_REQ" }
+  ,{ GSN_ALLOC_NODEID_CONF, "ALLOC_NODEID_CONF" }
+  ,{ GSN_ALLOC_NODEID_REF, "ALLOC_NODEID_REF" }
+
+  ,{ GSN_LCP_STATUS_REQ, "LCP_STATUS_REQ" }
+  ,{ GSN_LCP_STATUS_CONF, "LCP_STATUS_CONF" }
+  ,{ GSN_LCP_STATUS_REF, "LCP_STATUS_REF" }
+
+  ,{ GSN_CREATE_FK_REQ, "CREATE_FK_REQ" }
+  ,{ GSN_CREATE_FK_REF, "CREATE_FK_REF" }
+  ,{ GSN_CREATE_FK_CONF, "CREATE_FK_CONF" }
+  ,{ GSN_DROP_FK_REQ, "DROP_FK_REQ" }
+  ,{ GSN_DROP_FK_REF, "DROP_FK_REF" }
+  ,{ GSN_DROP_FK_CONF, "DROP_FK_CONF" }
+  ,{ GSN_CREATE_FK_IMPL_REQ, "CREATE_FK_IMPL_REQ" }
+  ,{ GSN_CREATE_FK_IMPL_REF, "CREATE_FK_IMPL_REF" }
+  ,{ GSN_CREATE_FK_IMPL_CONF, "CREATE_FK_IMPL_CONF" }
+  ,{ GSN_DROP_FK_IMPL_REQ, "DROP_FK_IMPL_REQ" }
+  ,{ GSN_DROP_FK_IMPL_REF, "DROP_FK_IMPL_REF" }
+  ,{ GSN_DROP_FK_IMPL_CONF, "DROP_FK_IMPL_CONF" }
+  ,{ GSN_BUILD_FK_REQ, "BUILD_FK_REQ" }
+  ,{ GSN_BUILD_FK_REF, "BUILD_FK_REF" }
+  ,{ GSN_BUILD_FK_CONF, "BUILD_FK_CONF" }
+  ,{ GSN_BUILD_FK_IMPL_REQ, "BUILD_FK_IMPL_REQ" }
+  ,{ GSN_BUILD_FK_IMPL_REF, "BUILD_FK_IMPL_REF" }
+  ,{ GSN_BUILD_FK_IMPL_CONF, "BUILD_FK_IMPL_CONF" }
 };
 const unsigned short NO_OF_SIGNAL_NAMES = sizeof(SignalNames)/sizeof(GsnName);

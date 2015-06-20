@@ -1,3 +1,4 @@
+
 -- source include/not_embedded.inc
 
 --echo #
@@ -90,7 +91,7 @@
 --echo ##############################################
 --echo # Tests for mysql_config_editor's help command
 --echo ##############################################
---replace_regex /.*mysql_config_editor.*// /.*Output debug log.*//
+--replace_regex /.*mysql_config_editor.*// /.*Output debug log.*// /.*This is a non.debug version.*//
 --exec $MYSQL_CONFIG_EDITOR help 2>&1
 --echo # done..
 

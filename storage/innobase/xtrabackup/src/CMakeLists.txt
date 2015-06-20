@@ -88,7 +88,7 @@ TARGET_LINK_LIBRARIES(xtrabackup
 ########################################################################
 ADD_CUSTOM_COMMAND(TARGET xtrabackup
                    COMMAND ln -sf xtrabackup innobackupex)
-INSTALL_SYMLINK(xtrabackup xtrabackup innobackupex bin runtime)
+#INSTALL_SYMLINK(xtrabackup xtrabackup innobackupex bin runtime)
 
 ########################################################################
 # xbstream binary

@@ -76,7 +76,7 @@ wf_incremental_init(xb_write_filt_ctxt_t *ctxt, char *dst_name,
 
 	/* allocate buffer for incremental backup (4096 pages) */
 	buf_size = (UNIV_PAGE_SIZE_MAX / 4 + 1) * UNIV_PAGE_SIZE_MAX;
-	cp->delta_buf_base = static_cast<byte *>(ut_malloc(buf_size));
+	cp->delta_buf_base = static_cast<byte *>(ut_malloc_nokey(buf_size));
 	memset(cp->delta_buf_base, 0, buf_size);
 	cp->delta_buf = static_cast<byte *>
 		(ut_align(cp->delta_buf_base, UNIV_PAGE_SIZE_MAX));

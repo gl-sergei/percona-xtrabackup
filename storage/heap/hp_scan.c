@@ -1,5 +1,4 @@
-/* Copyright (c) 2000-2002, 2005-2007 MySQL AB
-   Use is subject to license terms
+/* Copyright (c) 2000, 2012, Oracle and/or its affiliates. All rights reserved.
 
    This program is free software; you can redistribute it and/or modify
    it under the terms of the GNU General Public License as published by
@@ -25,7 +24,7 @@
 	   HA_ERR_END_OF_FILE = EOF.
 */
 
-int heap_scan_init(register HP_INFO *info)
+int heap_scan_init(HP_INFO *info)
 {
   DBUG_ENTER("heap_scan_init");
   info->lastinx= -1;
@@ -35,7 +34,7 @@ int heap_scan_init(register HP_INFO *info)
   DBUG_RETURN(0);
 }
 
-int heap_scan(register HP_INFO *info, uchar *record)
+int heap_scan(HP_INFO *info, uchar *record)
 {
   HP_SHARE *share=info->s;
   ulong pos;

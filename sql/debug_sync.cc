@@ -1,4 +1,4 @@
-/* Copyright (c) 2009, 2013, Oracle and/or its affiliates. All rights reserved.
+/* Copyright (c) 2009, 2015, Oracle and/or its affiliates. All rights reserved.
 
    This program is free software; you can redistribute it and/or modify
    it under the terms of the GNU General Public License as published by
@@ -238,20 +238,21 @@
   #endif
   while (!thd->killed && !end_of_wait_condition)
     mysql_cond_wait(&condition_variable, &mutex);
+  mysql_mutex_unlock(&mutex);
   thd->exit_cond(old_message);
 
   Here some explanations:
 
   thd->enter_cond() is used to register the condition variable and the
-  mutex in thd->mysys_var. This is done to allow the thread to be
-  interrupted (killed) from its sleep. Another thread can find the
-  condition variable to signal and mutex to use for synchronization in
-  this thread's THD::mysys_var.
+  mutex in THD::current_cond/current_mutex. This is done to allow the
+  thread to be interrupted (killed) from its sleep. Another thread can
+  find the condition variable to signal and mutex to use for synchronization
+  in this thread's THD.
 
   thd->enter_cond() requires the mutex to be acquired in advance.
 
-  thd->exit_cond() unregisters the condition variable and mutex and
-  releases the mutex.
+  thd->exit_cond() unregisters the condition variable and mutex. Requires
+  the mutex to be released in advance.
 
   If you want to have a Debug Sync point with the wait, please place it
   behind enter_cond(). Only then you can safely decide, if the wait will
@@ -280,6 +281,7 @@
       [DEBUG_SYNC(thd, "sync_point_name");]
       mysql_cond_wait(&condition_variable, &mutex);
     }
+    mysql_mutex_unlock(&mutex);
     thd->exit_cond(old_message);
   }
 
@@ -291,7 +293,7 @@
   condition variable. It would just set THD::killed. But if we would not
   test it again, we would go asleep though we are killed. If the killing
   thread would kill us when we are after the second test, but still
-  before sleeping, we hold the mutex, which is registered in mysys_var.
+  before sleeping, we hold the mutex, which is registered in THD.
   The killing thread would try to acquire the mutex before signaling
   the condition variable. Since the mutex is only released implicitly in
   mysql_cond_wait(), the signaling happens at the right place. We
@@ -328,15 +330,8 @@
 
 #if defined(ENABLED_DEBUG_SYNC)
 
-/*
-  Due to weaknesses in our include files, we need to include
-  sql_priv.h here. To have THD declared, we need to include
-  sql_class.h. This includes log_event.h, which in turn requires
-  declarations from sql_priv.h (e.g. OPTION_AUTO_IS_NULL).
-  sql_priv.h includes almost everything, so is sufficient here.
-*/
-#include "sql_priv.h"
 #include "sql_parse.h"
+#include "log.h"
 
 #include <set>
 #include <string>
@@ -425,7 +420,7 @@ C_MODE_END
 
     We cannot place a sync point directly in C files (like those in mysys or
     certain storage engines written mostly in C like MyISAM or Maria). Because
-    they are C code and do not include sql_priv.h. So they do not know the
+    they are C code and do not know the
     macro DEBUG_SYNC(thd, sync_point_name). The macro needs a 'thd' argument.
     Hence it cannot be used in files outside of the sql/ directory.
 
@@ -456,6 +451,9 @@ static void debug_sync_C_callback(const char *sync_point_name,
     debug_sync(current_thd, sync_point_name, name_len);
 }
 
+static PSI_memory_key key_debug_THD_debug_sync_control;
+static PSI_memory_key key_debug_sync_action;
+
 #ifdef HAVE_PSI_INTERFACE
 static PSI_mutex_key key_debug_sync_globals_ds_mutex;
 
@@ -471,6 +469,12 @@ static PSI_cond_info all_debug_sync_conds[]=
   { &key_debug_sync_globals_ds_cond, "DEBUG_SYNC::cond", PSI_FLAG_GLOBAL}
 };
 
+static PSI_memory_info all_debug_sync_memory[]=
+{
+  { &key_debug_THD_debug_sync_control, "THD::debug_sync_control", 0},
+  { &key_debug_sync_action, "debug_sync_control::debug_sync_action", 0}
+};
+
 static void init_debug_sync_psi_keys(void)
 {
   const char* category= "sql";
@@ -481,9 +485,29 @@ static void init_debug_sync_psi_keys(void)
 
   count= array_elements(all_debug_sync_conds);
   mysql_cond_register(category, all_debug_sync_conds, count);
+
+  count= array_elements(all_debug_sync_memory);
+  mysql_memory_register(category, all_debug_sync_memory, count);
 }
 #endif /* HAVE_PSI_INTERFACE */
 
+/**
+  Set the THD::proc_info without instrumentation.
+  This method is private to DEBUG_SYNC,
+  and on purpose avoid any use of:
+  - the SHOW PROFILE instrumentation
+  - the PERFORMANCE_SCHEMA instrumentation
+  so that using DEBUG_SYNC() in the server code
+  does not cause the instrumentations to record
+  spurious data.
+*/
+static const char*
+debug_sync_thd_proc_info(THD *thd, const char* info)
+{
+  const char* old_proc_info= thd->proc_info;
+  thd->proc_info= info;
+  return old_proc_info;
+}
 
 /**
   Initialize the debug sync facility at server start.
@@ -507,7 +531,7 @@ int debug_sync_init(void)
 
     /* Initialize the global variables. */
     if ((rc= mysql_cond_init(key_debug_sync_globals_ds_cond,
-                             &debug_sync_global.ds_cond, NULL)) ||
+                             &debug_sync_global.ds_cond)) ||
         (rc= mysql_mutex_init(key_debug_sync_globals_ds_mutex,
                               &debug_sync_global.ds_mutex,
                               MY_MUTEX_INIT_FAST)))
@@ -599,7 +623,8 @@ void debug_sync_init_thread(THD *thd)
   if (opt_debug_sync_timeout)
   {
     thd->debug_sync_control= (st_debug_sync_control*)
-      my_malloc(sizeof(st_debug_sync_control), MYF(MY_WME | MY_ZEROFILL));
+      my_malloc(key_debug_THD_debug_sync_control,
+                sizeof(st_debug_sync_control), MYF(MY_WME | MY_ZEROFILL));
     if (!thd->debug_sync_control)
     {
       /*
@@ -641,9 +666,9 @@ void debug_sync_end_thread(THD *thd)
       st_debug_sync_action *action_end= action + ds_control->ds_allocated;
       for (; action < action_end; action++)
       {
-        action->signal.free();
-        action->wait_for.free();
-        action->sync_point.free();
+        action->signal.mem_free();
+        action->wait_for.mem_free();
+        action->sync_point.mem_free();
       }
       my_free(ds_control->ds_action);
     }
@@ -801,7 +826,7 @@ static int debug_sync_qsort_cmp(const void* arg1, const void* arg2)
   DBUG_ASSERT(action1);
   DBUG_ASSERT(action2);
 
-  if (!(diff= action1->sync_point.length() - action2->sync_point.length()))
+  if (!(diff= static_cast<int>(action1->sync_point.length() - action2->sync_point.length())))
     diff= memcmp(action1->sync_point.ptr(), action2->sync_point.ptr(),
                  action1->sync_point.length());
 
@@ -828,7 +853,7 @@ static int debug_sync_qsort_cmp(const void* arg1, const void* arg2)
 static st_debug_sync_action *debug_sync_find(st_debug_sync_action *actionarr,
                                              int quantity,
                                              const char *dsp_name,
-                                             uint name_len)
+                                             size_t name_len)
 {
   st_debug_sync_action  *action;
   int                   low ;
@@ -846,7 +871,7 @@ static st_debug_sync_action *debug_sync_find(st_debug_sync_action *actionarr,
   {
     mid= (low + high) / 2;
     action= actionarr + mid;
-    if (!(diff= name_len - action->sync_point.length()) &&
+    if (!(diff= static_cast<int>(name_len - action->sync_point.length())) &&
         !(diff= memcmp(dsp_name, action->sync_point.ptr(), name_len)))
       return action;
     if (diff > 0)
@@ -912,7 +937,7 @@ static void debug_sync_reset(THD *thd)
 static void debug_sync_remove_action(st_debug_sync_control *ds_control,
                                      st_debug_sync_action *action)
 {
-  uint dsp_idx= action - ds_control->ds_action;
+  uint dsp_idx= static_cast<uint>(action - ds_control->ds_action);
   DBUG_ENTER("debug_sync_remove_action");
   DBUG_ASSERT(ds_control);
   DBUG_ASSERT(ds_control == current_thd->debug_sync_control);
@@ -983,7 +1008,7 @@ static void debug_sync_remove_action(st_debug_sync_control *ds_control,
 
 static st_debug_sync_action *debug_sync_get_action(THD *thd,
                                                    const char *dsp_name,
-                                                   uint name_len)
+                                                   size_t name_len)
 {
   st_debug_sync_control *ds_control= thd->debug_sync_control;
   st_debug_sync_action  *action;
@@ -1019,7 +1044,8 @@ static st_debug_sync_action *debug_sync_get_action(THD *thd,
     if (ds_control->ds_active > ds_control->ds_allocated)
     {
       uint new_alloc= ds_control->ds_active + 3;
-      void *new_action= my_realloc(ds_control->ds_action,
+      void *new_action= my_realloc(key_debug_sync_action,
+                                   ds_control->ds_action,
                                    new_alloc * sizeof(st_debug_sync_action),
                                    MYF(MY_WME | MY_ALLOW_ZERO_PTR));
       if (!new_action)
@@ -1161,6 +1187,58 @@ static bool debug_sync_set_action(THD *thd, st_debug_sync_action *action)
 }
 
 
+/*
+  Advance the pointer by length of multi-byte character.
+
+    @param    ptr   pointer to multibyte character.
+
+    @return   NULL or pointer after advancing pointer by the
+              length of multi-byte character pointed to.
+*/
+
+static inline const char *advance_mbchar_ptr(const char *ptr)
+{
+  uint clen= my_mbcharlen(system_charset_info, (uchar) *ptr);
+
+  return (clen != 0) ? ptr + clen : NULL;
+}
+
+
+/*
+  Skip whitespace characters from the beginning of the multi-byte string.
+
+  @param    ptr     pointer to the multi-byte string.
+
+  @return   a pointer to the first non-whitespace character or NULL if the
+            string consists from whitespace characters only.
+*/
+
+static inline const char *skip_whitespace(const char *ptr)
+{
+  while (ptr != NULL && *ptr && my_isspace(system_charset_info, *ptr))
+    ptr= advance_mbchar_ptr(ptr);
+
+  return ptr;
+}
+
+
+/*
+  Get pointer to end of token.
+
+  @param    ptr  pointer to start of token
+
+  @return   NULL or pointer to end of token.
+*/
+
+static inline const char *get_token_end_ptr(const char *ptr)
+{
+  while (ptr != NULL && *ptr && !my_isspace(system_charset_info, *ptr))
+    ptr= advance_mbchar_ptr(ptr);
+
+  return ptr;
+}
+
+
 /**
   Extract a token from a string.
 
@@ -1210,28 +1288,27 @@ static bool debug_sync_set_action(THD *thd, st_debug_sync_action *action)
     to the string terminator ASCII NUL ('\0').
 */
 
-static char *debug_sync_token(char **token_p, uint *token_length_p, char *ptr)
+static char *debug_sync_token(char **token_p, size_t *token_length_p, char *ptr)
 {
   DBUG_ASSERT(token_p);
   DBUG_ASSERT(token_length_p);
   DBUG_ASSERT(ptr);
 
-  /* Skip leading space */
-  while (my_isspace(system_charset_info, *ptr))
-    ptr+= my_mbcharlen(system_charset_info, (uchar) *ptr);
 
-  if (!*ptr)
-  {
-    ptr= NULL;
-    goto end;
-  }
+  /* Skip leading space */
+  ptr= const_cast<char*>(skip_whitespace(ptr));
+
+  if (ptr == NULL || !*ptr)
+    return NULL;
 
   /* Get token start. */
   *token_p= ptr;
 
   /* Find token end. */
-  while (*ptr && !my_isspace(system_charset_info, *ptr))
-    ptr+= my_mbcharlen(system_charset_info, (uchar) *ptr);
+  ptr= const_cast<char*>(get_token_end_ptr(ptr));
+
+  if (ptr == NULL)
+    return NULL;
 
   /* Get token length. */
   *token_length_p= ptr - *token_p;
@@ -1239,21 +1316,19 @@ static char *debug_sync_token(char **token_p, uint *token_length_p, char *ptr)
   /* If necessary, terminate token. */
   if (*ptr)
   {
-    /* Get terminator character length. */
-    uint mbspacelen= my_mbcharlen(system_charset_info, (uchar) *ptr);
+     char* tmp= ptr;
 
-    /* Terminate token. */
-    *ptr= '\0';
+    /* Advance by terminator character length. */
+    ptr= const_cast<char*>(advance_mbchar_ptr(ptr));
+    if (ptr != NULL)
+    {
+      /* Terminate token. */
+      *tmp= '\0';
 
-    /* Skip the terminator. */
-    ptr+= mbspacelen;
-
-    /* Skip trailing space */
-    while (my_isspace(system_charset_info, *ptr))
-      ptr+= my_mbcharlen(system_charset_info, (uchar) *ptr);
+      /* Skip trailing space */
+      ptr= const_cast<char*>(skip_whitespace(ptr));
+    }
   }
-
- end:
   return ptr;
 }
 
@@ -1285,7 +1360,7 @@ static char *debug_sync_number(ulong *number_p, char *actstrptr)
   char                  *ptr;
   char                  *ept;
   char                  *token;
-  uint                  token_length;
+  size_t                token_length;
   DBUG_ASSERT(number_p);
   DBUG_ASSERT(actstrptr);
 
@@ -1340,7 +1415,7 @@ static bool debug_sync_eval_action(THD *thd, char *action_str)
   const char            *errmsg;
   char                  *ptr;
   char                  *token;
-  uint                  token_length= 0;
+  size_t                token_length= 0;
   DBUG_ENTER("debug_sync_eval_action");
   DBUG_ASSERT(thd);
   DBUG_ASSERT(action_str);
@@ -1780,7 +1855,7 @@ static void debug_sync_execute(THD *thd, st_debug_sync_action *action)
 
   if (action->execute)
   {
-    const char *UNINIT_VAR(old_proc_info);
+    const char *old_proc_info= NULL;
 
     action->execute--;
 
@@ -1795,7 +1870,7 @@ static void debug_sync_execute(THD *thd, st_debug_sync_action *action)
       strxnmov(ds_control->ds_proc_info, sizeof(ds_control->ds_proc_info)-1,
                "debug sync point: ", action->sync_point.c_ptr(), NullS);
       old_proc_info= thd->proc_info;
-      thd_proc_info(thd, ds_control->ds_proc_info);
+      debug_sync_thd_proc_info(thd, ds_control->ds_proc_info);
     }
 
     /*
@@ -1830,21 +1905,15 @@ static void debug_sync_execute(THD *thd, st_debug_sync_action *action)
         mutex and cond. This would prohibit the use of DEBUG_SYNC
         between other places of enter_cond() and exit_cond().
 
-        We need to check for existence of thd->mysys_var to also make
-        it possible to use DEBUG_SYNC framework in scheduler when this
-        variable has been set to NULL.
+        Note that we cannot lock LOCK_current_cond here. See comment
+        in THD::enter_cond().
       */
-      if (thd->mysys_var)
-      {
-        old_mutex= thd->mysys_var->current_mutex;
-        old_cond= thd->mysys_var->current_cond;
-        thd->mysys_var->current_mutex= &debug_sync_global.ds_mutex;
-        thd->mysys_var->current_cond= &debug_sync_global.ds_cond;
-      }
-      else
-        old_mutex= NULL;
+      old_mutex= thd->current_mutex;
+      old_cond= thd->current_cond;
+      thd->current_mutex= &debug_sync_global.ds_mutex;
+      thd->current_cond= &debug_sync_global.ds_cond;
 
-      set_timespec(abstime, action->timeout);
+      set_timespec(&abstime, action->timeout);
       DBUG_EXECUTE("debug_sync_exec", {
           DBUG_PRINT("debug_sync_exec",
                      ("wait for '%s'  at: '%s'",
@@ -1870,11 +1939,8 @@ static void debug_sync_execute(THD *thd, st_debug_sync_action *action)
         if (error == ETIMEDOUT || error == ETIME)
         {
           // We should not make the statement fail, even if in strict mode.
-          const bool save_abort_on_warning= thd->abort_on_warning;
-          thd->abort_on_warning= false;
-          push_warning(thd, Sql_condition::WARN_LEVEL_WARN,
+          push_warning(thd, Sql_condition::SL_WARNING,
                        ER_DEBUG_SYNC_TIMEOUT, ER(ER_DEBUG_SYNC_TIMEOUT));
-          thd->abort_on_warning= save_abort_on_warning;
           DBUG_EXECUTE_IF("debug_sync_abort_on_timeout", DBUG_ABORT(););
           break;
         }
@@ -1904,14 +1970,14 @@ static void debug_sync_execute(THD *thd, st_debug_sync_action *action)
       mysql_mutex_unlock(&debug_sync_global.ds_mutex);
       if (old_mutex)
       {
-        mysql_mutex_lock(&thd->mysys_var->mutex);
-        thd->mysys_var->current_mutex= old_mutex;
-        thd->mysys_var->current_cond= old_cond;
-        thd_proc_info(thd, old_proc_info);
-        mysql_mutex_unlock(&thd->mysys_var->mutex);
+        mysql_mutex_lock(&thd->LOCK_current_cond);
+        thd->current_mutex= old_mutex;
+        thd->current_cond= old_cond;
+        mysql_mutex_unlock(&thd->LOCK_current_cond);
+        debug_sync_thd_proc_info(thd, old_proc_info);
       }
       else
-        thd_proc_info(thd, old_proc_info);
+        debug_sync_thd_proc_info(thd, old_proc_info);
     }
     else
     {

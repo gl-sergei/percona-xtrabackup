@@ -1,5 +1,5 @@
 /*
-   Copyright (c) 2003, 2011, Oracle and/or its affiliates. All rights reserved.
+   Copyright (c) 2003, 2013, Oracle and/or its affiliates. All rights reserved.
 
    This program is free software; you can redistribute it and/or modify
    it under the terms of the GNU General Public License as published by
@@ -26,6 +26,8 @@
 #include <signaldata/TcKeyReq.hpp>
 
 #define DEBUG_NEXT_RESULT 0
+
+static const int Err_scanAlreadyComplete = 4120;
 
 NdbScanOperation::NdbScanOperation(Ndb* aNdb, NdbOperation::Type aType) :
   NdbOperation(aNdb, aType),
@@ -712,11 +714,11 @@ compare_index_row_prefix(const NdbRecord *rec,
       {
         Uint32 len1;
         bool ok1 = col->shrink_varchar(row1, len1, buf1);
-        assert(ok1);
+        require(ok1);
         ptr1 = buf1;
         Uint32 len2;
         bool ok2 = col->shrink_varchar(row2, len2, buf2);
-        assert(ok2);
+        require(ok2);
         ptr2 = buf2;
       }
 
@@ -740,7 +742,8 @@ NdbIndexScanOperation::getDistKeyFromRange(const NdbRecord *key_record,
                                            Uint32* distKey)
 {
   const Uint32 MaxKeySizeInLongWords= (NDB_MAX_KEY_SIZE + 7) / 8; 
-  Uint64 tmp[ MaxKeySizeInLongWords ];
+  // Note: xfrm:ed key can/will be bigger than MaxKeySizeInLongWords
+  Uint64 tmp[ MaxKeySizeInLongWords * MAX_XFRM_MULTIPLY ];
   char* tmpshrink = (char*)tmp;
   Uint32 tmplen = (Uint32)sizeof(tmp);
   
@@ -1413,6 +1416,9 @@ NdbScanOperation::processTableScanDefs(NdbScanOperation::LockMode lm,
     return -1;
   }//if
   
+  NdbImpl* impl = theNdb->theImpl;
+  Uint32 nodeId = theNdbCon->theDBnode;
+  Uint32 nodeVersion = impl->getNodeNdbVersion(nodeId);
   theSCAN_TABREQ->setSignal(GSN_SCAN_TABREQ, refToBlock(theNdbCon->m_tcRef));
   ScanTabReq * req = CAST_PTR(ScanTabReq, theSCAN_TABREQ->getDataPtrSend());
   req->apiConnectPtr = theNdbCon->theTCConPtr;
@@ -1424,7 +1430,17 @@ NdbScanOperation::processTableScanDefs(NdbScanOperation::LockMode lm,
   req->first_batch_size = batch; // Save user specified batch size
   
   Uint32 reqInfo = 0;
-  ScanTabReq::setParallelism(reqInfo, parallel);
+  if (!ndbd_scan_tabreq_implicit_parallelism(nodeVersion))
+  {
+    // Implicit parallelism implies support for greater
+    // parallelism than storable explicitly in old reqInfo.
+    if (parallel > PARALLEL_MASK)
+    {
+      setErrorCodeAbort(4000 /* TODO: TooManyFragments, to too old cluster version */);
+      return -1;
+    }
+    ScanTabReq::setParallelism(reqInfo, parallel);
+  }
   ScanTabReq::setScanBatch(reqInfo, 0);
   ScanTabReq::setRangeScanFlag(reqInfo, rangeScan);
   ScanTabReq::setTupScanFlag(reqInfo, tupScan);
@@ -1530,7 +1546,8 @@ NdbScanOperation::setReadLockMode(LockMode lockMode)
       break;
     default:
       /* Not supported / invalid. */
-      assert(false);
+      require(false);
+      return;
   }
   theLockMode= lockMode;
   ScanTabReq *req= CAST_PTR(ScanTabReq, theSCAN_TABREQ->getDataPtrSend());
@@ -1669,7 +1686,6 @@ NdbScanOperation::executeCursor(int nodeId)
    * Call finaliseScanOldApi() for old style scans before
    * proceeding
    */  
-  bool locked = false;
   NdbImpl* theImpl = theNdb->theImpl;
 
   int res = 0;
@@ -1680,9 +1696,7 @@ NdbScanOperation::executeCursor(int nodeId)
   }
 
   {
-    locked = true;
     NdbTransaction * tCon = theNdbCon;
-    theImpl->lock();
     
     Uint32 seq = tCon->theNodeSequence;
     
@@ -1732,9 +1746,6 @@ done:
     m_current_api_receiver = theParallelism;
     m_api_receivers_count = theParallelism;
   }
-
-  if (locked)
-    theImpl->unlock();
 
   return res;
 }
@@ -1875,6 +1886,15 @@ NdbScanOperation::nextResultNdbRecord(const char * & out_row,
 
   if(theError.code)
   {
+    if (theError.code == Err_scanAlreadyComplete)
+    {
+      /**
+       * The scan is already complete. There must be a bug in the api 
+       * application such that is calls nextResult()/nextResultNdbRecord() 
+       * again after getting return value 1 (meaning end of scan).
+       */
+      return -1;
+    }
     goto err4;
   }
 
@@ -1920,8 +1940,9 @@ NdbScanOperation::nextResultNdbRecord(const char * & out_row,
       {
         /**
          * No completed & no sent -> EndOfData
+         * Make sure user gets error if he tries again.
          */
-        theError.code= -1; // make sure user gets error if he tries again
+        theError.code= Err_scanAlreadyComplete;
         return 1;
       }
 
@@ -2291,16 +2312,13 @@ int NdbScanOperation::prepareSendScan(Uint32 aTC_ConnectPtr,
    */
   ScanTabReq * req = CAST_PTR(ScanTabReq, theSCAN_TABREQ->getDataPtrSend());
   Uint32 batch_size = req->first_batch_size; // User specified
-  Uint32 batch_byte_size, first_batch_size;
-  theReceiver.calculate_batch_size(key_size,
-                                   theParallelism,
+  Uint32 batch_byte_size;
+  theReceiver.calculate_batch_size(theParallelism,
                                    batch_size,
-                                   batch_byte_size,
-                                   first_batch_size,
-                                   m_attribute_record);
+                                   batch_byte_size);
   ScanTabReq::setScanBatch(req->requestInfo, batch_size);
   req->batch_byte_size= batch_byte_size;
-  req->first_batch_size= first_batch_size;
+  req->first_batch_size= batch_size;
 
   /**
    * Set keyinfo, nodisk and distribution key flags in 
@@ -3452,6 +3470,20 @@ NdbIndexScanOperation::insert_open_bound(const NdbRecord *key_record,
   return 0;
 }
 
+
+int
+NdbIndexScanOperation::getCurrentKeySize()
+{
+  if (unlikely((theStatus != NdbOperation::UseNdbRecord)))
+  {
+    setErrorCodeAbort(4284);
+    /* Cannot mix NdbRecAttr and NdbRecord methods in one operation */
+    return -1;
+  }
+  return theTupKeyLen;
+}
+
+
 /* IndexScan readTuples - part of old scan API
  * This call does the minimum amount of validation and state
  * storage possible.  Most of the scan initialisation is done
@@ -3674,7 +3706,7 @@ NdbIndexScanOperation::next_result_ordered_ndbrecord(const char * & out_row,
   }
   else
   {
-    theError.code= -1;
+    theError.code= Err_scanAlreadyComplete;
     return 1;                                   // End-of-file
   }
 }

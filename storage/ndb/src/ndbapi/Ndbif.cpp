@@ -1,5 +1,5 @@
 /*
-   Copyright (c) 2003, 2011, Oracle and/or its affiliates. All rights reserved.
+   Copyright (c) 2003, 2013, Oracle and/or its affiliates. All rights reserved.
 
    This program is free software; you can redistribute it and/or modify
    it under the terms of the GNU General Public License as published by
@@ -38,7 +38,9 @@
 #include <ndb_limits.h>
 #include <NdbOut.hpp>
 #include <NdbTick.h>
-
+#ifndef DBUG_OFF
+#include <NdbSleep.h>
+#endif
 #include <EventLogger.hpp>
 
 /******************************************************************************
@@ -73,9 +75,18 @@ Ndb::init(int aMaxNoOfTransactions)
   }//if
   theInitState = StartingInit;
   TransporterFacade * theFacade =  theImpl->m_transporter_facade;
-  theEventBuffer->m_mutex = theFacade->theMutexPtr;
+  theEventBuffer->m_mutex = theImpl->m_mutex;
 
   const Uint32 tRef = theImpl->open(theFacade);
+
+#ifndef DBUG_OFF
+  if(DBUG_EVALUATE_IF("sleep_in_ndbinit", true, false))
+  {
+    fprintf(stderr, "Ndb::init() (%p) taking a break\n", this);
+    NdbSleep_MilliSleep(20000);
+    fprintf(stderr, "Ndb::init() resuming\n");
+  }
+#endif
 
   if (tRef == 0)
   {
@@ -92,9 +103,9 @@ Ndb::init(int aMaxNoOfTransactions)
   }
 
   /* Init cached min node version */
-  theFacade->lock_mutex();
+  theFacade->lock_poll_mutex();
   theCachedMinDbNodeVersion = theFacade->getMinDbNodeVersion();
-  theFacade->unlock_mutex();
+  theFacade->unlock_poll_mutex();
   
   theDictionary->setTransporter(this, theFacade);
   
@@ -141,6 +152,10 @@ Ndb::init(int aMaxNoOfTransactions)
   }
   for (i = 0; i < 16; i++)
     releaseSignal(tSignal[i]);
+
+  /* Force visibility of Ndb object initialisation work before marking it initialised */
+  theFacade->lock_poll_mutex();
+  theFacade->unlock_poll_mutex();
   theInitState = Initialised; 
 
   DBUG_RETURN(0);
@@ -213,11 +228,14 @@ Ndb::report_node_failure(Uint32 node_id)
    * 
    * This method is only called by ClusterMgr (via lots of methods)
    */
-
-  theImpl->the_release_ind[node_id] = 1;
-  // must come after
-  theImpl->the_release_ind[0] = 1;
-  theImpl->theWaiter.nodeFail(node_id);
+  assert(node_id < NDB_ARRAY_SIZE(theImpl->the_release_ind));
+  if (node_id < NDB_ARRAY_SIZE(theImpl->the_release_ind))
+  {
+    theImpl->the_release_ind[node_id] = 1;
+    // must come after
+    theImpl->the_release_ind[0] = 1;
+    theImpl->theWaiter.nodeFail(node_id);
+  }
   return;
 }//Ndb::report_node_failure()
 
@@ -300,6 +318,10 @@ void
 Ndb::handleReceivedSignal(const NdbApiSignal* aSignal,
 			  const LinearSectionPtr ptr[3])
 {
+  /* Check that Ndb object is properly setup to handle the signal */
+  if (theInitState != Initialised)
+    return;
+
   NdbOperation* tOp;
   NdbIndexOperation* tIndexOp;
   NdbTransaction* tCon;
@@ -325,7 +347,7 @@ Ndb::handleReceivedSignal(const NdbApiSignal* aSignal,
                             ((secs > 1)? ptr[1].sz << 2: 0) +
                             ((secs > 0)? ptr[0].sz << 2: 0)));
   }
-  
+
   /*
     In order to support 64 bit processes in the application we need to use
     id's rather than a direct pointer to the object used. It is also a good
@@ -349,9 +371,13 @@ Ndb::handleReceivedSignal(const NdbApiSignal* aSignal,
       }
       else
       {
+        tFirstDataPtr = NULL;
         tCon = lookupTransactionFromOperation(keyConf);
+        if (tCon == NULL) goto InvalidSignal;
       }
+
       const BlockReference aTCRef = aSignal->theSendersBlockRef;
+      const bool marker = TcKeyConf::getMarkerFlag(keyConf->confInfo);
 
       if ((tCon->checkMagicNumber() == 0) &&
           (tCon->theSendStatus == NdbTransaction::sendTC_OP)) {
@@ -360,18 +386,29 @@ Ndb::handleReceivedSignal(const NdbApiSignal* aSignal,
           completedTransaction(tCon);
         }//if
 
-	if(TcKeyConf::getMarkerFlag(keyConf->confInfo)){
-	  NdbTransaction::sendTC_COMMIT_ACK(theImpl,
+        if (marker)
+        {
+          NdbTransaction::sendTC_COMMIT_ACK(theImpl,
                                             theCommitAckSignal,
-                                            keyConf->transId1, 
+                                            keyConf->transId1,
                                             keyConf->transId2,
                                             aTCRef);
-	}
-      
-	return;
+        }
+        return;
       }//if
+
+      if (marker)
+      {
+        /**
+         * We must send the TC_COMMIT_ACK even if we "reject" signal!
+         */
+        NdbTransaction::sendTC_COMMIT_ACK(theImpl,
+                                          theCommitAckSignal,
+                                          keyConf->transId1,
+                                          keyConf->transId2,
+                                          aTCRef);
+      }
       goto InvalidSignal;
-      
       return;
     }
   case GSN_TRANSID_AI:{
@@ -394,6 +431,11 @@ Ndb::handleReceivedSignal(const NdbApiSignal* aSignal,
 	  }
 	} else {
 	  assert(tRec->getType()!=NdbReceiver::NDB_QUERY_OPERATION);
+          DBUG_EXECUTE_IF("ndb_delay_transid_ai", {
+            fprintf(stderr, "Ndb::handleReceivedSignal() (%p) taking a break before TRANSID_AI\n", this);
+            NdbSleep_MilliSleep(1000);
+            fprintf(stderr, "Ndb::handleReceivedSignal() resuming\n");
+          }); 
 	  com = tRec->execTRANSID_AI(tDataPtr + TransIdAI::HeaderLength, 
 				     tLen - TransIdAI::HeaderLength);
 	}
@@ -548,11 +590,14 @@ Ndb::handleReceivedSignal(const NdbApiSignal* aSignal,
   case GSN_TC_COMMITCONF:
     {
       tFirstDataPtr = int2void(tFirstData);
-      if (tFirstDataPtr == 0) goto InvalidSignal;
-
       const TcCommitConf * const commitConf = (TcCommitConf *)tDataPtr;
       const BlockReference aTCRef = aSignal->theSendersBlockRef;
-      
+
+      if (tFirstDataPtr == 0)
+      {
+        goto invalid0;
+      }
+
       tCon = void2con(tFirstDataPtr);
       if ((tCon->checkMagicNumber() == 0) &&
 	  (tCon->theSendStatus == NdbTransaction::sendTC_COMMIT)) {
@@ -569,6 +614,18 @@ Ndb::handleReceivedSignal(const NdbApiSignal* aSignal,
                                             aTCRef);
 	}
 	return;
+      }
+  invalid0:
+      if(tFirstData & 1)
+      {
+        /**
+         * We must send TC_COMMIT_ACK regardless if we "reject" signal!
+         */
+        NdbTransaction::sendTC_COMMIT_ACK(theImpl,
+                                          theCommitAckSignal,
+                                          commitConf->transId1,
+                                          commitConf->transId2,
+                                          aTCRef);
       }
       goto InvalidSignal;
       return;
@@ -709,7 +766,13 @@ Ndb::handleReceivedSignal(const NdbApiSignal* aSignal,
       }//if
       break;
     }
-      
+     
+  case GSN_CLOSE_COMREQ:
+    {
+      TransporterFacade * theFacade =  theImpl->m_transporter_facade;
+      theFacade->perform_close_clnt(theImpl);
+      break;
+    }
   case GSN_GET_TABINFOREF:
   case GSN_GET_TABINFO_CONF:
   case GSN_CREATE_TABLE_REF:
@@ -746,6 +809,10 @@ Ndb::handleReceivedSignal(const NdbApiSignal* aSignal,
   case GSN_WAIT_GCP_REF:
   case GSN_CREATE_HASH_MAP_REF:
   case GSN_CREATE_HASH_MAP_CONF:
+  case GSN_CREATE_FK_REF:
+  case GSN_CREATE_FK_CONF:
+  case GSN_DROP_FK_REF:
+  case GSN_DROP_FK_CONF:
     NdbDictInterface::execSignal(&theDictionary->m_receiver,
 				 aSignal, ptr);
     return;
@@ -913,11 +980,17 @@ Ndb::handleReceivedSignal(const NdbApiSignal* aSignal,
   {
     const NodeFailRep *rep = CAST_CONSTPTR(NodeFailRep,
                                            aSignal->getDataPtr());
-    for (Uint32 i = NdbNodeBitmask::find_first(rep->theNodes);
-         i != NdbNodeBitmask::NotFound;
-         i = NdbNodeBitmask::find_next(rep->theNodes, i + 1))
+    Uint32 len = NodeFailRep::getNodeMaskLength(aSignal->getLength());
+    assert(len == NodeBitmask::Size); // only full length in ndbapi
+    for (Uint32 i = BitmaskImpl::find_first(len, rep->theAllNodes);
+         i != BitmaskImpl::NotFound;
+         i = BitmaskImpl::find_next(len, rep->theAllNodes, i + 1))
     {
-      report_node_failure(i);
+      if (i <= MAX_DATA_NODE_ID)
+      {
+        // Ndbif only cares about data-nodes (so far??)
+        report_node_failure(i);
+      }
     }
 
     NdbDictInterface::execSignal(&theDictionary->m_receiver, aSignal, ptr);
@@ -1014,12 +1087,24 @@ Ndb::completedTransaction(NdbTransaction* aCon)
     theNoOfSentTransactions = tNoSentTransactions - 1;
     aCon->theListState = NdbTransaction::InCompletedList;
     aCon->handleExecuteCompletion();
-    if ((theMinNoOfEventsToWakeUp != 0) &&
-        (theNoOfCompletedTransactions >= theMinNoOfEventsToWakeUp)) {
-      theMinNoOfEventsToWakeUp = 0;
-      theImpl->theWaiter.signal(NO_WAIT);
-      return;
-    }//if
+
+    if (theImpl->wakeHandler == 0)
+    {
+      if ((theMinNoOfEventsToWakeUp != 0) &&
+          (theNoOfCompletedTransactions >= theMinNoOfEventsToWakeUp))
+      {
+        theMinNoOfEventsToWakeUp = 0;
+        theImpl->theWaiter.signal(NO_WAIT);
+        return;
+      }
+    }
+    else
+    {
+      /**
+       * This is for multi-wait handling
+       */
+      theImpl->wakeHandler->notifyTransactionCompleted(this);
+    }
   } else {
     ndbout << "theNoOfSentTransactions = " << (int) theNoOfSentTransactions;
     ndbout << " theListState = " << (int) aCon->theListState;
@@ -1027,7 +1112,7 @@ Ndb::completedTransaction(NdbTransaction* aCon)
     ndbout << endl << flush;
 #ifdef VM_TRACE
     printState("completedTransaction abort");
-    abort();
+    //abort();
 #endif
   }//if
 }//Ndb::completedTransaction()
@@ -1087,8 +1172,8 @@ Ndb::pollCompleted(NdbTransaction** aCopyArray)
 void
 Ndb::check_send_timeout()
 {
-  Uint32 timeout = theImpl->get_ndbapi_config_parameters().m_waitfor_timeout;
-  NDB_TICKS current_time = NdbTick_CurrentMillisecond();
+  const Uint32 timeout = theImpl->get_ndbapi_config_parameters().m_waitfor_timeout;
+  const Uint64 current_time = NdbTick_CurrentMillisecond();
   assert(current_time >= the_last_check_time);
   if (current_time - the_last_check_time > 1000) {
     the_last_check_time = current_time;
@@ -1196,7 +1281,7 @@ Ndb::sendPrepTrans(int forceSend)
       */
       if (theImpl->check_send_size(node_id, a_con->get_send_size())) {
         if (a_con->doSend() == 0) {
-          NDB_TICKS current_time = NdbTick_CurrentMillisecond();
+          const Uint64 current_time = NdbTick_CurrentMillisecond();
           a_con->theStartTransTime = current_time;
           continue;
         } else {
@@ -1247,7 +1332,13 @@ Ndb::sendPrepTrans(int forceSend)
     insert_completed_list(a_con);
   }//for
   theNoOfPreparedTransactions = 0;
-  theImpl->do_forceSend(forceSend);
+  int did_send = theImpl->do_forceSend(forceSend);
+  if(forceSend) {
+    theImpl->incClientStat(Ndb::ForcedSendsCount, 1);
+  }
+  else {
+    theImpl->incClientStat(did_send ? Ndb::UnforcedSendsCount : Ndb::DeferredSendsCount, 1);
+  }
   return;
 }//Ndb::sendPrepTrans()
 
@@ -1272,18 +1363,19 @@ Ndb::waitCompletedTransactions(int aMilliSecondsToWait,
    * (see ReportFailure)
    */
   int waitTime = aMilliSecondsToWait;
-  NDB_TICKS currTime = NdbTick_CurrentMillisecond();
-  NDB_TICKS maxTime = currTime + (NDB_TICKS)waitTime;
+  const NDB_TICKS start = NdbTick_getCurrentTicks();
   theMinNoOfEventsToWakeUp = noOfEventsToWaitFor;
-  const int maxsleep = aMilliSecondsToWait > 10 ? 10 : aMilliSecondsToWait;
   theImpl->incClientStat(Ndb::WaitExecCompleteCount, 1);
   do {
+    const int maxsleep = waitTime > 10 ? 10 : waitTime;
     poll_guard->wait_for_input(maxsleep);
     if (theNoOfCompletedTransactions >= (Uint32)noOfEventsToWaitFor) {
       break;
     }//if
     theMinNoOfEventsToWakeUp = noOfEventsToWaitFor;
-    waitTime = (int)(maxTime - NdbTick_CurrentMillisecond());
+    const NDB_TICKS now = NdbTick_getCurrentTicks();
+    waitTime = aMilliSecondsToWait - 
+      (int)NdbTick_Elapsed(start,now).milliSec();
   } while (waitTime > 0);
 }//Ndb::waitCompletedTransactions()
 
@@ -1397,12 +1489,20 @@ Ndb::sendRecSignal(Uint16 node_id,
   */
   theImpl->incClientStat(WaitMetaRequestCount, 1);
   PollGuard poll_guard(* theImpl);
+
+  /**
+   * Either we supply the correct conn_seq and ret_conn_seq == 0
+   *     or we supply conn_seq == 0 and ret_conn_seq != 0
+   */
   read_conn_seq= theImpl->getNodeSequence(node_id);
+  bool ok =
+    (conn_seq == read_conn_seq && ret_conn_seq == 0) ||
+    (conn_seq == 0 && ret_conn_seq != 0);
+
   if (ret_conn_seq)
     *ret_conn_seq= read_conn_seq;
-  if ((theImpl->get_node_alive(node_id)) &&
-      ((read_conn_seq == conn_seq) ||
-       (conn_seq == 0))) {
+  if ((theImpl->get_node_alive(node_id)) && ok)
+  {
     if (theImpl->check_send_size(node_id, send_size)) {
       return_code = theImpl->sendSignal(aSignal, node_id);
       if (return_code != -1) {
@@ -1415,9 +1515,8 @@ Ndb::sendRecSignal(Uint16 node_id,
       return_code = -4;
     }//if
   } else {
-    if ((theImpl->get_node_stopping(node_id)) &&
-        ((read_conn_seq == conn_seq) ||
-         (conn_seq == 0))) {
+    if ((theImpl->get_node_stopping(node_id)) && ok)
+    {
       return_code = -5;
     } else {
       return_code = -2;
@@ -1446,7 +1545,7 @@ NdbTransaction::sendTC_COMMIT_ACK(NdbImpl * impl,
   Uint32 * dataPtr = aSignal->getDataPtrSend();
   dataPtr[0] = transId1;
   dataPtr[1] = transId2;
-  impl->safe_sendSignal(aSignal, refToNode(aTCRef));
+  impl->safe_noflush_sendSignal(aSignal, refToNode(aTCRef));
 }
 
 int
@@ -1484,6 +1583,7 @@ NdbImpl::send_event_report(bool has_lock,
 done:
   if (!has_lock)
   {
+    flush_send_buffers();
     unlock();
   }
   return ret;

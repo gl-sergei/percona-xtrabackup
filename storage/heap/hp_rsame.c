@@ -1,5 +1,4 @@
-/* Copyright (c) 2000-2002, 2005-2007 MySQL AB
-   Use is subject to license terms
+/* Copyright (c) 2000, 2012, Oracle and/or its affiliates. All rights reserved.
 
    This program is free software; you can redistribute it and/or modify
    it under the terms of the GNU General Public License as published by
@@ -26,7 +25,7 @@
 	   HA_ERR_KEY_NOT_FOUND = Record not found with key
 	*/
 
-int heap_rsame(register HP_INFO *info, uchar *record, int inx)
+int heap_rsame(HP_INFO *info, uchar *record, int inx)
 {
   HP_SHARE *share=info->s;
   DBUG_ENTER("heap_rsame");

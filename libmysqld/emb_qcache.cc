@@ -1,4 +1,4 @@
-/* Copyright (c) 2000, 2011, Oracle and/or its affiliates. All rights reserved.
+/* Copyright (c) 2000, 2014, Oracle and/or its affiliates. All rights reserved.
 
    This program is free software; you can redistribute it and/or modify
    it under the terms of the GNU General Public License as published by
@@ -13,10 +13,8 @@
    along with this program; if not, write to the Free Software
    Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301  USA */
 
-#include "sql_priv.h"
 #include "my_global.h"                          // HAVE_*
 
-#ifdef HAVE_QUERY_CACHE
 #include <mysql.h>
 #include "emb_qcache.h"
 #include "embedded_priv.h"
@@ -107,7 +105,7 @@ void Querycache_stream::store_ll(ulonglong ll)
   cur_data+= 8-rest_len;
 }
 
-void Querycache_stream::store_str_only(const char *str, uint str_len)
+void Querycache_stream::store_str_only(const char *str, size_t str_len)
 {
 #ifndef DBUG_OFF
   stored_size+= str_len;
@@ -128,17 +126,17 @@ void Querycache_stream::store_str_only(const char *str, uint str_len)
   } while(str_len);
 }
 
-void Querycache_stream::store_str(const char *str, uint str_len)
+void Querycache_stream::store_str(const char *str, size_t str_len)
 {
-  store_int(str_len);
+  store_int(static_cast<uint>(str_len));
   store_str_only(str, str_len);
 }
 
-void Querycache_stream::store_safe_str(const char *str, uint str_len)
+void Querycache_stream::store_safe_str(const char *str, size_t str_len)
 {
   if (str)
   {
-    store_int(str_len+1);
+    store_int(static_cast<uint>(str_len+1));
     store_str_only(str, str_len);
   }
   else
@@ -224,7 +222,7 @@ ulonglong Querycache_stream::load_ll()
   return result;
 }
 
-void Querycache_stream::load_str_only(char *buffer, uint str_len)
+void Querycache_stream::load_str_only(char *buffer, size_t str_len)
 {
   do
   {
@@ -415,7 +413,7 @@ int emb_load_querycache_result(THD *thd, Querycache_stream *src)
 
   if (!data)
     goto err;
-  init_alloc_root(&data->alloc, 8192,0);
+  init_alloc_root(PSI_NOT_INSTRUMENTED, &data->alloc, 8192, 0);
   f_alloc= &data->alloc;
 
   data->fields= src->load_int();
@@ -487,11 +485,9 @@ int emb_load_querycache_result(THD *thd, Querycache_stream *src)
   data->embedded_info->prev_ptr= prev_row;
 return_ok:
   net_send_eof(thd, thd->server_status,
-               thd->get_stmt_da()->current_statement_warn_count());
+               thd->get_stmt_da()->current_statement_cond_count());
   DBUG_RETURN(0);
 err:
   DBUG_RETURN(1);
 }
-
-#endif /*HAVE_QUERY_CACHE*/
 

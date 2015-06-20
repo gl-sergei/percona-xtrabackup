@@ -1,5 +1,5 @@
 /*
-   Copyright (c) 2003, 2010, Oracle and/or its affiliates. All rights reserved.
+   Copyright (c) 2003, 2014, Oracle and/or its affiliates. All rights reserved.
 
    This program is free software; you can redistribute it and/or modify
    it under the terms of the GNU General Public License as published by
@@ -22,6 +22,9 @@
 #include <ndb_limits.h>
 #include <pc.hpp>
 
+#define JAM_FILE_ID 409
+
+
 /**
  * Abort abort this operation and all after (nextActiveOp's)
  */
@@ -41,11 +44,11 @@ Dbtup::do_tup_abort_operation(Signal* signal,
   bool change = true;
 
   Uint32 bits= tuple_ptr->m_header_bits;  
-  if (opPtrP->op_struct.op_type != ZDELETE)
+  if (opPtrP->op_type != ZDELETE)
   {
     Tuple_header *copy= get_copy_tuple(&opPtrP->m_copy_tuple_location);
     
-    if (opPtrP->op_struct.m_disk_preallocated)
+    if (opPtrP->op_struct.bit_field.m_disk_preallocated)
     {
       jam();
       Local_key key;
@@ -87,7 +90,10 @@ Dbtup::do_tup_abort_operation(Signal* signal,
         if (sz)
         {
           jam();
+          ndbassert(fragPtrP->m_varWordsFree >= pageP->free_space);
+          fragPtrP->m_varWordsFree -= pageP->free_space;
           pageP->shrink_entry(idx, sz);
+          // Adds the new free space value for the page to the fragment total.
           update_free_page_list(fragPtrP, vpage);
         }
         else
@@ -145,7 +151,7 @@ void Dbtup::do_tup_abortreq(Signal* signal, Uint32 flags)
              (trans_state == TRANS_TOO_MUCH_AI) ||
              (trans_state == TRANS_ERROR_WAIT_TUPKEYREQ) ||
              (trans_state == TRANS_IDLE));
-  if (regOperPtr.p->op_struct.op_type == ZREAD) {
+  if (regOperPtr.p->op_type == ZREAD) {
     jam();
     initOpConnection(regOperPtr.p);
     return;
@@ -231,9 +237,13 @@ void Dbtup::do_tup_abortreq(Signal* signal, Uint32 flags)
       }
     }
   }
-  
-  if(regOperPtr.p->is_first_operation() && regOperPtr.p->is_last_operation())
+
+  bool first_and_last = false;
+  if (regOperPtr.p->is_first_operation() && regOperPtr.p->is_last_operation())
   {
+    jam();
+    /* Abort of only (remaining) op on this row */
+    first_and_last = true;
     if (regOperPtr.p->m_undo_buffer_space)
     {
       jam();
@@ -244,6 +254,28 @@ void Dbtup::do_tup_abortreq(Signal* signal, Uint32 flags)
   }
 
   removeActiveOpList(regOperPtr.p, tuple_ptr);
+
+  if (first_and_last &&
+      (flags & ZABORT_DEALLOC) &&
+      (tuple_ptr->m_header_bits & Tuple_header::FREED))
+  {
+    jam();
+    /* Free var and fixed records for this row */
+    Local_key tmp = regOperPtr.p->m_tuple_location;
+    if (regTabPtr.p->m_attributes[MM].m_no_of_varsize +
+        regTabPtr.p->m_attributes[MM].m_no_of_dynamic)
+    {
+      jam();
+      free_var_rec(regFragPtr.p, regTabPtr.p, &tmp, page);
+    }
+    else
+    {
+      jam();
+      free_fix_rec(regFragPtr.p, regTabPtr.p, &tmp, (Fix_page*)page.p);
+    }
+    regOperPtr.p->m_tuple_location.setNull();
+  }
+
   initOpConnection(regOperPtr.p);
 }
 
@@ -379,7 +411,7 @@ int Dbtup::TUPKEY_abort(KeyReqStruct * req_struct, int error_type)
 void Dbtup::early_tupkey_error(KeyReqStruct* req_struct)
 {
   Operationrec * const regOperPtr = req_struct->operPtrP;
-  ndbrequire(!regOperPtr->op_struct.in_active_list);
+  ndbrequire(!regOperPtr->op_struct.bit_field.in_active_list);
   set_trans_state(regOperPtr, TRANS_IDLE);
   set_tuple_state(regOperPtr, TUPLE_PREPARED);
   initOpConnection(regOperPtr);
@@ -428,9 +460,6 @@ void Dbtup::send_TUPKEYREF(Signal* signal,
   TupKeyRef * const tupKeyRef = (TupKeyRef *)signal->getDataPtrSend();  
   tupKeyRef->userRef = regOperPtr->userpointer;
   tupKeyRef->errorCode = terrorCode;
-  BlockReference lqhRef = calcInstanceBlockRef(DBLQH);
-  sendSignal(lqhRef, GSN_TUPKEYREF, signal, 
-             TupKeyRef::SignalLength, JBB);
 }
 
 /**
@@ -447,8 +476,8 @@ void Dbtup::removeActiveOpList(Operationrec*  const regOperPtr,
     c_undo_buffer.free_copy_tuple(&regOperPtr->m_copy_tuple_location);
   }
 
-  if (regOperPtr->op_struct.in_active_list) {
-    regOperPtr->op_struct.in_active_list= false;
+  if (regOperPtr->op_struct.bit_field.in_active_list) {
+    regOperPtr->op_struct.bit_field.in_active_list= false;
     if (regOperPtr->nextActiveOp != RNIL) {
       jam();
       raoOperPtr.i= regOperPtr->nextActiveOp;

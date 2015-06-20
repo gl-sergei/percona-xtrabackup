@@ -25,7 +25,6 @@
 */
 
 #include "my_global.h"
-#include "sql_priv.h"
 #include "hostname.h"
 #include "hash_filo.h"
 #include <m_ctype.h>
@@ -33,17 +32,15 @@
                                                 // sql_print_information
 #include "violite.h"                            // vio_getnameinfo,
                                                 // vio_get_normalized_ip_string
-#ifdef	__cplusplus
-extern "C" {					// Because of SCO 3.2V4.2
+
+#ifdef HAVE_ARPA_INET_H
+#include <arpa/inet.h>
 #endif
-#if !defined( __WIN__)
 #ifdef HAVE_SYS_UN_H
 #include <sys/un.h>
 #endif
+#if !defined(_WIN32)
 #include <sys/utsname.h>
-#endif // __WIN__
-#ifdef	__cplusplus
-}
 #endif
 
 Host_errors::Host_errors()
@@ -175,7 +172,7 @@ void hostname_cache_unlock()
 static void prepare_hostname_cache_key(const char *ip_string,
                                        char *ip_key)
 {
-  int ip_string_length= strlen(ip_string);
+  size_t ip_string_length= strlen(ip_string);
   DBUG_ASSERT(ip_string_length < HOST_ENTRY_KEY_SIZE);
 
   memset(ip_key, 0, HOST_ENTRY_KEY_SIZE);
@@ -224,12 +221,12 @@ static void add_hostname_impl(const char *ip_key, const char *hostname,
   {
     if (hostname != NULL)
     {
-      uint len= strlen(hostname);
+      size_t len= strlen(hostname);
       if (len > sizeof(entry->m_hostname) - 1)
         len= sizeof(entry->m_hostname) - 1;
       memcpy(entry->m_hostname, hostname, len);
       entry->m_hostname[len]= '\0';
-      entry->m_hostname_length= len;
+      entry->m_hostname_length= static_cast<uint>(len);
 
       DBUG_PRINT("info",
                  ("Adding/Updating '%s' -> '%s' (validated) to the hostname cache...'",
@@ -413,7 +410,6 @@ int ip_to_hostname(struct sockaddr_storage *ip_storage,
 {
   const struct sockaddr *ip= (const sockaddr *) ip_storage;
   int err_code;
-  bool err_status __attribute__((unused));
   Host_errors errors;
 
   DBUG_ENTER("ip_to_hostname");
@@ -473,7 +469,8 @@ int ip_to_hostname(struct sockaddr_storage *ip_storage,
       if (entry->m_host_validated)
       {
         if (entry->m_hostname_length)
-          *hostname= my_strdup(entry->m_hostname, MYF(0));
+          *hostname= my_strdup(key_memory_host_cache_hostname,
+                               entry->m_hostname, MYF(0));
 
         DBUG_PRINT("info",("IP (%s) has been found in the cache. "
                            "Hostname: '%s'",
@@ -942,6 +939,7 @@ int ip_to_hostname(struct sockaddr_storage *ip_storage,
     char ip_buffer[HOST_ENTRY_KEY_SIZE];
 
     {
+      bool err_status __attribute__((unused));
       err_status=
         vio_get_normalized_ip_string(addr_info->ai_addr, addr_info->ai_addrlen,
                                      ip_buffer, sizeof (ip_buffer));
@@ -950,11 +948,12 @@ int ip_to_hostname(struct sockaddr_storage *ip_storage,
 
     DBUG_PRINT("info", ("  - '%s'", (const char *) ip_buffer));
 
-    if (strcasecmp(ip_key, ip_buffer) == 0)
+    if (native_strcasecmp(ip_key, ip_buffer) == 0)
     {
       /* Copy host name string to be stored in the cache. */
 
-      *hostname= my_strdup(hostname_buffer, MYF(0));
+      *hostname= my_strdup(key_memory_host_cache_hostname,
+                           hostname_buffer, MYF(0));
 
       if (!*hostname)
       {
@@ -986,7 +985,9 @@ int ip_to_hostname(struct sockaddr_storage *ip_storage,
     {
       char ip_buffer[HOST_ENTRY_KEY_SIZE];
 
-      err_status=
+#ifndef DBUG_OFF
+      bool err_status=
+#endif
         vio_get_normalized_ip_string(addr_info->ai_addr, addr_info->ai_addrlen,
                                      ip_buffer, sizeof (ip_buffer));
       DBUG_ASSERT(!err_status);

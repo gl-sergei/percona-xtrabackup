@@ -1,5 +1,5 @@
 /*
- * Copyright (c)  2000
+ * Copyright (c)  2000, 2014
  * SWsoft  company
  *
  * Modifications copyright (c) 2001, 2014. Oracle and/or its affiliates.
@@ -106,8 +106,8 @@ void embedded_get_error(MYSQL *mysql, MYSQL_DATA *data)
 
 static my_bool
 emb_advanced_command(MYSQL *mysql, enum enum_server_command command,
-		     const uchar *header, ulong header_length,
-		     const uchar *arg, ulong arg_length, my_bool skip_check,
+		     const uchar *header, size_t header_length,
+		     const uchar *arg, size_t arg_length, my_bool skip_check,
                      MYSQL_STMT *stmt)
 {
   my_bool result= 1;
@@ -249,7 +249,7 @@ static my_bool emb_read_prepare_result(MYSQL *mysql, MYSQL_STMT *stmt)
   stmt->stmt_id= thd->client_stmt_id;
   stmt->param_count= thd->client_param_count;
   stmt->field_count= 0;
-  mysql->warning_count= thd->get_stmt_da()->current_statement_warn_count();
+  mysql->warning_count= thd->get_stmt_da()->current_statement_cond_count();
 
   if (thd->first_data)
   {
@@ -427,16 +427,15 @@ static void emb_free_embedded_thd(MYSQL *mysql)
   thd->clear_data_list();
   thd->store_globals();
   thd->release_resources();
-  remove_global_thread(thd);
+  Global_THD_manager::get_instance()->remove_thd(thd);
   delete thd;
-  my_pthread_setspecific_ptr(THR_THD,  0);
   mysql->thd=0;
 }
 
 static const char * emb_read_statistics(MYSQL *mysql)
 {
   THD *thd= (THD*)mysql->thd;
-  return thd->is_error() ? thd->get_stmt_da()->message() : "";
+  return thd->is_error() ? thd->get_stmt_da()->message_text() : "";
 }
 
 
@@ -469,7 +468,8 @@ MYSQL_METHODS embedded_methods=
   emb_free_embedded_thd,
   emb_read_statistics,
   emb_read_query_result,
-  emb_read_rows_from_cursor
+  emb_read_rows_from_cursor,
+  free_rows
 };
 
 /*
@@ -478,20 +478,21 @@ MYSQL_METHODS embedded_methods=
 
 char **copy_arguments(int argc, char **argv)
 {
-  uint length= 0;
+  size_t length= 0;
   char **from, **res, **end= argv+argc;
 
   for (from=argv ; from != end ; from++)
     length+= strlen(*from);
 
-  if ((res= (char**) my_malloc(sizeof(argv)*(argc+1)+length+argc,
+  if ((res= (char**) my_malloc(PSI_NOT_INSTRUMENTED,
+                               sizeof(argv)*(argc+1)+length+argc,
 			       MYF(MY_WME))))
   {
     char **to= res, *to_str= (char*) (res+argc+1);
     for (from=argv ; from != end ;)
     {
       *to++= to_str;
-      to_str= strmov(to_str, *from++)+1;
+      to_str= my_stpcpy(to_str, *from++)+1;
     }
     *to= 0;					// Last ptr should be null
   }
@@ -539,10 +540,10 @@ int init_embedded_server(int argc, char **argv, char **groups)
   my_progname= "mysql_embedded";
 
   /*
-    Perform basic logger initialization logger. Should be called after
-    MY_INIT, as it initializes mutexes. Log tables are inited later.
+    Perform basic query log initialization. Should be called after
+    MY_INIT, as it initializes mutexes.
   */
-  logger.init_base();
+  query_logger.init();
 
   orig_argc= *argcp;
   orig_argv= *argvp;
@@ -579,7 +580,7 @@ int init_embedded_server(int argc, char **argv, char **groups)
 
   /* Get default temporary directory */
   opt_mysql_tmpdir=getenv("TMPDIR");	/* Use this if possible */
-#if defined(__WIN__)
+#if defined(_WIN32)
   if (!opt_mysql_tmpdir)
     opt_mysql_tmpdir=getenv("TEMP");
   if (!opt_mysql_tmpdir)
@@ -636,8 +637,6 @@ int init_embedded_server(int argc, char **argv, char **groups)
     udf_init();
 #endif
 
-  (void) thr_setconcurrency(concurrency);	// 10 by default
-
   start_handle_manager();
 
   // FIXME initialize binlog_filter and rpl_filter if not already done
@@ -658,7 +657,7 @@ int init_embedded_server(int argc, char **argv, char **groups)
 
   /* Signal successful initialization */
   mysql_mutex_lock(&LOCK_server_started);
-  mysqld_server_started= 1;
+  mysqld_server_started= true;
   mysql_cond_broadcast(&COND_server_started);
   mysql_mutex_unlock(&LOCK_server_started);
 
@@ -689,7 +688,7 @@ void init_embedded_mysql(MYSQL *mysql, int client_flag)
   thd->mysql= mysql;
   mysql->server_version= server_version;
   mysql->client_flag= client_flag;
-  init_alloc_root(&mysql->field_alloc, 8192, 0);
+  init_alloc_root(PSI_NOT_INSTRUMENTED, &mysql->field_alloc, 8192, 0);
 }
 
 /**
@@ -706,12 +705,12 @@ void init_embedded_mysql(MYSQL *mysql, int client_flag)
 void *create_embedded_thd(int client_flag)
 {
   THD * thd= new THD;
-  thd->thread_id= thd->variables.pseudo_thread_id= thread_id++;
+  thd->set_new_thread_id();
 
   thd->thread_stack= (char*) &thd;
   if (thd->store_globals())
   {
-    fprintf(stderr,"store_globals failed.\n");
+    my_message_local(ERROR_LEVEL, "store_globals failed.");
     goto err;
   }
   lex_start(thd);
@@ -725,22 +724,18 @@ void *create_embedded_thd(int client_flag)
   thd->set_time();
   thd->init_for_queries();
   thd->client_capabilities= client_flag;
-  thd->real_id= pthread_self();
+  thd->real_id= my_thread_self();
 
-  thd->db= NULL;
-  thd->db_length= 0;
+  thd->reset_db(NULL_CSTR);
 #ifndef NO_EMBEDDED_ACCESS_CHECKS
-  thd->security_ctx->db_access= DB_ACLS;
-  thd->security_ctx->master_access= ~NO_ACCESS;
+  thd->security_context()->set_db_access(DB_ACLS);
+  thd->security_context()->set_master_access(~NO_ACCESS);
 #endif
   thd->cur_data= 0;
   thd->first_data= 0;
   thd->data_tail= &thd->first_data;
   memset(&thd->net, 0, sizeof(thd->net));
-
-  mysql_mutex_lock(&LOCK_thread_count);
-  add_global_thread(thd);
-  mysql_mutex_unlock(&LOCK_thread_count);
+  Global_THD_manager::get_instance()->add_thd(thd);
   thd->mysys_var= 0;
   return thd;
 err:
@@ -765,7 +760,6 @@ emb_transfer_connect_attrs(MYSQL *mysql)
     send_client_connect_attrs(mysql, buf);
     net_field_length_ll(&ptr);
     PSI_THREAD_CALL(set_thread_connect_attrs)((char *) ptr, length, thd->charset());
-    my_afree(buf);
   }
 #endif
 }
@@ -775,7 +769,7 @@ emb_transfer_connect_attrs(MYSQL *mysql)
 int check_embedded_connection(MYSQL *mysql, const char *db)
 {
   int result;
-  LEX_STRING db_str = { (char*)db, db ? strlen(db) : 0 };
+  LEX_CSTRING db_lex_cstr= to_lex_cstring(db);
   THD *thd= (THD*)mysql->thd;
 
   /* the server does the same as the client */
@@ -783,17 +777,17 @@ int check_embedded_connection(MYSQL *mysql, const char *db)
 
   thd_init_client_charset(thd, mysql->charset->number);
   thd->update_charset();
-  Security_context *sctx= thd->security_ctx;
-  sctx->set_host(my_localhost);
-  sctx->host_or_ip= sctx->get_host()->ptr();
-  strmake(sctx->priv_host, (char*) my_localhost,  MAX_HOSTNAME-1);
-  strmake(sctx->priv_user, mysql->user,  USERNAME_LENGTH-1);
-  sctx->user= my_strdup(mysql->user, MYF(0));
-  sctx->proxy_user[0]= 0;
-  sctx->master_access= GLOBAL_ACLS;       // Full rights
+  Security_context *sctx= thd->security_context();
+  sctx->set_host_ptr(my_localhost, strlen(my_localhost));
+  sctx->set_host_or_ip_ptr(sctx->host().str, sctx->host().length);
+  sctx->assign_priv_user(mysql->user, strlen(mysql->user));
+  sctx->assign_user(mysql->user, strlen(mysql->user));
+  sctx->assign_proxy_user("", 0);
+  sctx->assign_priv_host(my_localhost, strlen(my_localhost));
+  sctx->set_master_access(GLOBAL_ACLS);       // Full rights
   emb_transfer_connect_attrs(mysql);
   /* Change database if necessary */
-  if (!(result= (db && db[0] && mysql_change_db(thd, &db_str, FALSE))))
+  if (!(result= (db && db[0] && mysql_change_db(thd, db_lex_cstr, false))))
     my_ok(thd);
   thd->protocol->end_statement();
   emb_read_query_result(mysql);
@@ -810,7 +804,7 @@ int check_embedded_connection(MYSQL *mysql, const char *db)
   char *buf, *end;
   NET *net= &mysql->net;
   THD *thd= (THD*)mysql->thd;
-  Security_context *sctx= thd->security_ctx;
+  Security_context *sctx= thd->security_context();
   size_t connect_attrs_len=
     (mysql->server_capabilities & CLIENT_CONNECT_ATTRS &&
      mysql->options.extension) ?
@@ -862,17 +856,15 @@ int check_embedded_connection(MYSQL *mysql, const char *db)
 
   if (acl_authenticate(thd, 0, end - buf))
   {
-    x_free(thd->security_ctx->user);
+    x_free(thd->security_context()->user().str);
     goto err;
   }
-  my_afree(buf);
   return 0;
 err:
   strmake(net->last_error, thd->main_da.message(), sizeof(net->last_error)-1);
   memcpy(net->sqlstate,
          mysql_errno_to_sqlstate(thd->main_da.sql_errno()),
          sizeof(net->sqlstate)-1);
-  my_afree(buf);
   return 1;
 }
 #endif
@@ -894,17 +886,17 @@ void THD::clear_data_list()
 }
 
 
-static char *dup_str_aux(MEM_ROOT *root, const char *from, uint length,
+static char *dup_str_aux(MEM_ROOT *root, const char *from, size_t length,
 			 const CHARSET_INFO *fromcs, const CHARSET_INFO *tocs)
 {
-  uint32 dummy32;
+  size_t dummy_offset;
   uint dummy_err;
   char *result;
 
   /* 'tocs' is set 0 when client issues SET character_set_results=NULL */
-  if (tocs && String::needs_conversion(0, fromcs, tocs, &dummy32))
+  if (tocs && String::needs_conversion(0, fromcs, tocs, &dummy_offset))
   {
-    uint new_len= (tocs->mbmaxlen * length) / fromcs->mbminlen + 1;
+    size_t new_len= (tocs->mbmaxlen * length) / fromcs->mbminlen + 1;
     result= (char *)alloc_root(root, new_len);
     length= copy_and_convert(result, new_len,
                              tocs, from, length, fromcs, &dummy_err);
@@ -939,7 +931,8 @@ MYSQL_DATA *THD::alloc_new_dataset()
 {
   MYSQL_DATA *data;
   struct embedded_query_result *emb_data;
-  if (!my_multi_malloc(MYF(MY_WME | MY_ZEROFILL),
+  if (!my_multi_malloc(PSI_NOT_INSTRUMENTED,
+                       MYF(MY_WME | MY_ZEROFILL),
                        &data, sizeof(*data),
                        &emb_data, sizeof(*emb_data),
                        NULL))
@@ -1004,7 +997,7 @@ int Protocol::begin_dataset()
   if (!data)
     return 1;
   alloc= &data->alloc;
-  init_alloc_root(alloc,8192,0);	/* Assume rowlength < 8192 */
+  init_alloc_root(PSI_NOT_INSTRUMENTED, alloc, 8192, 0); /* Assume rowlength < 8192 */
   alloc->min_malloc=sizeof(MYSQL_ROWS);
   return 0;
 }
@@ -1141,7 +1134,7 @@ bool Protocol::send_result_set_metadata(List<Item> *list, uint flags)
 
   if (flags & SEND_EOF)
     write_eof_packet(thd, thd->server_status,
-                     thd->get_stmt_da()->current_statement_warn_count());
+                     thd->get_stmt_da()->current_statement_cond_count());
 
   DBUG_RETURN(prepare_for_send(list->elements));
  err:
@@ -1204,7 +1197,8 @@ bool Protocol_binary::write()
 bool
 net_send_ok(THD *thd,
             uint server_status, uint statement_warn_count,
-            ulonglong affected_rows, ulonglong id, const char *message)
+            ulonglong affected_rows, ulonglong id, const char *message,
+            bool eof_identifier __attribute__((unused)))
 {
   DBUG_ENTER("emb_net_send_ok");
   MYSQL_DATA *data;
@@ -1255,7 +1249,7 @@ bool net_send_error_packet(THD *thd, uint sql_errno, const char *err,
 
   if (!thd->mysql)            // bootstrap file handling
   {
-    fprintf(stderr, "ERROR: %d  %s\n", sql_errno, err);
+    my_message_local(ERROR_LEVEL, "%d  %s", sql_errno, err);
     return TRUE;
   }
 
@@ -1270,7 +1264,7 @@ bool net_send_error_packet(THD *thd, uint sql_errno, const char *err,
                         system_charset_info, &error);
   /* Converted error message is always null-terminated. */
   strmake(ei->info, converted_err, sizeof(ei->info)-1);
-  strmov(ei->sqlstate, sqlstate);
+  my_stpcpy(ei->sqlstate, sqlstate);
   ei->server_status= thd->server_status;
   thd->cur_data= 0;
   return FALSE;
@@ -1307,6 +1301,9 @@ void Protocol_text::prepare_for_resend()
 
 bool Protocol_text::store_null()
 {
+  if (!thd->mysql)            // bootstrap file handling
+    return false;
+
   *(next_field++)= NULL;
   ++next_mysql_field;
   return false;
@@ -1331,17 +1328,12 @@ bool Protocol::net_store_data(const uchar *from, size_t length)
   return FALSE;
 }
 
-#if defined(_MSC_VER) && _MSC_VER < 1400
-#define vsnprintf _vsnprintf
-#endif
-
-int vprint_msg_to_log(enum loglevel level __attribute__((unused)),
-                       const char *format, va_list argsi)
+void error_log_print(enum loglevel level __attribute__((unused)),
+                     const char *format, va_list argsi)
 {
   my_vsnprintf(mysql_server_last_error, sizeof(mysql_server_last_error),
                format, argsi);
   mysql_server_last_errno= CR_UNKNOWN_ERROR;
-  return 0;
 }
 
 
@@ -1349,7 +1341,7 @@ bool Protocol::net_store_data(const uchar *from, size_t length,
                               const CHARSET_INFO *from_cs,
                               const CHARSET_INFO *to_cs)
 {
-  uint conv_length= to_cs->mbmaxlen * length / from_cs->mbminlen;
+  size_t conv_length= to_cs->mbmaxlen * length / from_cs->mbminlen;
   uint dummy_error;
   char *field_buf;
   if (!thd->mysql)            // bootstrap file handling

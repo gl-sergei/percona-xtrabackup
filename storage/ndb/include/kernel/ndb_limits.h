@@ -1,5 +1,5 @@
 /*
-   Copyright (c) 2003, 2010, Oracle and/or its affiliates. All rights reserved.
+   Copyright (c) 2003, 2013, Oracle and/or its affiliates. All rights reserved.
 
    This program is free software; you can redistribute it and/or modify
    it under the terms of the GNU General Public License as published by
@@ -17,6 +17,8 @@
 
 #ifndef NDB_LIMITS_H
 #define NDB_LIMITS_H
+
+#include "ndb_version.h"  // Limits might depend on NDB version
 
 #define RNIL    0xffffff00
 
@@ -94,8 +96,26 @@
 #define MAX_KEY_SIZE_IN_WORDS 1023
 #define MAX_FRM_DATA_SIZE 6000
 #define MAX_NULL_BITS 4096
-#define MAX_FRAGMENT_DATA_BYTES (4+(2 * 8 * MAX_REPLICAS * MAX_NDB_NODES))
-#define MAX_NDB_PARTITIONS 1024
+/*
+ * Fragmentation data are Uint16, first two are #replicas,
+ * and #fragments, then for each fragment, first log-part-id
+ * then nodeid for each replica.
+ * See creation in Dbdih::execCREATE_FRAGMENTATION_REQ()
+ * and read in Dbdih::execDIADDTABREQ()
+ */
+#define MAX_FRAGMENT_DATA_ENTRIES (2 + (1 + MAX_REPLICAS) * MAX_NDB_PARTITIONS)
+#define MAX_FRAGMENT_DATA_BYTES (2 * MAX_FRAGMENT_DATA_ENTRIES)
+#define MAX_FRAGMENT_DATA_WORDS ((MAX_FRAGMENT_DATA_BYTES + 3) / 4)
+
+#if NDB_VERSION_D < NDB_MAKE_VERSION(7,2,0)
+#define MAX_NDB_PARTITIONS 240
+#else
+#define MAX_NDB_PARTITIONS 2048
+#endif
+
+#define NDB_PARTITION_BITS 16
+#define NDB_PARTITION_MASK ((Uint32)((1 << NDB_PARTITION_BITS) - 1))
+
 #define MAX_RANGE_DATA (131072+MAX_NDB_PARTITIONS) //0.5 MByte of list data
 
 #define MAX_WORDS_META_FILE 24576
@@ -110,7 +130,11 @@
 /*
 * The default batch size. Configurable parameter.
 */
+#if NDB_VERSION_D < NDB_MAKE_VERSION(7,2,0)
 #define DEF_BATCH_SIZE 64
+#else
+#define DEF_BATCH_SIZE 256
+#endif
 /*
 * When calculating the number of records sent from LQH in each batch
 * one uses SCAN_BATCH_SIZE divided by the expected size of signals
@@ -120,7 +144,7 @@
 * signals.
 * This parameter is configurable, this is the default value.
 */
-#define SCAN_BATCH_SIZE 32768
+#define SCAN_BATCH_SIZE 16384
 /*
 * To protect the NDB API from overload we also define a maximum total
 * batch size from all nodes. This parameter should most likely be
@@ -172,7 +196,6 @@
 /*
  * Schema transactions
  */
-#define MAX_SCHEMA_TRANSACTIONS 5
 #define MAX_SCHEMA_OPERATIONS 256
 
 /*
@@ -186,7 +209,38 @@
  */
 #define LCP_RESTORE_BUFFER (4*32)
 
-#define NDB_DEFAULT_HASHMAP_BUCKTETS 240
+
+/**
+ * The hashmap size should support at least one
+ * partition per LDM. And also try to make size
+ * a multiple of all possible data node counts,
+ * so that all partitions are related to the same
+ * number of hashmap buckets as possible,
+ * otherwise some partitions will be bigger than
+ * others.
+ *
+ * The historical size of hashmaps supported by old
+ * versions of NDB is 240.  This guarantees at most
+ * 1/6 of unusable data memory for some nodes, since
+ * one can have atmost 48 data nodes so each node
+ * will relate to at least 5 hashmap buckets.  Also
+ * 240 is a multiple of 2, 3, 4, 5, 6, 8, 10, 12,
+ * 15, 16, 20, 24, 30, 32, 40, and 48 so having any
+ * of these number of nodes guarantees near no
+ * unusable data memory.
+ *
+ * The current value 3840 is 16 times 240, and so gives
+ * at least the same guarantees as the old value above,
+ * also if up to 16 ldm threads per node is used.
+ */
+
+#define NDB_MAX_HASHMAP_BUCKETS (3840 * 2 * 3)
+
+#if NDB_VERSION_D < NDB_MAKE_VERSION(7,2,0)
+#define NDB_DEFAULT_HASHMAP_BUCKETS 240
+#else
+#define NDB_DEFAULT_HASHMAP_BUCKETS 3840
+#endif
 
 /**
  * Bits/mask used for coding/decoding blockno/blockinstance
@@ -194,12 +248,38 @@
 #define NDBMT_BLOCK_BITS 9
 #define NDBMT_BLOCK_MASK ((1 << NDBMT_BLOCK_BITS) - 1)
 #define NDBMT_BLOCK_INSTANCE_BITS 7
+#define NDBMT_MAX_BLOCK_INSTANCES (1 << NDBMT_BLOCK_INSTANCE_BITS)
+/* Proxy block 0 is not a worker */
+#define NDBMT_MAX_WORKER_INSTANCES (NDBMT_MAX_BLOCK_INSTANCES - 1)
 
-#define MAX_NDBMT_LQH_WORKERS 4
-#define MAX_NDBMT_LQH_THREADS 4
-#define MAX_NDBMT_TC_THREADS  2
+#define NDB_DEFAULT_LOG_PARTS 4
+
+#if NDB_VERSION_D < NDB_MAKE_VERSION(7,2,0)
+#define NDB_MAX_LOG_PARTS          4
+#define MAX_NDBMT_TC_THREADS       2
+#define MAX_NDBMT_RECEIVE_THREADS  1
+#define MAX_NDBMT_SEND_THREADS     0
+#else
+#define NDB_MAX_LOG_PARTS         32
+#define MAX_NDBMT_TC_THREADS      32
+#define MAX_NDBMT_RECEIVE_THREADS 16 
+#define MAX_NDBMT_SEND_THREADS    16 
+#endif
+
+#define MAX_NDBMT_LQH_WORKERS NDB_MAX_LOG_PARTS
+#define MAX_NDBMT_LQH_THREADS NDB_MAX_LOG_PARTS
 
 #define NDB_FILE_BUFFER_SIZE (256*1024)
+
+/*
+ * NDB_FS_RW_PAGES must be big enough for biggest request,
+ * probably PACK_TABLE_PAGES (see Dbdih.hpp)
+ */
+#if NDB_VERSION_D < NDB_MAKE_VERSION(7,2,0)
+#define NDB_FS_RW_PAGES 32
+#else
+#define NDB_FS_RW_PAGES 268
+#endif
 
 /**
  * MAX_ATTRIBUTES_IN_TABLE old handling
@@ -237,5 +317,28 @@
 #define MAX_INDEX_STAT_VALUE_SIZE   MAX_INDEX_STAT_VALUE_COUNT
 #define MAX_INDEX_STAT_VALUE_CSIZE  512 /* Longvarbinary(2048) */
 #define MAX_INDEX_STAT_VALUE_FORMAT 1
+
+#ifdef NDB_STATIC_ASSERT
+
+static inline void ndb_limits_constraints()
+{
+  NDB_STATIC_ASSERT(NDB_DEFAULT_HASHMAP_BUCKETS <= NDB_MAX_HASHMAP_BUCKETS);
+
+  NDB_STATIC_ASSERT(MAX_NDB_PARTITIONS <= NDB_MAX_HASHMAP_BUCKETS);
+
+  NDB_STATIC_ASSERT(MAX_NDB_PARTITIONS - 1 <= NDB_PARTITION_MASK);
+
+  // MAX_NDB_NODES should be 48, but code assumes it is 49
+  STATIC_CONST(MAX_NDB_DATA_NODES = MAX_DATA_NODE_ID);
+  NDB_STATIC_ASSERT(MAX_NDB_NODES == MAX_NDB_DATA_NODES + 1);
+
+  // Default partitioning is 1 partition per LDM
+  NDB_STATIC_ASSERT(MAX_NDB_DATA_NODES * MAX_NDBMT_LQH_WORKERS <= MAX_NDB_PARTITIONS);
+
+  // The default hashmap should atleast support the maximum default partitioning
+  NDB_STATIC_ASSERT(MAX_NDB_DATA_NODES * MAX_NDBMT_LQH_WORKERS <= NDB_DEFAULT_HASHMAP_BUCKETS);
+}
+
+#endif
 
 #endif

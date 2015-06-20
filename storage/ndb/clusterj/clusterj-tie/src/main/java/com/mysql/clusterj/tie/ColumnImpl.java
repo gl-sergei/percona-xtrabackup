@@ -1,5 +1,5 @@
 /*
- *  Copyright (c) 2010, 2011, Oracle and/or its affiliates. All rights reserved.
+ *  Copyright (c) 2010, 2013, Oracle and/or its affiliates. All rights reserved.
  *
  *  This program is free software; you can redistribute it and/or modify
  *  it under the terms of the GNU General Public License as published by
@@ -92,6 +92,8 @@ class ColumnImpl implements Column {
 
     private boolean nullable;
 
+    private boolean lob = false;
+
     public ColumnImpl(String tableName, ColumnConst ndbColumn) {
         this.columnName = ndbColumn.getName();
         this.columnId = ndbColumn.getColumnNo();
@@ -106,6 +108,7 @@ class ColumnImpl implements Column {
         this.precision = ndbColumn.getPrecision();
         this.scale = ndbColumn.getScale();
         this.size = ndbColumn.getSize();
+        logger.detail("ColumnImpl column type: " + this.columnType);
         switch(ndbColumn.getType()) {
             case ColumnConst.Type.Tinyint:
             case ColumnConst.Type.Tinyunsigned:
@@ -178,11 +181,13 @@ class ColumnImpl implements Column {
             case ColumnConst.Type.Blob:
                 this.prefixLength = 0;
                 this.columnSpace = inlineSize;
+                this.lob = true;
                 break;
             case ColumnConst.Type.Text:
                 this.prefixLength = 0;
                 this.columnSpace = inlineSize;
                 this.charsetNumber = ndbColumn.getCharsetNumber();
+                this.lob = true;
                 mapCharsetName();
                 break;
             case ColumnConst.Type.Bit:
@@ -209,11 +214,26 @@ class ColumnImpl implements Column {
                 break;
             case ColumnConst.Type.Timestamp:
                 this.prefixLength = 0;
-                this.columnSpace = 4;
+                this.columnSpace = 0;
                 break;
-            default: throw new ClusterJFatalInternalException(
+            case 31: // Time2
+                this.prefixLength = 0;
+                this.columnSpace = 0;
+                break;
+            case 32: // DateTime2
+                this.prefixLength = 0;
+                this.columnSpace = 0;
+                break;
+            case 33: // Timestamp2
+                this.prefixLength = 0;
+                this.columnSpace = 0;
+                break;
+            default:
+                String message = 
                     local.message("ERR_Unknown_Column_Type",
-                    tableName, ndbColumn.getName(), ndbType));
+                    tableName, ndbColumn.getName(), ndbType);
+                logger.info(message);
+                throw new ClusterJFatalInternalException(message);
         }
         if (logger.isDetailEnabled()) logger.detail("Column " + columnName
                 + " columnSpace: " + columnSpace + " prefixLength: " + prefixLength
@@ -275,9 +295,15 @@ class ColumnImpl implements Column {
             case ColumnConst.Type.Varbinary: return ColumnType.Varbinary;
             case ColumnConst.Type.Varchar: return ColumnType.Varchar;
             case ColumnConst.Type.Year: return ColumnType.Year;
-            default: throw new ClusterJFatalInternalException(
+            case 31: return ColumnType.Time2; // ColumnConst.Type.Time2: 
+            case 32: return ColumnType.Datetime2; // ColumnConst.Type.Datetime2
+            case 33: return ColumnType.Timestamp2; // ColumnConst.Type.Timestamp2
+            default: 
+                String message = 
                     local.message("ERR_Unknown_Column_Type",
-                    tableName, columnName, type));
+                    tableName, columnName, type);
+                logger.info(message);
+                throw new ClusterJFatalInternalException(message);
         }
     }
 
@@ -308,6 +334,10 @@ class ColumnImpl implements Column {
             throw new ClusterJFatalInternalException(local.message(
                     "ERR_Prefix_Length_Not_Defined", tableName, columnName));
         }
+    }
+
+    public int getSize() {
+        return size;
     }
 
     public int getColumnId() {
@@ -345,6 +375,10 @@ class ColumnImpl implements Column {
 
     public boolean getNullable() {
         return nullable;
+    }
+
+    public boolean isLob() {
+        return lob;
     }
 
 }

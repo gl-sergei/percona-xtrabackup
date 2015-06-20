@@ -1,5 +1,4 @@
-/* Copyright (c) 2000-2002, 2004-2007 MySQL AB
-   Use is subject to license terms
+/* Copyright (c) 2000, 2012, Oracle and/or its affiliates. All rights reserved.
 
    This program is free software; you can redistribute it and/or modify
    it under the terms of the GNU General Public License as published by
@@ -30,7 +29,7 @@
 	   HA_ERR_END_OF_FILE = EOF.
 */
 
-int mi_rrnd(MI_INFO *info, uchar *buf, register my_off_t filepos)
+int mi_rrnd(MI_INFO *info, uchar *buf, my_off_t filepos)
 {
   my_bool skip_deleted_blocks;
   DBUG_ENTER("mi_rrnd");
