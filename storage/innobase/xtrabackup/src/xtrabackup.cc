@@ -6550,6 +6550,10 @@ int main(int argc, char **argv)
 	setup_signals();
 
 	MY_INIT(argv[0]);
+
+	pthread_key_create(&THR_THD, NULL);
+	my_pthread_setspecific_ptr(THR_THD, NULL);
+
 	xb_regex_init();
 
 	capture_tool_command(argc, argv);
@@ -6813,7 +6817,10 @@ int main(int argc, char **argv)
 
 	msg("completed OK!\n");
 
-        free_defaults(argv_defaults);
+	free_defaults(argv_defaults);
+
+	if (THR_THD)
+		(void) pthread_key_delete(THR_THD);
 
 	exit(EXIT_SUCCESS);
 }
