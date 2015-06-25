@@ -1522,6 +1522,7 @@ copy_back()
 	/* temporally dummy value to avoid crash */
 	srv_page_size_shift = 14;
 	srv_page_size = (1 << srv_page_size_shift);
+	srv_max_n_threads = 1000;
 	sync_check_init();
 	os_io_init_simple();
 	ut_crc32_init();

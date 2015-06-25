@@ -1156,7 +1156,7 @@ recv_parse_or_apply_log_rec_body(
 	mtr_t*		mtr)
 {
 	ut_ad(!block == !mtr);
-	ut_ad(!apply || recv_sys->mlog_checkpoint_lsn != 0);
+//	ut_ad(!apply || recv_sys->mlog_checkpoint_lsn != 0);
 
 	switch (type) {
 	case MLOG_FILE_NAME:
@@ -1520,6 +1520,22 @@ recv_parse_or_apply_log_rec_body(
 				== dict_table_is_comp(index->table)));
 			ptr = page_zip_parse_compress_no_data(
 				ptr, end_ptr, page, page_zip, index);
+		}
+		break;
+	case MLOG_FILE_RENAME:
+		/* Do not rerun file-based log entries if this is
+		IO completion from a page read. */
+		if (page == NULL) {
+			ptr = fil_op_log_parse_or_replay(ptr, end_ptr,
+					type, space_id, 0);
+		}
+		break;
+	case MLOG_FILE_DELETE:
+	case MLOG_FILE_CREATE:
+	case MLOG_FILE_CREATE2:
+		if (page == NULL) {
+			ptr = fil_op_log_parse_or_replay(ptr, end_ptr,
+					type, 0, 0);
 		}
 		break;
 	default:
@@ -2074,15 +2090,22 @@ loop:
 			/* By now we have replayed all DDL log records from the
 			current batch. Check if the space ID is still valid in
 			the entry being processed, and ignore it if it is not.*/
+			mutex_enter(&(fil_system->mutex));
+
 			if (fil_space_get_by_id(recv_addr->space) == NULL) {
 
 				ut_a(recv_sys->n_addrs);
+
+				mutex_exit(&(fil_system->mutex));
 
 				recv_addr->state = RECV_PROCESSED;
 				recv_sys->n_addrs--;
 
 				continue;
 			}
+
+			mutex_exit(&(fil_system->mutex));
+
 			if (recv_addr->state == RECV_NOT_PROCESSED) {
 				if (!has_printed) {
 					ib::info() << "Starting an apply batch"
@@ -3145,7 +3168,7 @@ recv_group_scan_log_recs(
 	bool		last_phase)
 {
 	DBUG_ENTER("recv_group_scan_log_recs");
-	DBUG_ASSERT(!last_phase || recv_sys->mlog_checkpoint_lsn > 0);
+//	DBUG_ASSERT(!last_phase || recv_sys->mlog_checkpoint_lsn > 0);
 
 	mutex_enter(&recv_sys->mutex);
 	recv_sys->len = 0;
@@ -3494,6 +3517,7 @@ recv_recovery_from_checkpoint_start(
 		return(DB_ERROR);
 	}
 
+#if 0
 	if (recv_sys->mlog_checkpoint_lsn == 0) {
 		if (!srv_read_only_mode
 		    && group->scanned_lsn != checkpoint_lsn) {
@@ -3506,6 +3530,8 @@ recv_recovery_from_checkpoint_start(
 		group->scanned_lsn = checkpoint_lsn;
 		rescan = false;
 	} else {
+#endif
+	{
 		contiguous_lsn = checkpoint_lsn;
 		rescan = recv_group_scan_log_recs(
 			group, &contiguous_lsn, false);

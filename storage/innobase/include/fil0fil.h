@@ -702,6 +702,41 @@ fil_recreate_tablespace(
 						TRUNCATE log record */
 	lsn_t			recv_lsn);	/*!< in: the end LSN of
 						the log record */
+/*******************************************************************//**
+Parses the body of a log record written about an .ibd file operation. That is,
+the log record part after the standard (type, space id, page no) header of the
+log record.
+
+If desired, also replays the delete or rename operation if the .ibd file
+exists and the space id in it matches. Replays the create operation if a file
+at that path does not exist yet. If the database directory for the file to be
+created does not exist, then we create the directory, too.
+
+Note that mysqlbackup --apply-log sets fil_path_to_mysql_datadir to point to
+the datadir that we should use in replaying the file operations.
+
+InnoDB recovery does not replay these fully since it always sets the space id
+to zero. But mysqlbackup does replay them.  TODO: If remote tablespaces are
+used, mysqlbackup will only create tables in the default directory since
+MLOG_FILE_CREATE and MLOG_FILE_CREATE2 only know the tablename, not the path.
+
+@return end of log record, or NULL if the record was not completely
+contained between ptr and end_ptr */
+UNIV_INTERN
+byte*
+fil_op_log_parse_or_replay(
+/*=======================*/
+	byte*	ptr,		/*!< in: buffer containing the log record body,
+				or an initial segment of it, if the record does
+				not fir completely between ptr and end_ptr */
+	byte*	end_ptr,	/*!< in: buffer end */
+	ulint	type,		/*!< in: the type of this log record */
+	ulint	space_id,	/*!< in: the space id of the tablespace in
+				question, or 0 if the log record should
+				only be parsed but not replayed */
+	ulint	log_flags);	/*!< in: redo log flags
+				(stored in the page number parameter) */
+
 /** Replay a file rename operation if possible.
 @param[in]	space_id	tablespace identifier
 @param[in]	first_page_no	first page number in the file

@@ -66,6 +66,15 @@ Tablespace::shutdown()
 	m_files.clear();
 
 	m_space_id = ULINT_UNDEFINED;
+
+	if (m_name != NULL) {
+		ut_free(m_name);
+		m_name = NULL;
+	}
+	if (m_path != NULL) {
+		ut_free(m_path);
+		m_path = NULL;
+	}
 }
 
 /** Get the sum of the file sizes of each Datafile in a tablespace

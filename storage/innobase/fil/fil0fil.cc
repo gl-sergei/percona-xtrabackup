@@ -2179,6 +2179,487 @@ fil_recreate_tablespace(
 	return(err);
 }
 
+/*******************************************************************//**
+Returns TRUE if a single-table tablespace exists in the memory cache.
+@return	TRUE if exists */
+static
+ibool
+fil_tablespace_exists_in_mem(
+/*=========================*/
+	ulint	id)	/*!< in: space id */
+{
+	fil_space_t*	space;
+
+	ut_ad(fil_system);
+
+	mutex_enter(&fil_system->mutex);
+
+	space = fil_space_get_by_id(id);
+
+	mutex_exit(&fil_system->mutex);
+
+	return(space != NULL);
+}
+
+/*******************************************************************//**
+Checks if a single-table tablespace for a given table name exists in the
+tablespace memory cache.
+@return	space id, ULINT_UNDEFINED if not found */
+ulint
+fil_get_space_id_for_table(
+/*=======================*/
+	const char*	tablename)	/*!< in: table name in the standard
+				'databasename/tablename' format */
+{
+	fil_space_t*	fnamespace;
+	ulint		id		= ULINT_UNDEFINED;
+
+	ut_ad(fil_system);
+
+	mutex_enter(&fil_system->mutex);
+
+	/* Look if there is a space with the same name. */
+
+	fnamespace = fil_space_get_by_name(tablename);
+
+	if (fnamespace) {
+		id = fnamespace->id;
+	}
+
+	mutex_exit(&fil_system->mutex);
+
+	return(id);
+}
+
+/*******************************************************************//**
+Renames the memory cache structures of a single-table tablespace.
+@return	TRUE if success */
+static
+bool
+fil_rename_tablespace_in_mem(
+/*=========================*/
+	fil_space_t*	space,	/*!< in: tablespace memory object */
+	fil_node_t*	node,	/*!< in: file node of that tablespace */
+	const char*	new_name,	/*!< in: new name */
+	const char*	new_path);	/*!< in: new file path */
+
+/*******************************************************************//**
+Allocates a file name for a single-table tablespace. The string must be freed
+by caller with mem_free().
+@return	own: file name */
+UNIV_INTERN
+char*
+fil_make_ibd_name(
+/*==============*/
+	const char*	name,		/*!< in: table name or a dir path */
+	bool		is_full_path)	/*!< in: TRUE if it is a dir path */
+{
+	char*	filename;
+	ulint	namelen		= strlen(name);
+	ulint	dirlen		= strlen(fil_path_to_mysql_datadir);
+	ulint	pathlen		= dirlen + namelen + sizeof "/.ibd";
+
+	filename = static_cast<char*>(ut_malloc_nokey(pathlen));
+
+	if (is_full_path) {
+		memcpy(filename, name, namelen);
+		memcpy(filename + namelen, ".ibd", sizeof ".ibd");
+	} else {
+		ut_snprintf(filename, pathlen, "%s/%s.ibd",
+			fil_path_to_mysql_datadir, name);
+
+	}
+
+	os_normalize_path_for_win(filename);
+
+	return(filename);
+}
+
+/*******************************************************************//**
+Renames a single-table tablespace. The tablespace must be cached in the
+tablespace memory cache.
+@return	TRUE if success */
+UNIV_INTERN
+ibool
+fil_rename_tablespace(
+/*==================*/
+	const char*	old_name_in,	/*!< in: old table name in the
+					standard databasename/tablename
+					format of InnoDB, or NULL if we
+					do the rename based on the space
+					id only */
+	ulint		id,		/*!< in: space id */
+	const char*	new_name,	/*!< in: new table name in the
+					standard databasename/tablename
+					format of InnoDB */
+	const char*	new_path_in)	/*!< in: new full datafile path
+					if the tablespace is remotely
+					located, or NULL if it is located
+					in the normal data directory. */
+{
+	ibool		success;
+	fil_space_t*	space;
+	fil_node_t*	node;
+	ulint		count		= 0;
+	char*		new_path;
+	char*		old_name;
+	char*		old_path;
+	const char*	not_given	= "(name not specified)";
+
+	ut_a(id != 0);
+
+retry:
+	count++;
+
+	if (!(count % 1000)) {
+		ut_print_timestamp(stderr);
+		fputs("  InnoDB: Warning: problems renaming ", stderr);
+		fputs(old_name_in ? old_name_in : not_given, stderr);
+		fputs(" to ", stderr);
+		fputs(new_name, stderr);
+		fprintf(stderr, ", %lu iterations\n", (ulong) count);
+	}
+
+	mutex_enter(&fil_system->mutex);
+
+	space = fil_space_get_by_id(id);
+
+	DBUG_EXECUTE_IF("fil_rename_tablespace_failure_1", space = NULL; );
+
+	if (space == NULL) {
+		ib::error() <<
+			"Cannot find space id " << id << " in the tablespace "
+			"memory cache, though the table '" <<
+			(old_name_in ? old_name_in : not_given) << "' in a "
+			"rename operation should have that id.";
+		mutex_exit(&fil_system->mutex);
+
+		return(FALSE);
+	}
+
+	if (count > 25000) {
+		space->stop_ios = FALSE;
+		mutex_exit(&fil_system->mutex);
+
+		return(FALSE);
+	}
+
+	/* We temporarily close the .ibd file because we do not trust that
+	operating systems can rename an open file. For the closing we have to
+	wait until there are no pending i/o's or flushes on the file. */
+
+	space->stop_ios = TRUE;
+
+	/* The following code must change when InnoDB supports
+	multiple datafiles per tablespace. */
+	ut_a(UT_LIST_GET_LEN(space->chain) == 1);
+	node = UT_LIST_GET_FIRST(space->chain);
+
+	if (node->n_pending > 0
+	    || node->n_pending_flushes > 0
+	    || node->being_extended) {
+		/* There are pending i/o's or flushes or the file is
+		currently being extended, sleep for a while and
+		retry */
+
+		mutex_exit(&fil_system->mutex);
+
+		os_thread_sleep(20000);
+
+		goto retry;
+
+	} else if (node->modification_counter > node->flush_counter) {
+		/* Flush the space */
+
+		mutex_exit(&fil_system->mutex);
+
+		os_thread_sleep(20000);
+
+		fil_flush(id);
+
+		goto retry;
+
+	} else if (node->is_open) {
+		/* Close the file */
+
+		fil_node_close_file(node);
+	}
+
+	/* Check that the old name in the space is right */
+
+	if (old_name_in) {
+		old_name = mem_strdup(old_name_in);
+		ut_a(strcmp(space->name, old_name) == 0);
+	} else {
+		old_name = mem_strdup(space->name);
+	}
+	old_path = mem_strdup(node->name);
+
+	/* Rename the tablespace and the node in the memory cache */
+	new_path = new_path_in ? mem_strdup(new_path_in)
+		: fil_make_ibd_name(new_name, false);
+
+	success = fil_rename_tablespace_in_mem(
+		space, node, new_name, new_path);
+
+	if (success) {
+
+		DBUG_EXECUTE_IF("fil_rename_tablespace_failure_2",
+			goto skip_second_rename; );
+
+		success = os_file_rename(
+			innodb_file_data_key, old_path, new_path);
+
+		DBUG_EXECUTE_IF("fil_rename_tablespace_failure_2",
+skip_second_rename:
+			success = FALSE; );
+
+		if (!success) {
+			/* We have to revert the changes we made
+			to the tablespace memory cache */
+
+			ut_a(fil_rename_tablespace_in_mem(
+					space, node, old_name, old_path));
+		}
+	}
+
+	space->stop_ios = FALSE;
+
+	mutex_exit(&fil_system->mutex);
+
+#if 0
+	if (success && !recv_recovery_on) {
+		mtr_t		mtr;
+
+		mtr_start(&mtr);
+
+		fil_op_write_log(MLOG_FILE_RENAME, id, 0, 0, old_name, new_name,
+				 &mtr);
+		mtr_commit(&mtr);
+	}
+#endif /* !UNIV_HOTBACKUP */
+
+	ut_free(new_path);
+	ut_free(old_path);
+	ut_free(old_name);
+
+	return(success);
+}
+
+/*******************************************************************//**
+Parses the body of a log record written about an .ibd file operation. That is,
+the log record part after the standard (type, space id, page no) header of the
+log record.
+
+If desired, also replays the delete or rename operation if the .ibd file
+exists and the space id in it matches. Replays the create operation if a file
+at that path does not exist yet. If the database directory for the file to be
+created does not exist, then we create the directory, too.
+
+Note that mysqlbackup --apply-log sets fil_path_to_mysql_datadir to point to
+the datadir that we should use in replaying the file operations.
+
+InnoDB recovery does not replay these fully since it always sets the space id
+to zero. But mysqlbackup does replay them.  TODO: If remote tablespaces are
+used, mysqlbackup will only create tables in the default directory since
+MLOG_FILE_CREATE and MLOG_FILE_CREATE2 only know the tablename, not the path.
+
+@return end of log record, or NULL if the record was not completely
+contained between ptr and end_ptr */
+UNIV_INTERN
+byte*
+fil_op_log_parse_or_replay(
+/*=======================*/
+	byte*	ptr,		/*!< in: buffer containing the log record body,
+				or an initial segment of it, if the record does
+				not fir completely between ptr and end_ptr */
+	byte*	end_ptr,	/*!< in: buffer end */
+	ulint	type,		/*!< in: the type of this log record */
+	ulint	space_id,	/*!< in: the space id of the tablespace in
+				question, or 0 if the log record should
+				only be parsed but not replayed */
+	ulint	log_flags)	/*!< in: redo log flags
+				(stored in the page number parameter) */
+{
+	ulint		name_len;
+	ulint		new_name_len;
+	const char*	name;
+	const char*	new_name	= NULL;
+	ulint		flags		= 0;
+
+	if (type == MLOG_FILE_CREATE2) {
+		if (end_ptr < ptr + 4) {
+
+			return(NULL);
+		}
+
+		flags = mach_read_from_4(ptr);
+		ptr += 4;
+	}
+
+	if (end_ptr < ptr + 2) {
+
+		return(NULL);
+	}
+
+	name_len = mach_read_from_2(ptr);
+
+	ptr += 2;
+
+	if (end_ptr < ptr + name_len) {
+
+		return(NULL);
+	}
+
+	name = (const char*) ptr;
+
+	ptr += name_len;
+
+	if (type == MLOG_FILE_RENAME) {
+		if (end_ptr < ptr + 2) {
+
+			return(NULL);
+		}
+
+		new_name_len = mach_read_from_2(ptr);
+
+		ptr += 2;
+
+		if (end_ptr < ptr + new_name_len) {
+
+			return(NULL);
+		}
+
+		new_name = (const char*) ptr;
+
+		ptr += new_name_len;
+	}
+
+	/* We managed to parse a full log record body */
+	/*
+	printf("Parsed log rec of type %lu space %lu\n"
+	"name %s\n", type, space_id, name);
+
+	if (type == MLOG_FILE_RENAME) {
+	printf("new name %s\n", new_name);
+	}
+	*/
+	if (!space_id) {
+
+		if (fil_get_space_id_for_table(name)
+			   != ULINT_UNDEFINED) {
+			/* Do nothing */
+			return(ptr);
+		}
+
+		char*	filename;
+		ulint	pathlen		= name_len + sizeof(".ibd") - 1;
+		lsn_t	flush_lsn;
+		fil_space_t	*space;
+
+		filename = static_cast<char*>(ut_malloc_nokey(pathlen));
+
+		ut_snprintf(filename, pathlen, "%s.ibd", name);
+
+		Datafile file;
+
+		file.set_filepath(filename);
+
+		filename[pathlen - 5] = 0;
+
+		ut_a(file.validate_first_page(&flush_lsn) == DB_SUCCESS);
+
+		bool is_temp = FSP_FLAGS_GET_TEMPORARY(file.flags());
+		space = fil_space_create(
+			filename, file.space_id(), file.flags(),
+			is_temp ? FIL_TYPE_TEMPORARY : FIL_TYPE_TABLESPACE);
+
+		ut_a(space != NULL);
+
+		filename[pathlen - 5] = '.';
+
+		if (!fil_node_create(filename, 0, space, false)) {
+			ut_error;
+		}
+
+		fil_space_open(space->name);
+
+
+		return(ptr);
+	}
+
+	/* Let us try to perform the file operation, if sensible. Note that
+	mysqlbackup has at this stage already read in all space id info to the
+	fil0fil.cc data structures.
+
+	NOTE that our algorithm is not guaranteed to work correctly if there
+	were renames of tables during the backup. See mysqlbackup code for more
+	on the problem. */
+
+	switch (type) {
+	case MLOG_FILE_DELETE:
+		if (fil_tablespace_exists_in_mem(space_id)) {
+			dberr_t	err = fil_delete_tablespace(
+				space_id, BUF_REMOVE_FLUSH_NO_WRITE);
+			ut_a(err == DB_SUCCESS);
+		}
+
+		break;
+
+	case MLOG_FILE_RENAME:
+		/* In order to replay the rename, the following must hold:
+		* The new name is not already used.
+		* A tablespace is open in memory with the old name.
+		* The space ID for that tablepace matches this log entry.
+		This will prevent unintended renames during recovery. */
+
+		if (fil_get_space_id_for_table(new_name) == ULINT_UNDEFINED
+		    && space_id == fil_get_space_id_for_table(name)) {
+			/* Create the database directory for the new name, if
+			it does not exist yet */
+			fil_create_directory_for_tablename(new_name);
+
+			if (!fil_rename_tablespace(name, space_id,
+						   new_name, NULL)) {
+				ut_error;
+			}
+		}
+
+		break;
+
+	case MLOG_FILE_CREATE:
+	case MLOG_FILE_CREATE2:
+		if (fil_tablespace_exists_in_mem(space_id)) {
+			/* Do nothing */
+		} else if (fil_get_space_id_for_table(name)
+			   != ULINT_UNDEFINED) {
+			/* Do nothing */
+		} else if (log_flags & MLOG_FILE_FLAG_TEMP) {
+			/* Temporary table, do nothing */
+		} else {
+			const char*	path = NULL;
+
+			/* Create the database directory for name, if it does
+			not exist yet */
+			fil_create_directory_for_tablename(name);
+
+			if (fil_ibd_create(space_id, name, path,
+				flags, FIL_IBD_FILE_INITIAL_SIZE)
+					!= DB_SUCCESS) {
+				//ut_error;
+			}
+		}
+
+		break;
+
+	default:
+		ut_error;
+	}
+
+	return(ptr);
+}
+
+
 /** Replay a file rename operation if possible.
 @param[in]	space_id	tablespace identifier
 @param[in]	first_page_no	first page number in the file
@@ -3189,7 +3670,20 @@ fil_ibd_create(
 	byte*		page;
 	bool		success;
 	bool		is_temp = FSP_FLAGS_GET_TEMPORARY(flags);
+	/* For XtraBackup recovery we force remote tablespaces to be local,
+	i.e. never execute the code path corresponding to has_data_dir == true.
+	We don't create .isl files either, because we rely on innobackupex to
+	copy them under a global lock, and use them to copy remote tablespaces
+	to their proper locations on --copy-back.
+
+	See also MySQL bug #72022: dir_path is always NULL for remote
+	tablespaces when a MLOG_FILE_CREATE* log record is replayed (the remote
+	directory is not available from MLOG_FILE_CREATE*). */
+#if 0
 	bool		has_data_dir = FSP_FLAGS_HAS_DATA_DIR(flags);
+#else
+	bool		has_data_dir = false;
+#endif
 	bool		has_shared_space = FSP_FLAGS_GET_SHARED(flags);
 	fil_space_t*	space = NULL;
 

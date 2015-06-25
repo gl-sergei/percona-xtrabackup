@@ -144,10 +144,10 @@ enum mlog_id_t {
 	MLOG_DUMMY_RECORD = 32,
 
 	/** log record about an .ibd file creation */
-	//MLOG_FILE_CREATE = 33,
+	MLOG_FILE_CREATE = 33,
 
 	/** rename databasename/tablename (no .ibd file name suffix) */
-	//MLOG_FILE_RENAME = 34,
+	MLOG_FILE_RENAME = 34,
 
 	/** delete a tablespace file that starts with (space_id,page_no) */
 	MLOG_FILE_DELETE = 35,
@@ -188,7 +188,7 @@ enum mlog_id_t {
 	MLOG_COMP_PAGE_REORGANIZE = 46,
 
 	/** log record about creating an .ibd file, with format */
-	//MLOG_FILE_CREATE2 = 47,
+	MLOG_FILE_CREATE2 = 47,
 
 	/** write the node pointer of a record on a compressed
 	non-leaf B-tree page */
@@ -229,6 +229,13 @@ enum mlog_id_t {
 	MLOG_BIGGEST_TYPE = 58
 };
 
+/* @} */
+
+/** @name Flags for MLOG_FILE operations
+(stored in the page number parameter, called log_flags in the
+functions).  The page number parameter was originally written as 0. @{ */
+#define MLOG_FILE_FLAG_TEMP	1	/*!< identifies TEMPORARY TABLE in
+					MLOG_FILE_CREATE, MLOG_FILE_CREATE2 */
 /* @} */
 
 /** Size of a MLOG_CHECKPOINT record in bytes.

@@ -1685,7 +1685,8 @@ innodb_init_param(void)
         /* We set srv_pool_size here in units of 1 kB. InnoDB internally
         changes the value so that it becomes the number of database pages. */
 
-	//srv_buf_pool_size = (ulint) innobase_buffer_pool_size;
+	/* TDOD: add option */
+	srv_buf_pool_chunk_unit = 134217728;
 	srv_buf_pool_size = (ulint) xtrabackup_use_memory;
 
 	srv_n_file_io_threads = (ulint) innobase_file_io_threads;
@@ -2941,6 +2942,177 @@ xb_fil_io_init(void)
 	fsp_init();
 }
 
+/********************************************************************//**
+At the server startup, if we need crash recovery, scans the database
+directories under the MySQL datadir, looking for .ibd files. Those files are
+single-table tablespaces. We need to know the space id in each of them so that
+we know into which file we should look to check the contents of a page stored
+in the doublewrite buffer, also to know where to apply log records where the
+space id is != 0.
+@return	DB_SUCCESS or error number */
+UNIV_INTERN
+dberr_t
+xb_load_single_table_tablespaces(ibool (*pred)(const char*, const char*))
+/*===================================*/
+{
+	int		ret;
+	char*		dbpath		= NULL;
+	ulint		dbpath_len	= 100;
+	os_file_dir_t	dir;
+	os_file_dir_t	dbdir;
+	os_file_stat_t	dbinfo;
+	os_file_stat_t	fileinfo;
+	dberr_t		err		= DB_SUCCESS;
+
+	/* The datadir of MySQL is always the default directory of mysqld */
+
+	dir = os_file_opendir(fil_path_to_mysql_datadir, TRUE);
+
+	if (dir == NULL) {
+
+		return(DB_ERROR);
+	}
+
+	dbpath = static_cast<char*>(ut_malloc_nokey(dbpath_len));
+
+	/* Scan all directories under the datadir. They are the database
+	directories of MySQL. */
+
+	ret = fil_file_readdir_next_file(&err, fil_path_to_mysql_datadir, dir,
+					 &dbinfo);
+	while (ret == 0) {
+		ulint len;
+		/* printf("Looking at %s in datadir\n", dbinfo.name); */
+
+		if (dbinfo.type == OS_FILE_TYPE_FILE
+		    || dbinfo.type == OS_FILE_TYPE_UNKNOWN) {
+
+			goto next_datadir_item;
+		}
+
+		/* We found a symlink or a directory; try opening it to see
+		if a symlink is a directory */
+
+		len = strlen(fil_path_to_mysql_datadir)
+			+ strlen (dbinfo.name) + 2;
+		if (len > dbpath_len) {
+			dbpath_len = len;
+
+			if (dbpath) {
+				ut_free(dbpath);
+			}
+
+			dbpath = static_cast<char*>(ut_malloc_nokey(dbpath_len));
+		}
+		ut_snprintf(dbpath, dbpath_len,
+			    "%s/%s", fil_path_to_mysql_datadir, dbinfo.name);
+		os_normalize_path_for_win(dbpath);
+
+		/* We want wrong directory permissions to be a fatal error for
+		XtraBackup. */
+		dbdir = os_file_opendir(dbpath, TRUE);
+
+		if (dbdir != NULL) {
+
+			/* We found a database directory; loop through it,
+			looking for possible .ibd files in it */
+
+			ret = fil_file_readdir_next_file(&err, dbpath, dbdir,
+							 &fileinfo);
+			while (ret == 0) {
+
+				if (fileinfo.type == OS_FILE_TYPE_DIR) {
+
+					goto next_file_item;
+				}
+
+				/* We found a symlink or a file */
+				if (strlen(fileinfo.name) > 4
+				    && (0 == strcmp(fileinfo.name
+						   + strlen(fileinfo.name) - 4,
+						   ".ibd")
+					/* Ignore .isl files on XtraBackup
+					recovery, all tablespaces must be
+					local. */
+					|| (srv_backup_mode &&
+					    0 == strcmp(fileinfo.name
+						   + strlen(fileinfo.name) - 4,
+							".isl")))
+				    && (!pred ||
+					pred(dbinfo.name, fileinfo.name))) {
+					/* The name ends in .ibd or .isl;
+					try opening the file */
+					char*	filename;
+					size_t	dirlen		= strlen(dbinfo.name);
+					size_t	namelen		= strlen(fileinfo.name);
+					ulint	pathlen		= dirlen + namelen + 2;
+					lsn_t	flush_lsn;
+					fil_space_t	*space;
+
+					filename = static_cast<char*>(ut_malloc_nokey(pathlen));
+
+					ut_snprintf(filename, pathlen, "%s/%s",
+							dbinfo.name, fileinfo.name);
+
+					Datafile file;
+
+					file.set_filepath(filename);
+
+					filename[pathlen - 5] = 0;
+
+					ut_a(file.validate_first_page(&flush_lsn) == DB_SUCCESS);
+
+					bool is_temp = FSP_FLAGS_GET_TEMPORARY(file.flags());
+					space = fil_space_create(
+						filename, file.space_id(), file.flags(),
+						is_temp ? FIL_TYPE_TEMPORARY : FIL_TYPE_TABLESPACE);
+
+					ut_a(space != NULL);
+
+					filename[pathlen - 5] = '.';
+
+					if (!fil_node_create(filename, 0, space, false)) {
+						ut_error;
+					}
+
+					fil_space_open(space->name);
+
+					ut_free(filename);
+				}
+next_file_item:
+				ret = fil_file_readdir_next_file(&err,
+								 dbpath, dbdir,
+								 &fileinfo);
+			}
+
+			if (0 != os_file_closedir(dbdir)) {
+				fputs("InnoDB: Warning: could not"
+				      " close database directory ", stderr);
+				fputs(dbpath, stderr);
+				putc('\n', stderr);
+
+				err = DB_ERROR;
+			}
+		}
+
+next_datadir_item:
+		ret = fil_file_readdir_next_file(&err,
+						 fil_path_to_mysql_datadir,
+						 dir, &dbinfo);
+	}
+
+	ut_free(dbpath);
+
+	if (0 != os_file_closedir(dir)) {
+		fprintf(stderr,
+			"InnoDB: Error: could not close MySQL datadir\n");
+
+		return(DB_ERROR);
+	}
+
+	return(err);
+}
+
 /****************************************************************************
 Populates the tablespace memory cache by scanning for and opening data files.
 @returns DB_SUCCESS or error code.*/
@@ -3009,12 +3181,10 @@ xb_load_tablespaces(void)
 
 	msg("xtrabackup: Generating a list of tablespaces\n");
 
-#if 0
-	err = fil_load_single_table_tablespaces(xb_check_if_open_tablespace);
+	err = xb_load_single_table_tablespaces(xb_check_if_open_tablespace);
 	if (err != DB_SUCCESS) {
 		return(err);
 	}
-#endif
 
 	return(DB_SUCCESS);
 }
@@ -3038,7 +3208,37 @@ void
 xb_data_files_close(void)
 /*====================*/
 {
-	srv_shutdown_all_bg_threads();
+	ulint	i;
+
+	srv_shutdown_state = SRV_SHUTDOWN_EXIT_THREADS;
+
+	/* All threads end up waiting for certain events. Put those events
+	to the signaled state. Then the threads will exit themselves after
+	os_event_wait(). */
+	for (i = 0; i < 1000; i++) {
+
+		if (!buf_page_cleaner_is_active
+		    && os_aio_all_slots_free()) {
+			os_aio_wake_all_threads_at_shutdown();
+		}
+
+		/* f. dict_stats_thread is signaled from
+		logs_empty_and_mark_files_at_shutdown() and should have
+		already quit or is quitting right now. */
+
+		bool	active = os_thread_active();
+
+		os_thread_sleep(100000);
+
+		if (!active) {
+			break;
+		}
+	}
+
+	if (i == 1000) {
+		ib::warn() << os_thread_count << " threads created by InnoDB"
+			" had not exited at shutdown!";
+	}
 
 	os_aio_free();
 
@@ -3393,7 +3593,7 @@ open_or_create_log_file(
 
 	sprintf(name + dirnamelen, "%s%lu", "ib_logfile", (ulong) i);
 
-	files[i] = os_file_create(innodb_file_log_key, name,
+	files[i] = os_file_create(0, name,
 				  OS_FILE_OPEN, OS_FILE_NORMAL,
 				  OS_LOG_FILE, true, &ret);
 	if (!ret) {
@@ -4421,7 +4621,7 @@ xtrabackup_init_temp_log(void)
 	bool		success;
 
 	ulint		field;
-	byte		log_buf[UNIV_PAGE_SIZE_MAX * 128]; /* 2 MB */
+	byte		*log_buf;
 
 	ib_uint64_t	file_size;
 
@@ -4434,6 +4634,11 @@ xtrabackup_init_temp_log(void)
 	bool		checkpoint_found;
 
 	max_no = 0;
+
+	log_buf = static_cast<byte*>(ut_malloc_nokey(UNIV_PAGE_SIZE_MAX * 128));
+	if (log_buf == NULL) {
+		goto error;
+	}
 
 	if (!xb_init_log_block_size()) {
 		goto error;
@@ -4686,14 +4891,24 @@ not_consistent:
 	}
 	xtrabackup_logfile_is_renamed = TRUE;
 
+	if (log_buf != NULL) {
+		ut_free(log_buf);
+	}
+
 	return(FALSE);
 
 skip_modify:
+	if (log_buf != NULL) {
+		ut_free(log_buf);
+	}
 	os_file_close(src_file);
 	src_file = XB_FILE_UNDEFINED;
 	return(FALSE);
 
 error:
+	if (log_buf != NULL) {
+		ut_free(log_buf);
+	}
 	if (src_file != XB_FILE_UNDEFINED)
 		os_file_close(src_file);
 	msg("xtrabackup: Error: xtrabackup_init_temp_log() failed.\n");
@@ -5922,6 +6137,8 @@ static
 void
 innodb_free_param()
 {
+	srv_sys_space.shutdown();
+	srv_tmp_space.shutdown();
 	free(internal_innobase_data_file_path);
 	internal_innobase_data_file_path = NULL;
 	free_tmpdir(&mysql_tmpdir_list);
@@ -6563,6 +6780,17 @@ int main(int argc, char **argv)
 	setup_signals();
 
 	MY_INIT(argv[0]);
+
+	if (my_create_thread_local_key(&THR_THD,NULL) ||
+	    my_create_thread_local_key(&THR_MALLOC,NULL))
+	{
+		exit(EXIT_FAILURE);
+	}
+	THR_THD_initialized = true;
+	THR_MALLOC_initialized = true;
+
+	my_thread_set_THR_THD(NULL);
+
 	xb_regex_init();
 
 	capture_tool_command(argc, argv);
@@ -6827,6 +7055,16 @@ int main(int argc, char **argv)
 	msg("completed OK!\n");
 
         free_defaults(argv_defaults);
+
+	if (THR_THD_initialized) {
+		THR_THD_initialized = false;
+		(void) my_delete_thread_local_key(THR_THD);
+	}
+
+	if (THR_MALLOC_initialized) {
+		THR_MALLOC_initialized= false;
+		(void) my_delete_thread_local_key(THR_MALLOC);
+	}
 
 	exit(EXIT_SUCCESS);
 }

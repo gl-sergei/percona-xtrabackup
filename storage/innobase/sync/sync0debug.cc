@@ -573,6 +573,11 @@ SyncDebug::check_order(const latch_t* latch)
 	unnecessary assertion failures below. */
 
 	switch (latch->m_level) {
+	/* xtrabackup */
+	case SYNC_XTRA_DATAFILES_ITER_MUTEX:
+	case SYNC_XTRA_COUNT_MUTEX:
+	case SYNC_XTRA_DATADIR_ITER_MUTEX:
+
 	case SYNC_NO_ORDER_CHECK:
 	case SYNC_EXTERN_STORAGE:
 	case SYNC_TREE_NODE_FROM_HASH:
@@ -875,6 +880,20 @@ void
 sync_latch_meta_init()
 /*==================*/
 {
+	// xtrabackup
+
+	LATCH_ADD(SrvLatches, "datafiles_iter_mutex",
+		  SYNC_XTRA_DATAFILES_ITER_MUTEX,
+		  PFS_NOT_INSTRUMENTED);
+
+	LATCH_ADD(SrvLatches, "count_mutex",
+		  SYNC_XTRA_COUNT_MUTEX,
+		  PFS_NOT_INSTRUMENTED);
+
+	LATCH_ADD(SrvLatches, "datadir_iter_t::mutex",
+		  SYNC_XTRA_DATADIR_ITER_MUTEX,
+		  PFS_NOT_INSTRUMENTED);
+
 	// First add the mutexes
 	LATCH_ADD(SrvLatches, "autoinc",
 		  SYNC_DICT_AUTOINC_MUTEX,

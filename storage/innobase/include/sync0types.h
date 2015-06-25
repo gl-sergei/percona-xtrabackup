@@ -296,7 +296,13 @@ enum latch_level_t {
 	SYNC_LEVEL_VARYING,
 
 	/** This can be used to suppress order checking. */
-	SYNC_NO_ORDER_CHECK
+	SYNC_NO_ORDER_CHECK,
+
+	/** xtrabackup **/
+	SYNC_XTRA_DATAFILES_ITER_MUTEX,
+	SYNC_XTRA_COUNT_MUTEX,
+	SYNC_XTRA_DATADIR_ITER_MUTEX,
+
 };
 
 /** All (ordered) latches, used in debugging, must derive from this class. */

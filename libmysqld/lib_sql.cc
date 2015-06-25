@@ -1334,6 +1334,7 @@ void error_log_print(enum loglevel level __attribute__((unused)),
   my_vsnprintf(mysql_server_last_error, sizeof(mysql_server_last_error),
                format, argsi);
   mysql_server_last_errno= CR_UNKNOWN_ERROR;
+  fprintf(stderr, "%s\n", mysql_server_last_error);
 }
 
 
