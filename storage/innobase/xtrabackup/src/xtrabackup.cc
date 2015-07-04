@@ -1495,7 +1495,6 @@ innodb_init_param(void)
 {
 	/* innobase_init */
 	static char	current_dir[3];		/* Set if using current lib */
-	my_bool		ret;
 	char		*default_path;
         ulint		fsp_flags;
 
@@ -2225,8 +2224,8 @@ xb_get_zip_size(os_file_t file, bool *success)
 	byte		*buf;
 	byte		*page;
 	page_size_t	page_size(0, 0, false);
-	ibool	 	ret;
-	ulint	 	space;
+	ibool		ret;
+	ulint		space;
 
 	buf = static_cast<byte *>(ut_malloc_nokey(2 * UNIV_PAGE_SIZE_MAX));
 	page = static_cast<byte *>(ut_align(buf, UNIV_PAGE_SIZE_MAX));
@@ -2238,7 +2237,11 @@ xb_get_zip_size(os_file_t file, bool *success)
 	}
 
 	space = mach_read_from_4(page + FIL_PAGE_ARCH_LOG_NO_OR_SPACE_ID);
-	page_size.copy_from(page_size_t(fsp_header_get_flags(page)));
+	if (space == 0) {
+		page_size.copy_from(univ_page_size);
+	} else {
+		page_size.copy_from(page_size_t(fsp_header_get_flags(page)));
+	}
 	*success = true;
 end:
 	ut_free(buf);
@@ -4314,7 +4317,7 @@ loop:
 					for (;;) {
 						mtr_start(&local_mtr);
 
-						local_block = btr_block_get(page_id_t(space, dict_index_get_page(index)), page_size, RW_S_LATCH, index, &local_mtr);
+						local_block = btr_block_get(page_id_t(space_id, dict_index_get_page(index)), page_size, RW_S_LATCH, index, &local_mtr);
 						local_page = buf_block_get_frame(local_block);
 						blob_header = local_page + offset;
 #define BTR_BLOB_HDR_PART_LEN		0
@@ -5013,10 +5016,10 @@ xb_space_create_file(
 
 
 #if !defined(NO_FALLOCATE) && defined(UNIV_LINUX)
-	if (fil_fusionio_enable_atomic_write(file)) {
+	if (fil_fusionio_enable_atomic_write(*file)) {
 
 		/* This is required by FusionIO HW/Firmware */
-		int	ret = posix_fallocate(file, 0, size * UNIV_PAGE_SIZE);
+		int	ret = posix_fallocate(*file, 0, size * UNIV_PAGE_SIZE);
 
 		if (ret != 0) {
 
@@ -6353,7 +6356,6 @@ skip_check:
 	while ((node = datafiles_iter_next(it)) != NULL) {
 		byte		*header;
 		ulint		 size;
-		ulint		 actual_size;
 		mtr_t		 mtr;
 		buf_block_t	*block;
 		ulint		 flags;
