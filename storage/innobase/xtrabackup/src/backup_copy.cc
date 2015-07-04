@@ -1813,6 +1813,7 @@ decrypt_decompress()
 
 	srv_max_n_threads = 1000;
 	sync_check_init();
+	os_thread_init();
 
 	/* cd to backup directory */
 	if (my_setwd(xtrabackup_target_dir, MYF(MY_WME)))
