@@ -2202,6 +2202,10 @@ files_checked:
 		err = truncate_t::fixup_tables_in_system_tablespace();
 
 		if (srv_apply_log_only) {
+
+			/* wake main loop of page cleaner up */
+			os_event_set(buf_flush_event);
+
 			goto skip_processes;
 		}
 

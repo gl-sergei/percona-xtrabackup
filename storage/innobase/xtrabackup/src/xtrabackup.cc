@@ -4955,6 +4955,7 @@ xb_space_create_file(
 					flags */
 	os_file_t*	file)		/*!<out: file handle */
 {
+	const ulint	size = FIL_IBD_FILE_INITIAL_SIZE;
 	dberr_t		err;
 	byte*		buf2;
 	byte*		page;
@@ -5010,6 +5011,41 @@ xb_space_create_file(
 		return(false);
 	}
 
+
+#if !defined(NO_FALLOCATE) && defined(UNIV_LINUX)
+	if (fil_fusionio_enable_atomic_write(file)) {
+
+		/* This is required by FusionIO HW/Firmware */
+		int	ret = posix_fallocate(file, 0, size * UNIV_PAGE_SIZE);
+
+		if (ret != 0) {
+
+			ib::error() <<
+				"posix_fallocate(): Failed to preallocate"
+				" data for file " << path
+				<< ", desired size "
+				<< size * UNIV_PAGE_SIZE
+				<< " Operating system error number " << ret
+				<< ". Check"
+				" that the disk is not full or a disk quota"
+				" exceeded. Make sure the file system supports"
+				" this function. Some operating system error"
+				" numbers are described at " REFMAN
+				" operating-system-error-codes.html";
+
+			success = false;
+		} else {
+			success = true;
+		}
+	} else {
+
+		success = os_file_set_size(
+			path, *file, size * UNIV_PAGE_SIZE, srv_read_only_mode);
+	}
+#else
+	success = os_file_set_size(
+		path, *file, size * UNIV_PAGE_SIZE, srv_read_only_mode);
+#endif /* !NO_FALLOCATE && UNIV_LINUX */
 
 	if (!success) {
 		os_file_close(*file);
