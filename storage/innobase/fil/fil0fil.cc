@@ -2565,6 +2565,11 @@ fil_op_log_parse_or_replay(
 
 		file.set_filepath(filename);
 
+		if (file.open_read_only(true) != DB_SUCCESS) {
+			return(ptr);
+		}
+		file.close();
+
 		filename[pathlen - 5] = 0;
 
 		ut_a(file.validate_first_page(&flush_lsn) == DB_SUCCESS);
