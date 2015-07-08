@@ -2945,6 +2945,65 @@ xb_fil_io_init(void)
 	fsp_init();
 }
 
+Datafile *xb_new_datafile(
+	const char *name,
+	bool is_remote)
+{
+	if (is_remote) {
+		RemoteDatafile *remote_file = new RemoteDatafile();
+		remote_file->set_name(name);
+		return(remote_file);
+	} else {
+		Datafile *file = new Datafile();
+		file->set_name(name);
+		file->make_filepath(".");
+		return(file);
+	}
+}
+
+void
+xb_load_single_table_tablespace(
+	const char *dirname,
+	const char *filname,
+	bool is_remote)
+{
+	/* The name ends in .ibd or .isl;
+	try opening the file */
+	char*	name;
+	size_t	dirlen		= strlen(dirname);
+	size_t	namelen		= strlen(filname);
+	ulint	pathlen		= dirlen + namelen + 2;
+	lsn_t	flush_lsn;
+	fil_space_t	*space;
+
+	name = static_cast<char*>(ut_malloc_nokey(pathlen));
+
+	ut_snprintf(name, pathlen, "%s/%s", dirname, filname);
+	name[pathlen - 5] = 0;
+
+	Datafile *file = xb_new_datafile(name, is_remote);
+
+	ut_a(file->open_read_only(true) == DB_SUCCESS);
+	ut_a(file->validate_first_page(&flush_lsn) == DB_SUCCESS);
+
+	bool is_temp = FSP_FLAGS_GET_TEMPORARY(file->flags());
+	space = fil_space_create(
+		name, file->space_id(), file->flags(),
+		is_temp ? FIL_TYPE_TEMPORARY : FIL_TYPE_TABLESPACE);
+
+	ut_a(space != NULL);
+
+	if (!fil_node_create(file->filepath(), 0, space, false)) {
+		ut_error;
+	}
+
+	fil_space_open(space->name);
+
+	ut_free(name);
+
+	delete file;
+}
+
 /********************************************************************//**
 At the server startup, if we need crash recovery, scans the database
 directories under the MySQL datadir, looking for .ibd files. Those files are
@@ -3023,11 +3082,16 @@ xb_load_single_table_tablespaces(ibool (*pred)(const char*, const char*))
 			ret = fil_file_readdir_next_file(&err, dbpath, dbdir,
 							 &fileinfo);
 			while (ret == 0) {
+				bool is_remote;
 
 				if (fileinfo.type == OS_FILE_TYPE_DIR) {
 
 					goto next_file_item;
 				}
+
+				is_remote = strcmp(fileinfo.name
+					  + strlen(fileinfo.name) - 4,
+					  ".isl") == 0;
 
 				/* We found a symlink or a file */
 				if (strlen(fileinfo.name) > 4
@@ -3037,50 +3101,12 @@ xb_load_single_table_tablespaces(ibool (*pred)(const char*, const char*))
 					/* Ignore .isl files on XtraBackup
 					recovery, all tablespaces must be
 					local. */
-					|| (srv_backup_mode &&
-					    0 == strcmp(fileinfo.name
-						   + strlen(fileinfo.name) - 4,
-							".isl")))
-				    && (!pred ||
-					pred(dbinfo.name, fileinfo.name))) {
-					/* The name ends in .ibd or .isl;
-					try opening the file */
-					char*	filename;
-					size_t	dirlen		= strlen(dbinfo.name);
-					size_t	namelen		= strlen(fileinfo.name);
-					ulint	pathlen		= dirlen + namelen + 2;
-					lsn_t	flush_lsn;
-					fil_space_t	*space;
-
-					filename = static_cast<char*>(ut_malloc_nokey(pathlen));
-
-					ut_snprintf(filename, pathlen, "%s/%s",
-							dbinfo.name, fileinfo.name);
-
-					Datafile file;
-
-					file.set_filepath(filename);
-
-					filename[pathlen - 5] = 0;
-
-					ut_a(file.validate_first_page(&flush_lsn) == DB_SUCCESS);
-
-					bool is_temp = FSP_FLAGS_GET_TEMPORARY(file.flags());
-					space = fil_space_create(
-						filename, file.space_id(), file.flags(),
-						is_temp ? FIL_TYPE_TEMPORARY : FIL_TYPE_TABLESPACE);
-
-					ut_a(space != NULL);
-
-					filename[pathlen - 5] = '.';
-
-					if (!fil_node_create(filename, 0, space, false)) {
-						ut_error;
-					}
-
-					fil_space_open(space->name);
-
-					ut_free(filename);
+					|| (srv_backup_mode && is_remote))
+				    && (!pred
+					|| pred(dbinfo.name, fileinfo.name))) {
+					xb_load_single_table_tablespace(
+						dbinfo.name, fileinfo.name,
+						is_remote);
 				}
 next_file_item:
 				ret = fil_file_readdir_next_file(&err,
