@@ -235,7 +235,7 @@ xb_fil_cur_open(
 	} else {
 		page_size_shift = UNIV_PAGE_SIZE_SHIFT;
 	}
-	cursor->page_size = page_size.logical();
+	cursor->page_size = page_size.physical();
 	cursor->page_size_shift = page_size_shift;
 	cursor->zip_size = page_size.is_compressed() ? page_size.physical() : 0;
 

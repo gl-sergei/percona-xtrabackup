@@ -2230,7 +2230,7 @@ xb_get_zip_size(os_file_t file, bool *success)
 	buf = static_cast<byte *>(ut_malloc_nokey(2 * UNIV_PAGE_SIZE_MAX));
 	page = static_cast<byte *>(ut_align(buf, UNIV_PAGE_SIZE_MAX));
 
-	ret = os_file_read(file, page, 0, UNIV_PAGE_SIZE_MAX);
+	ret = os_file_read(file, page, 0, UNIV_PAGE_SIZE_MIN);
 	if (!ret) {
 		*success = false;
 		goto end;
