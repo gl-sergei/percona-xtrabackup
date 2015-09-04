@@ -1579,7 +1579,9 @@ copy_back()
 	     end(srv_sys_space.files_end());
 	     iter != end;
 	     ++iter) {
-		if (!(ret = copy_or_move_file(iter->name(), iter->name(), 1))) {
+		const char *filename = base_name(iter->name());
+
+		if (!(ret = copy_or_move_file(filename, iter->name(), 1))) {
 			goto cleanup;
 		}
 	}

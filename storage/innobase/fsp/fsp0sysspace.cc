@@ -219,9 +219,10 @@ SysTablespace::parse_params(
 		if (filenames_only) {
 			char*	p;
 
-			if ((p = strrchr(filepath,
-					 OS_PATH_SEPARATOR)) != NULL) {
-				filepath = p;
+			for (p = str; *p && *p != ';'; p++) {
+				if (*p == OS_PATH_SEPARATOR) {
+					str = filepath = p + 1;
+				}
 			}
 		}
 

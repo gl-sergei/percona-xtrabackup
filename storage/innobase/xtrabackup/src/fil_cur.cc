@@ -299,7 +299,7 @@ xb_fil_cur_read(
 	xb_a(to_read > 0 && to_read <= 0xFFFFFFFFLL);
 
 	if (to_read % cursor->page_size != 0 &&
-	    offset + to_read == cursor->statinfo.st_size) {
+	    offset + to_read == (ib_uint64_t) cursor->statinfo.st_size) {
 
 		if (to_read < (ib_uint64_t) cursor->page_size) {
 			msg("[%02u] xtrabackup: Warning: junk at the end of "

@@ -60,7 +60,7 @@ Created 9/20/1997 Heikki Tuuri
 /** This is set to FALSE if the backup was originally taken with the
 mysqlbackup --include regexp option: then we do not want to create tables in
 directories which were not included */
-UNIV_INTERN ibool	recv_replay_file_ops	= TRUE;
+bool	recv_replay_file_ops	= true;
 #include "fsp0sysspace.h"
 #include "ut0new.h"
 #ifndef UNIV_HOTBACKUP
@@ -380,7 +380,7 @@ fil_name_parse(
 		}
 		fil_name_process(
 			reinterpret_cast<char*>(ptr), len, space_id, true);
-#ifdef UNIV_HOTBACKUP
+#if 1
 		if (apply && recv_replay_file_ops
 		    && fil_space_get(space_id)) {
 			dberr_t	err = fil_delete_tablespace(
@@ -1533,6 +1533,8 @@ recv_parse_or_apply_log_rec_body(
 	case MLOG_FILE_DELETE:
 	case MLOG_FILE_CREATE:
 	case MLOG_FILE_CREATE2:
+		/* Do not rerun file-based log entries if this is
+		IO completion from a page read. */
 		if (page == NULL) {
 			ptr = fil_op_log_parse_or_replay(ptr, end_ptr,
 					type, 0, 0);
@@ -2661,10 +2663,39 @@ loop:
 			break;
 		case MLOG_FILE_NAME:
 		case MLOG_FILE_RENAME2:
-		case MLOG_FILE_DELETE:
 			/* These were already handled by
 			recv_parse_log_rec() and
 			recv_parse_or_apply_log_rec_body(). */
+			break;
+		case MLOG_FILE_DELETE:
+		case MLOG_FILE_CREATE:
+		case MLOG_FILE_CREATE2:
+			ut_a(space);
+
+			if (recv_replay_file_ops) {
+
+				/* In mysqlbackup --apply-log, replay an .ibd
+				file operation, if possible; note that
+				fil_path_to_mysql_datadir is set in mysqlbackup
+				to point to the datadir we should use there */
+
+				if (NULL == fil_op_log_parse_or_replay(
+					    body, end_ptr, type,
+					    space, page_no)) {
+					fprintf(stderr,
+						"InnoDB: Error: file op"
+						" log record of type %lu"
+						" space %lu not complete in\n"
+						"InnoDB: the replay phase."
+						" Path %s\n",
+						(ulint) type, space,
+						(char*)(body + 2));
+
+					ut_error;
+				}
+			}
+			/* In normal mysqld crash recovery we do not try to
+			replay file operations */
 			break;
 #ifdef UNIV_LOG_LSN_DEBUG
 		case MLOG_LSN:
@@ -3273,6 +3304,10 @@ recv_init_missing_space(dberr_t err, const recv_spaces_t::const_iterator& i)
 	return(err);
 }
 
+UNIV_INTERN
+dberr_t
+xb_load_single_table_tablespaces(bool (*pred)(const char*, const char*));
+
 /** Check if all tablespaces were found for crash recovery.
 @return error code or DB_SUCCESS */
 static __attribute__((warn_unused_result))
@@ -3492,6 +3527,8 @@ recv_recovery_from_checkpoint_start(
 			log_hdr_log_block_size);
 		return(DB_ERROR);
 	}
+
+	xb_load_single_table_tablespaces(NULL);
 
 	/* Start reading the log groups from the checkpoint lsn up. The
 	variable contiguous_lsn contains an lsn up to which the log is

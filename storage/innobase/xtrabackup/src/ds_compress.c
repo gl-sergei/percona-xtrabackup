@@ -313,7 +313,7 @@ static inline
 int
 write_uint32_le(ds_file_t *file, ulong n)
 {
-	char tmp[4];
+	uchar tmp[4];
 
 	int4store(tmp, n);
 	return ds_write(file, tmp, sizeof(tmp));
@@ -323,7 +323,7 @@ static inline
 int
 write_uint64_le(ds_file_t *file, ulonglong n)
 {
-	char tmp[8];
+	uchar tmp[8];
 
 	int8store(tmp, n);
 	return ds_write(file, tmp, sizeof(tmp));

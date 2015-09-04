@@ -196,7 +196,7 @@ or "./database/name.ibd" (InnoDB 5.5-) should be skipped from backup based on
 the --tables or --tables-file options.
 
 @return TRUE if the table should be skipped. */
-my_bool
+bool
 check_if_skip_table(
 /******************/
 	const char*	name);	/*!< in: path to the table */

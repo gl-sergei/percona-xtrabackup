@@ -2135,7 +2135,7 @@ or "./database/name.ibd" (InnoDB 5.5-) should be skipped from backup based on
 the --tables or --tables-file options.
 
 @return TRUE if the table should be skipped. */
-my_bool
+bool
 check_if_skip_table(
 /******************/
 	const char*	name)	/*!< in: path to the table */
@@ -2148,7 +2148,7 @@ check_if_skip_table(
 	if (UT_LIST_GET_LEN(regex_list) == 0 &&
 	    tables_hash == NULL &&
 	    databases_hash == NULL) {
-		return(FALSE);
+		return(false);
 	}
 
 	dbname = NULL;
@@ -2159,7 +2159,7 @@ check_if_skip_table(
 	}
 
 	if (dbname == NULL) {
-		return(FALSE);
+		return(false);
 	}
 
 	strncpy(buf, dbname, FN_REFLEN);
@@ -2175,12 +2175,12 @@ check_if_skip_table(
 			    !strcmp(database->name, buf));
 		/* Table's database isn't found, skip the table */
 		if (!database) {
-			return(TRUE);
+			return(true);
 		}
 		/* There aren't tables specified for the database,
 		it should be backed up entirely */
 		if (!database->has_tables) {
-			return(FALSE);
+			return(false);
 		}
 	}
 
@@ -2200,7 +2200,7 @@ check_if_skip_table(
 	partitions with regexps like '^test[.]t#P#p5' */
 	if (check_if_table_matches_filters(buf)) {
 
-		return(FALSE);
+		return(false);
 	}
 	if ((eptr = strstr(buf, "#P#")) != NULL) {
 
@@ -2208,11 +2208,11 @@ check_if_skip_table(
 
 		if (check_if_table_matches_filters(buf)) {
 
-			return(FALSE);
+			return(false);
 		}
 	}
 
-	return(TRUE);
+	return(true);
 }
 
 /***********************************************************************
@@ -2914,7 +2914,7 @@ static void xtrabackup_destroy_datasinks(void)
 /************************************************************************
 @return TRUE if table should be opened. */
 static
-ibool
+bool
 xb_check_if_open_tablespace(
 	const char*	db,
 	const char*	table)
@@ -2984,20 +2984,24 @@ xb_load_single_table_tablespace(
 	Datafile *file = xb_new_datafile(name, is_remote);
 
 	ut_a(file->open_read_only(true) == DB_SUCCESS);
-	ut_a(file->validate_first_page(&flush_lsn) == DB_SUCCESS);
 
-	bool is_temp = FSP_FLAGS_GET_TEMPORARY(file->flags());
-	space = fil_space_create(
-		name, file->space_id(), file->flags(),
-		is_temp ? FIL_TYPE_TEMPORARY : FIL_TYPE_TABLESPACE);
+	if (file->validate_first_page(&flush_lsn) == DB_SUCCESS) {
 
-	ut_a(space != NULL);
+		bool is_temp = FSP_FLAGS_GET_TEMPORARY(file->flags());
+		space = fil_space_create(
+			name, file->space_id(), file->flags(),
+			is_temp ? FIL_TYPE_TEMPORARY : FIL_TYPE_TABLESPACE);
 
-	if (!fil_node_create(file->filepath(), 0, space, false)) {
-		ut_error;
+		ut_a(space != NULL);
+
+		if (!fil_node_create(file->filepath(), 0, space, false)) {
+			ut_error;
+		}
+
+		if (srv_backup_mode && !srv_close_files) {
+			fil_space_open(space->name);
+		}
 	}
-
-	fil_space_open(space->name);
 
 	ut_free(name);
 
@@ -3014,7 +3018,7 @@ space id is != 0.
 @return	DB_SUCCESS or error number */
 UNIV_INTERN
 dberr_t
-xb_load_single_table_tablespaces(ibool (*pred)(const char*, const char*))
+xb_load_single_table_tablespaces(bool (*pred)(const char*, const char*))
 /*===================================*/
 {
 	int		ret;
@@ -5236,21 +5240,32 @@ xb_delta_open_matching_space(
 			goto found;
 		} else {
 
-			char	tmpname[FN_REFLEN];
+			char		tmpname[FN_REFLEN];
+			char		*oldpath;
+			bool		exists;
+			os_file_type_t	type;
 
 			snprintf(tmpname, FN_REFLEN, "%s/xtrabackup_tmp_#%lu",
 				 dbname, fil_space->id);
 
+			oldpath = mem_strdup(
+				UT_LIST_GET_FIRST(fil_space->chain)->name);
+
 			msg("xtrabackup: Renaming %s to %s.ibd\n",
 				fil_space->name, tmpname);
 
-			if (!fil_rename_tablespace(fil_space->id, NULL,
-						   tmpname, NULL))
+
+			ut_ad(os_file_status(oldpath, &exists, &type));
+
+			if (exists && !fil_rename_tablespace(fil_space->id,
+						   oldpath, tmpname, NULL))
 			{
 				msg("xtrabackup: Cannot rename %s to %s\n",
 					fil_space->name, tmpname);
+				ut_free(oldpath);
 				goto exit;
 			}
+			ut_free(oldpath);
 		}
 	}
 
@@ -5264,20 +5279,29 @@ xb_delta_open_matching_space(
 	fil_space = fil_space_get_by_id(space_id);
 	mutex_exit(&fil_system->mutex);
 	if (fil_space != NULL) {
-		char	tmpname[FN_REFLEN];
+		char		tmpname[FN_REFLEN];
+		char		*oldpath;
+		bool		exists;
+		os_file_type_t	type;
 
 		strncpy(tmpname, dest_space_name, FN_REFLEN);
+
+		oldpath = mem_strdup(UT_LIST_GET_FIRST(fil_space->chain)->name);
 
 		msg("xtrabackup: Renaming %s to %s\n",
 		    fil_space->name, dest_space_name);
 
-		if (!fil_rename_tablespace(fil_space->id, NULL, tmpname,
-					   NULL))
+		ut_ad(os_file_status(oldpath, &exists, &type));
+
+		if (exists && !fil_rename_tablespace(fil_space->id, oldpath,
+					   tmpname, NULL))
 		{
 			msg("xtrabackup: Cannot rename %s to %s\n",
 				fil_space->name, dest_space_name);
+			ut_free(oldpath);
 			goto exit;
 		}
+		ut_free(oldpath);
 
 		goto found;
 	}
@@ -6130,6 +6154,7 @@ xb_export_cfg_write(
 
 }
 
+#if 0
 /********************************************************************//**
 Searches archived log files in archived log directory. The min and max
 LSN's of found files as well as archived log file size are stored in
@@ -6197,6 +6222,7 @@ xtrabackup_arch_search_files(
 
 	return xtrabackup_arch_first_file_lsn != 0;
 }
+#endif
 
 static
 void
@@ -6955,7 +6981,8 @@ int main(int argc, char **argv)
 	}
 
 	/* Ensure target dir is not relative to datadir */
-	my_load_path(xtrabackup_real_target_dir, xtrabackup_target_dir, NULL);
+	fn_format(xtrabackup_real_target_dir, xtrabackup_target_dir,
+		  "", "", MY_UNPACK_FILENAME | MY_RETURN_REAL_PATH);
 	xtrabackup_target_dir= xtrabackup_real_target_dir;
 
 	/* temporary setting of enough size */

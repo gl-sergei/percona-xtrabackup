@@ -913,6 +913,7 @@ log_io_complete(
 		case SRV_UNIX_LITTLESYNC:
 		case SRV_UNIX_O_DIRECT:
 		case SRV_UNIX_O_DIRECT_NO_FSYNC:
+		case SRV_UNIX_ALL_O_DIRECT:
 			fil_flush(group->space_id);
 		}
 #endif /* _WIN32 */
@@ -1787,6 +1788,7 @@ log_checkpoint(
 	case SRV_UNIX_LITTLESYNC:
 	case SRV_UNIX_O_DIRECT:
 	case SRV_UNIX_O_DIRECT_NO_FSYNC:
+	case SRV_UNIX_ALL_O_DIRECT:
 		fil_flush_file_spaces(FIL_TYPE_TABLESPACE);
 	}
 #endif /* !_WIN32 */
