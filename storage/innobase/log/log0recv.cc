@@ -814,6 +814,10 @@ recv_find_max_checkpoint(
 						group->lsn_offset_alt;
 				}
 			}
+			fprintf(stderr, "recv_find_max_checkpoint: "
+				"group->lsn_offset= %llu, "
+				"group->lsn_offset_alt = %llu\n",
+				group->lsn_offset, group->lsn_offset_alt);
 			checkpoint_no = mach_read_from_8(
 				buf + LOG_CHECKPOINT_NO);
 

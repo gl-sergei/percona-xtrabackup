@@ -2125,6 +2125,10 @@ retry_read:
 			blocks_in_group = log_block_convert_lsn_to_no(
 				log_group_get_capacity(group)) - 1;
 
+			msg("scanned_lsn = %llu, no = %lu, scanned_no = %lu, "
+			    "blocks_in_group = %lu\n",
+			    scanned_lsn, no, scanned_no, blocks_in_group);
+
 			if (no < scanned_no ||
 			    /* Log block numbers wrap around at 0x3FFFFFFF */
 			    ((scanned_no | 0x40000000UL) - no) %
@@ -2132,6 +2136,8 @@ retry_read:
 
 				/* old log block, do nothing */
 				finished = TRUE;
+
+				msg("old block, do nothing\n");
 
 				break;
 			}
@@ -2142,6 +2148,9 @@ retry_read:
 			    group->lsn_offset != group->lsn_offset_alt) {
 				group->lsn_offset = group->lsn_offset_alt;
 				group->alt_offset_chosen = TRUE;
+				msg("retry_read old offset %llu, "
+				    "new offset %llu",
+				    group->lsn_offset, group->lsn_offset_alt);
 				goto retry_read;
 			}
 
@@ -2206,6 +2215,17 @@ retry_read:
 			/* Garbage from a log buffer flush which was made
 			before the most recent database recovery */
 
+			msg("Garbage from a log buffer flush which was made "
+			    "before the most recent database recovery\n");
+
+			msg("scanned_lsn = %llu, no = %lu, scanned_no = %lu, "
+			    "scanned_checkpoint_no = %lu, "
+			    "log_block_get_checkpoint_no(log_block) = %lu\n",
+			    scanned_lsn,
+			    no, scanned_no, scanned_checkpoint_no,
+			    log_block_get_checkpoint_no(log_block));
+
+
 			finished = TRUE;
 			break;
 		}
@@ -2215,6 +2235,11 @@ retry_read:
 
 		if (data_len < OS_FILE_LOG_BLOCK_SIZE) {
 			/* Log data for this group ends here */
+
+			msg("Log data for this group ends here\n");
+			msg("scanned_lsn = %llu, scanned_checkpoint_no = %lu, "
+			    "data_len = %lu\n", scanned_lsn,
+			    scanned_checkpoint_no, data_len);
 
 			finished = TRUE;
 		} else {
@@ -2264,6 +2289,8 @@ retry_read:
 
 		msg(">> log scanned up to (" LSN_PF ")\n",
 		    group->scanned_lsn);
+
+		msg("alt_offset_chosen = %lu\n", group->alt_offset_chosen);
 
 		group = UT_LIST_GET_NEXT(log_groups, group);
 
