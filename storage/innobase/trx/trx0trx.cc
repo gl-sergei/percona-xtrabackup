@@ -1001,7 +1001,8 @@ trx_lists_init_at_db_start(void)
 
 	for (ulint i = 0; i < TRX_SYS_N_RSEGS; ++i) {
 		trx_undo_t*	undo;
-		trx_rseg_t*	rseg = trx_sys->rseg_array[i];
+		// trx_rseg_t*	rseg = trx_sys->rseg_array[i];
+		trx_rseg_t*	rseg = trx_rseg_get_on_id(i, true);
 
 		/* At this stage non-redo rseg slots are all NULL as they are
 		re-created on server start and existing slots are not read. */

@@ -2432,14 +2432,14 @@ fil_op_log_parse_or_replay(
 
 			mutex_enter(&fil_system->mutex);
 			space = fil_space_get_by_id(space_id);
-			ut_ad(space);
-			ut_ad(UT_LIST_GET_LEN(space->chain) == 1);
+			ut_a(space);
+			ut_a(UT_LIST_GET_LEN(space->chain) == 1);
 			node = UT_LIST_GET_FIRST(space->chain);
-			ut_ad(node);
+			ut_a(node);
 			node_name = mem_strdup(node->name);
 			mutex_exit(&fil_system->mutex);
 
-			ut_ad(os_file_status(node_name, &exists, &type));
+			ut_a(os_file_status(node_name, &exists, &type));
 
 			if (exists && !fil_rename_tablespace(
 					space_id, node_name,

@@ -409,6 +409,8 @@ function get_version_info()
             ;;
         5.6 | 10.0 | 10.1)
             ;;
+        5.7 )
+            ;;
         *)
             vlog "Unknown MySQL/InnoDB version: $MYSQL_VERSION/$INNODB_VERSION"
             exit -1

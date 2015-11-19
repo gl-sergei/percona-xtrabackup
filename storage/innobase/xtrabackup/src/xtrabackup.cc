@@ -2987,14 +2987,21 @@ xb_load_single_table_tablespace(
 
 	if (file->validate_first_page(&flush_lsn) == DB_SUCCESS) {
 
-		bool is_temp = FSP_FLAGS_GET_TEMPORARY(file->flags());
+		os_offset_t	node_size = os_file_get_size(file->handle());
+		bool		is_tmp = FSP_FLAGS_GET_TEMPORARY(file->flags());
+		os_offset_t	n_pages;
+
+		ut_a(node_size != (os_offset_t) -1);
+
+		n_pages = node_size / page_size_t(file->flags()).physical();
+
 		space = fil_space_create(
 			name, file->space_id(), file->flags(),
-			is_temp ? FIL_TYPE_TEMPORARY : FIL_TYPE_TABLESPACE);
+			is_tmp ? FIL_TYPE_TEMPORARY : FIL_TYPE_TABLESPACE);
 
 		ut_a(space != NULL);
 
-		if (!fil_node_create(file->filepath(), 0, space, false)) {
+		if (!fil_node_create(file->filepath(), n_pages, space, false)) {
 			ut_error;
 		}
 
@@ -4347,7 +4354,7 @@ loop:
 					for (;;) {
 						mtr_start(&local_mtr);
 
-						local_block = btr_block_get(page_id_t(space_id, dict_index_get_page(index)), page_size, RW_S_LATCH, index, &local_mtr);
+						local_block = btr_block_get(page_id_t(space_id, page_no), page_size, RW_S_LATCH, index, &local_mtr);
 						local_page = buf_block_get_frame(local_block);
 						blob_header = local_page + offset;
 #define BTR_BLOB_HDR_PART_LEN		0
@@ -5216,7 +5223,8 @@ xb_delta_open_matching_space(
 		return file;
 	}
 
-	if (!fil_is_user_tablespace_id(space_id)) {
+	if (space_id != ULINT_UNDEFINED
+	    && !fil_is_user_tablespace_id(space_id)) {
 		goto found;
 	}
 
@@ -5255,7 +5263,7 @@ xb_delta_open_matching_space(
 				fil_space->name, tmpname);
 
 
-			ut_ad(os_file_status(oldpath, &exists, &type));
+			ut_a(os_file_status(oldpath, &exists, &type));
 
 			if (exists && !fil_rename_tablespace(fil_space->id,
 						   oldpath, tmpname, NULL))
@@ -5291,7 +5299,7 @@ xb_delta_open_matching_space(
 		msg("xtrabackup: Renaming %s to %s\n",
 		    fil_space->name, dest_space_name);
 
-		ut_ad(os_file_status(oldpath, &exists, &type));
+		ut_a(os_file_status(oldpath, &exists, &type));
 
 		if (exists && !fil_rename_tablespace(fil_space->id, oldpath,
 					   tmpname, NULL))

@@ -41,9 +41,20 @@ function call_mysql_install_db()
 
         cd $MYSQL_BASEDIR
 
-        if ! $MYSQL_INSTALL_DB --defaults-file=${MYSQLD_VARDIR}/my.cnf \
+        CLIENT_VERSION_STRING=`${MYSQL} --version`
+
+        if [[ ${CLIENT_VERSION_STRING} == *"5.7."* ]] ; then
+            INSTALL_CMD="${MYSQLD} \
+            --defaults-file=${MYSQLD_VARDIR}/my.cnf \
             --basedir=${MYSQL_BASEDIR} \
-            ${MYSQLD_EXTRA_ARGS}
+            --initialize-insecure"
+        else
+            INSTALL_CMD="${MYSQL_INSTALL_DB}
+            --defaults-file=${MYSQLD_VARDIR}/my.cnf \
+            --basedir=${MYSQL_BASEDIR}"
+        fi
+
+        if ! ${INSTALL_CMD} ${MYSQLD_EXTRA_ARGS}
         then
             vlog "mysql_install_db failed. Server log (if exists):"
             vlog "----------------"
@@ -305,6 +316,7 @@ pid-file=${MYSQLD_PIDFILE}
 replicate-ignore-db=mysql
 innodb_log_file_size=48M
 ${MYSQLD_EXTRA_MY_CNF_OPTS:-}
+core-file
 
 [client]
 socket=${MYSQLD_SOCKET}

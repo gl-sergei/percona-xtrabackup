@@ -2087,7 +2087,7 @@ loop:
 				= fil_space_get_page_size(recv_addr->space,
 							  &found);
 
-			ut_ad(found);
+			// ut_ad(found);
 
 			/* By now we have replayed all DDL log records from the
 			current batch. Check if the space ID is still valid in

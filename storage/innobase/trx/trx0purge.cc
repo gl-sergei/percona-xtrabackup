@@ -519,7 +519,8 @@ trx_purge_truncate_rseg_history(
 	mtr_t		mtr;
 	trx_id_t	undo_trx_no;
 	const bool	noredo		= trx_sys_is_noredo_rseg_slot(
-		rseg->id);
+		rseg->id) &&
+		(trx_sys->pending_purge_rseg_array[rseg->id] != rseg);
 
 	mtr_start(&mtr);
 	if (noredo) {

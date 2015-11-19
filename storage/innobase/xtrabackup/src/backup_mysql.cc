@@ -256,6 +256,7 @@ check_server_version(const char *version, const char *innodb_version)
 	       && innodb_version != NULL)
 	      || (fnmatch("5.5.*", version, FNM_PATHNAME) == 0)
 	      || (fnmatch("5.6.*", version, FNM_PATHNAME) == 0)
+	      || (fnmatch("5.7.*", version, FNM_PATHNAME) == 0)
 	      || (fnmatch("10.[01].*", version, FNM_PATHNAME) == 0))) {
 		if (fnmatch("5.1.*", version, FNM_PATHNAME) == 0
 		    && innodb_version == NULL) {

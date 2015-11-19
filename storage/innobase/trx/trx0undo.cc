@@ -1099,7 +1099,8 @@ trx_undo_truncate_end_func(
 	trx_undo_rec_t* rec;
 	trx_undo_rec_t* trunc_here;
 	mtr_t		mtr;
-	const bool	noredo = trx_sys_is_noredo_rseg_slot(undo->rseg->id);
+	const bool	noredo = trx_sys_is_noredo_rseg_slot(undo->rseg->id) &&
+				 trx_sys->pending_purge_rseg_array[undo->rseg->id] != undo->rseg;
 
 	ut_ad(mutex_own(&(trx->undo_mutex)));
 
@@ -1188,7 +1189,8 @@ trx_undo_truncate_start(
 loop:
 	mtr_start(&mtr);
 
-	if (trx_sys_is_noredo_rseg_slot(rseg->id)) {
+	if (trx_sys_is_noredo_rseg_slot(rseg->id) &&
+	    trx_sys->pending_purge_rseg_array[rseg->id] != rseg) {
 		mtr.set_log_mode(MTR_LOG_NO_REDO);
 	}
 
@@ -1989,7 +1991,7 @@ trx_undo_insert_cleanup(
 
 	rseg = undo_ptr->rseg;
 
-	ut_ad(noredo == trx_sys_is_noredo_rseg_slot(rseg->id));
+	// ut_ad(noredo == trx_sys_is_noredo_rseg_slot(rseg->id));
 
 	mutex_enter(&(rseg->mutex));
 
