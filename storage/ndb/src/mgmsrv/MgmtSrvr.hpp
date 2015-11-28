@@ -1,5 +1,5 @@
 /*
-   Copyright (c) 2003, 2013, Oracle and/or its affiliates. All rights reserved.
+   Copyright (c) 2003, 2015, Oracle and/or its affiliates. All rights reserved.
 
    This program is free software; you can redistribute it and/or modify
    it under the terms of the GNU General Public License as published by
@@ -150,7 +150,9 @@ public:
 	     Uint32 * dynamicId,
 	     Uint32 * nodeGroup,
 	     Uint32 * connectCount,
-	     const char **address);
+	     const char **address,
+             char *addr_buf,
+             size_t addr_buf_size);
 
   /**
    *   Stop a list of nodes
@@ -177,11 +179,11 @@ public:
   int exitSingleUser(int * cnt = 0, bool abort = false);
 
   /**
-   *   Start DB process.
+   *   Start DB process by sending START_ORD to it.
    *   @param   processId: Id of the DB process to start
    *   @return 0 if succeeded, otherwise: as stated above, plus:
    */
- int start(int processId);
+ int sendSTART_ORD(int processId);
 
   /**
    *   Restart a list of nodes
@@ -189,14 +191,16 @@ public:
   int restartNodes(const Vector<NodeId> &node_ids,
                    int *stopCount, bool nostart,
                    bool initialStart, bool abort, bool force,
-                   int *stopSelf);
+                   int *stopSelf,
+                   unsigned int num_secs_to_wait_for_node = 120);
 
   /**
    *   Restart all DB nodes
    */
   int restartDB(bool nostart, bool initialStart, 
                 bool abort = false,
-                int * stopCount = 0);
+                int * stopCount = 0,
+                unsigned int num_secs_to_wait_for_node = 120);
   
   /**
    * Backup functionallity
@@ -326,7 +330,9 @@ public:
   int getConnectionDbParameter(int node1, int node2, int param,
 			       int *value, BaseString& msg);
 
-  bool transporter_connect(NDB_SOCKET_TYPE sockfd, BaseString& errormsg);
+  bool transporter_connect(NDB_SOCKET_TYPE sockfd,
+                           BaseString& errormsg,
+                           bool& close_with_reset);
 
   SocketServer *get_socket_server() { return &m_socket_server; }
 
@@ -344,14 +350,22 @@ private:
   void status_api(int nodeId,
                   ndb_mgm_node_status& node_status,
                   Uint32& version, Uint32& mysql_version,
-                  const char **address);
+                  const char **address,
+                  char *addr_buf,
+                  size_t addr_buf_size);
   void status_mgmd(NodeId node_id,
                    ndb_mgm_node_status& node_status,
                    Uint32& version, Uint32& mysql_version,
-                   const char **address);
+                   const char **address,
+                   char *addr_buf,
+                   size_t addr_buf_size);
 
-  int sendVersionReq(int processId, Uint32 &version,
-                     Uint32& mysql_version, const char **address);
+  int sendVersionReq(int processId,
+                     Uint32 &version,
+                     Uint32& mysql_version,
+                     const char **address,
+                     char *addr_buf,
+                     size_t addr_buf_size);
 
   int sendStopMgmd(NodeId nodeId,
                    bool abort,
@@ -406,7 +420,9 @@ private:
   bool m_need_restart;
 
   struct in_addr m_connect_address[MAX_NODES];
-  const char *get_connect_address(NodeId node_id);
+  const char *get_connect_address(NodeId node_id,
+                                  char *addr_buf,
+                                  size_t addr_buf_size);
   void clear_connect_address_cache(NodeId nodeid);
 
   /**

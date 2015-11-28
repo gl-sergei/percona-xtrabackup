@@ -98,6 +98,12 @@ using std::max;
   case SESSION_TRACK_GTIDS:                                                    \
     dynstr_append(ds, "Tracker : SESSION_TRACK_GTIDS\n");                      \
     break;                                                                     \
+  case SESSION_TRACK_TRANSACTION_CHARACTERISTICS:                              \
+    dynstr_append(ds, "Tracker : SESSION_TRACK_TRANSACTION_CHARACTERISTICS\n");\
+    break;                                                                     \
+  case SESSION_TRACK_TRANSACTION_STATE:                                        \
+    dynstr_append(ds, "Tracker : SESSION_TRACK_TRANSACTION_STATE\n");          \
+    break;                                                                     \
   default:                                                                     \
     dynstr_append(ds, "\n");                                                   \
   }                                                                            \
@@ -553,6 +559,7 @@ TYPELIB command_typelib= {array_elements(command_names),"",
 			  command_names, 0};
 
 DYNAMIC_STRING ds_res;
+DYNAMIC_STRING ds_result;
 /* Points to ds_warning in run_query, so it can be freed */
 DYNAMIC_STRING *ds_warn= 0;
 struct st_command *curr_command= 0;
@@ -1306,7 +1313,7 @@ void handle_command_error(struct st_command *command, uint error)
     if (command->abort_on_error)
       die("command \"%.*s\" failed with error %d. my_errno=%d",
           static_cast<int>(command->first_word_len),
-          command->query, error, my_errno);
+          command->query, error, my_errno());
 
     i= match_expected_error(command, error, NULL);
 
@@ -1320,7 +1327,7 @@ void handle_command_error(struct st_command *command, uint error)
     if (command->expected_errors.count > 0)
       die("command \"%.*s\" failed with wrong error: %d. my_errno=%d",
           static_cast<int>(command->first_word_len),
-          command->query, error, my_errno);
+          command->query, error, my_errno());
   }
   else if (command->expected_errors.err[0].type == ERR_ERRNO &&
            command->expected_errors.err[0].code.errnum != 0)
@@ -1424,6 +1431,7 @@ void free_used_memory()
     my_free(embedded_server_args[--embedded_server_arg_count]);
   delete q_lines;
   dynstr_free(&ds_res);
+  dynstr_free(&ds_result);
   if (ds_warn)
     dynstr_free(ds_warn);
   free_all_replace();
@@ -2788,6 +2796,7 @@ void var_set_query_get_value(struct st_command *command, VAR *var)
                   mysql_sqlstate(mysql), &ds_res);
     /* If error was acceptable, return empty string */
     dynstr_free(&ds_query);
+    dynstr_free(&ds_col);
     eval_expr(var, "", 0);
     DBUG_VOID_RETURN;
   }
@@ -5090,7 +5099,7 @@ void do_shutdown_server(struct st_command *command)
     }
 
     /* Tell server to shutdown if timeout > 0. */
-    if (timeout > 0 && mysql_shutdown(mysql, SHUTDOWN_DEFAULT))
+    if (timeout > 0 && mysql_query(mysql, "shutdown"))
     {
       error= 1;   /* Failed to issue shutdown command. */
       goto end;
@@ -5214,7 +5223,7 @@ void do_get_errcodes(struct st_command *command)
     /* code to handle variables passed to mysqltest */
      if( *p == '$')
      {
-        const char* fin;
+        const char* fin= NULL;
         VAR *var = var_get(p,&fin,0,0);
         p=var->str_val;
         end=p+var->str_val_len;
@@ -5399,11 +5408,7 @@ void set_reconnect(MYSQL* mysql, int val)
   my_bool reconnect= val;
   DBUG_ENTER("set_reconnect");
   DBUG_PRINT("info", ("val: %d", val));
-#if MYSQL_VERSION_ID < 50000
-  mysql->reconnect= reconnect;
-#else
   mysql_options(mysql, MYSQL_OPT_RECONNECT, (char *)&reconnect);
-#endif
   DBUG_VOID_RETURN;
 }
 
@@ -5494,6 +5499,7 @@ void do_close_connection(struct st_command *command)
     {
       vio_delete(con->mysql.net.vio);
       con->mysql.net.vio = 0;
+      end_server(&con->mysql);
     }
   }
 #else
@@ -5778,6 +5784,7 @@ void do_connect(struct st_command *command)
   struct st_connection* con_slot;
 #if defined(HAVE_OPENSSL) && !defined(EMBEDDED_LIBRARY)
   my_bool save_opt_use_ssl= opt_use_ssl;
+  my_bool save_opt_ssl_enforce= opt_ssl_enforce;
 #endif
 
   static DYNAMIC_STRING ds_connection_name;
@@ -5918,6 +5925,7 @@ void do_connect(struct st_command *command)
   {
     /* Turn on ssl_verify_server_cert only if host is "localhost" */
     opt_ssl_verify_server_cert= !strcmp(ds_host.str, "localhost");
+    opt_ssl_enforce= 1;
   }
 #else
   /* keep the compiler happy about con_ssl */
@@ -5925,7 +5933,10 @@ void do_connect(struct st_command *command)
 #endif
   SSL_SET_OPTIONS(&con_slot->mysql);
 #if defined(HAVE_OPENSSL) && !defined(EMBEDDED_LIBRARY)
+  /* Setting default as not ssl for mysqltest because of performance implications.*/
+  mysql_options(&con_slot->mysql, MYSQL_OPT_SSL_ENFORCE, &con_ssl);
   opt_use_ssl= save_opt_use_ssl;
+  opt_ssl_enforce= save_opt_ssl_enforce;
 #endif
 
   if (con_pipe)
@@ -5990,6 +6001,7 @@ void do_connect(struct st_command *command)
   {
     DBUG_PRINT("info", ("Inserting connection %s in connection pool",
                         ds_connection_name.str));
+    my_free(con_slot->name);
     if (!(con_slot->name= my_strdup(PSI_NOT_INSTRUMENTED,
                                     ds_connection_name.str, MYF(MY_WME))))
       die("Out of memory");
@@ -7283,7 +7295,9 @@ void init_win_path_patterns()
                           "$MYSQL_LIBDIR",
                           "./test/",
                           ".ibd",
-                          "ibdata"};
+                          "ibdata",
+                          "ibtmp",
+                          "undo"};
   int num_paths= sizeof(paths)/sizeof(char*);
   int i;
   char* p;
@@ -8065,8 +8079,8 @@ void run_query_stmt(MYSQL *mysql, struct st_command *command,
 {
   MYSQL_RES *res= NULL;     /* Note that here 'res' is meta data result set */
   MYSQL_STMT *stmt;
-  DYNAMIC_STRING ds_prepare_warnings;
-  DYNAMIC_STRING ds_execute_warnings;
+  DYNAMIC_STRING ds_prepare_warnings= DYNAMIC_STRING();
+  DYNAMIC_STRING ds_execute_warnings= DYNAMIC_STRING();
   DBUG_ENTER("run_query_stmt");
   DBUG_PRINT("query", ("'%-.60s'", query));
 
@@ -8109,7 +8123,6 @@ void run_query_stmt(MYSQL *mysql, struct st_command *command,
     parameter markers.
   */
 
-#if MYSQL_VERSION_ID >= 50000
   if (cursor_protocol_enabled)
   {
     /*
@@ -8120,7 +8133,6 @@ void run_query_stmt(MYSQL *mysql, struct st_command *command,
       die("mysql_stmt_attr_set(STMT_ATTR_CURSOR_TYPE) failed': %d %s",
           mysql_stmt_errno(stmt), mysql_stmt_error(stmt));
   }
-#endif
 
   /*
     Execute the query
@@ -8321,7 +8333,6 @@ void run_query(struct st_connection *cn, struct st_command *command, int flags)
   MYSQL *mysql= &cn->mysql;
   DYNAMIC_STRING *ds;
   DYNAMIC_STRING *save_ds= NULL;
-  DYNAMIC_STRING ds_result;
   DYNAMIC_STRING ds_sorted;
   DYNAMIC_STRING ds_warnings;
   DYNAMIC_STRING eval_query;
@@ -8331,6 +8342,7 @@ void run_query(struct st_connection *cn, struct st_command *command, int flags)
   my_bool complete_query= ((flags & QUERY_SEND_FLAG) &&
                            (flags & QUERY_REAP_FLAG));
   DBUG_ENTER("run_query");
+  dynstr_set(&ds_result, "");
 
   if (cn->pending && (flags & QUERY_SEND_FLAG))
     die ("Cannot run query on connection between send and reap");
@@ -8365,7 +8377,6 @@ void run_query(struct st_connection *cn, struct st_command *command, int flags)
   */
   if (command->require_file[0] || command->output_file[0])
   {
-    init_dynamic_string(&ds_result, "", 1024, 1024);
     ds= &ds_result;
   }
   else
@@ -8539,8 +8550,6 @@ void run_query(struct st_connection *cn, struct st_command *command, int flags)
     command->output_file[0]= 0;
   }
 
-  if (ds == &ds_result)
-    dynstr_free(&ds_result);
   DBUG_VOID_RETURN;
 }
 
@@ -8593,7 +8602,7 @@ void run_explain(struct st_connection *cn, struct st_command *command,
 
     init_dynamic_string(&ds_warning_messages, "", 0, 2048);
     init_dynamic_string(&query_str, json ? "EXPLAIN FORMAT=JSON "
-                                         : "EXPLAIN EXTENDED ", 256, 256);
+                                         : "EXPLAIN ", 256, 256);
     dynstr_append_mem(&query_str, command->query,
                       command->end - command->query);
     
@@ -8651,11 +8660,19 @@ void init_re(void)
     "[[:space:]]*DELETE[[:space:]]|"
     "[[:space:]]*SELECT[[:space:]]|"
     "[[:space:]]*CREATE[[:space:]]+TABLE[[:space:]]|"
+    "[[:space:]]*CREATE[[:space:]]+INDEX[[:space:]]|"
+    "[[:space:]]*DROP[[:space:]]+INDEX[[:space:]]|"
+    "[[:space:]]*RENAME[[:space:]]+TABLE[[:space:]]|"
+    "[[:space:]]*CREATE[[:space:]]+TEMPORARY[[:space:]]+TABLE[[:space:]]|"
+    "[[:space:]]*DROP[[:space:]]+TEMPORARY[[:space:]]+TABLE[[:space:]]|"
+    "[[:space:]]*DROP[[:space:]]+VIEW[[:space:]]|"
+    "[[:space:]]*REVOKE[[:space:]]+ALL[[:space:]]+PRIVILEGES[[:space:]]|"
+    "[[:space:]]*DROP[[:space:]]+USER[[:space:]]|"
     "[[:space:]]*DO[[:space:]]|"
     "[[:space:]]*SET[[:space:]]+OPTION[[:space:]]|"
     "[[:space:]]*DELETE[[:space:]]+MULTI[[:space:]]|"
     "[[:space:]]*UPDATE[[:space:]]+MULTI[[:space:]]|"
-    "[[:space:]]*INSERT[[:space:]]+SELECT[[:space:]])";
+    "[[:space:]]*INSERT[[:space:]]+SELECT[[:space:]])[^;]*$";
 
   /*
     Filter for queries that can be run using the
@@ -8989,7 +9006,8 @@ int main(int argc, char **argv)
   q_lines= new Q_lines(PSI_NOT_INSTRUMENTED);
 
   if (my_hash_init(&var_hash, charset_info,
-                   1024, 0, 0, get_var_key, var_free, MYF(0)))
+                   1024, 0, 0, get_var_key, var_free, MYF(0),
+                   PSI_NOT_INSTRUMENTED))
     die("Variable hash initialization failed");
 
   {
@@ -9017,6 +9035,7 @@ int main(int argc, char **argv)
 #endif
 
   init_dynamic_string(&ds_res, "", 2048, 2048);
+  init_dynamic_string(&ds_result, "", 1024, 1024);
 
   parse_args(argc, argv);
 
@@ -9470,8 +9489,8 @@ int main(int argc, char **argv)
         break;
       case Q_SEND_SHUTDOWN:
         handle_command_error(command,
-                             mysql_shutdown(&cur_con->mysql,
-                                            SHUTDOWN_DEFAULT));
+                             mysql_query(&cur_con->mysql,
+                                            "shutdown"));
         break;
       case Q_SHUTDOWN_SERVER:
         do_shutdown_server(command);

@@ -24,6 +24,7 @@
 #include "sql_lex.h"                 // LEX
 #include "sql_parse.h"               // add_join_natural
 #include "sql_update.h"              // Sql_cmd_update
+#include "sql_admin.h"               // Sql_cmd_shutdown etc.
 
 
 template<enum_parsing_context Context> class PTI_context;
@@ -487,7 +488,6 @@ public:
     if (select->validate_base_options(thd->lex, opt_query_spec_options))
       return true;
     select->set_base_options(opt_query_spec_options);
-    DBUG_ASSERT(!(opt_query_spec_options & SELECT_MAX_STATEMENT_TIME));
     if (opt_query_spec_options & SELECT_HIGH_PRIORITY)
     {
       Yacc_state *yyps= &thd->m_parser_state->m_yacc;
@@ -2207,6 +2207,20 @@ public:
     opt_into2(opt_into2_arg),
     opt_select_lock_type(opt_select_lock_type_arg)
   {}
+  explicit PT_select_part2(
+    PT_select_options_and_item_list *select_options_and_item_list_arg)
+  : select_options_and_item_list(select_options_and_item_list_arg),
+    opt_into1(NULL),
+    from_clause(NULL),
+    opt_where_clause(NULL),
+    opt_group_clause(NULL),
+    opt_having_clause(NULL),
+    opt_order_clause(NULL),
+    opt_limit_clause(NULL),
+    opt_procedure_analyse_clause(NULL),
+    opt_into2(NULL),
+    opt_select_lock_type()
+  {}
 
   virtual bool contextualize(Parse_context *pc)
   {
@@ -2353,10 +2367,12 @@ class PT_select : public Parse_tree_node
   typedef Parse_tree_node super;
 
   PT_select_init *select_init;
+  enum_sql_command sql_command;
 
 public:
-  explicit PT_select(PT_select_init *select_init_arg)
-  : select_init(select_init_arg)
+  explicit PT_select(PT_select_init *select_init_arg,
+                     enum_sql_command sql_command_arg)
+  : select_init(select_init_arg), sql_command(sql_command_arg)
   {}
 
   virtual bool contextualize(Parse_context *pc)
@@ -2364,7 +2380,7 @@ public:
     if (super::contextualize(pc))
       return true;
 
-    pc->thd->lex->sql_command= SQLCOM_SELECT;
+    pc->thd->lex->sql_command= sql_command;
 
     if (select_init->contextualize(pc))
       return true;
@@ -2608,6 +2624,15 @@ public:
 
 private:
   bool has_select() const { return insert_query_expression != NULL; }
+};
+
+
+class PT_shutdown : public PT_statement
+{
+  Sql_cmd_shutdown sql_cmd;
+
+public:
+  virtual Sql_cmd *make_cmd(THD *) { return &sql_cmd; }
 };
 
 #endif /* PARSE_TREE_NODES_INCLUDED */

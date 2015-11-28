@@ -1,5 +1,5 @@
 /*
-   Copyright (c) 2012, 2013, Oracle and/or its affiliates. All rights reserved.
+   Copyright (c) 2012, 2015, Oracle and/or its affiliates. All rights reserved.
 
    This program is free software; you can redistribute it and/or modify
    it under the terms of the GNU General Public License as published by
@@ -127,9 +127,15 @@ class NdbRecordScanResultDataImpl extends NdbRecordResultDataImpl {
                     if (++recordCounter > skip) {
                         // this record is past the skip
                         // if scanning with locks, grab the lock for the current transaction
-                        if (lockRecordsDuringScan) { 
-                            recordsLocked.add(scanOperation.lockCurrentTuple());
+                        if (lockRecordsDuringScan) {
+                            NdbOperationConst lockedRecord = scanOperation.lockCurrentTuple();
+                            if (lockedRecord != null) {
+                                recordsLocked.add(lockedRecord);
+                            }
                         }
+                        // check the NdbRecord buffer guard
+                        // load blob data into the operation
+                        scanOperation.loadBlobValues();
                         return true;
                     } else {
                         // skip this record
@@ -137,7 +143,7 @@ class NdbRecordScanResultDataImpl extends NdbRecordResultDataImpl {
                     }
                 case SCAN_FINISHED:
                     executeIfRecordsLocked();
-                    ndbScanOperation.close(true, true);
+                    scanOperation.close();
                     return false;
                 case CACHE_EMPTY:
                     executeIfRecordsLocked();

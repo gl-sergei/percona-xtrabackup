@@ -399,7 +399,7 @@ WARNING: --server-arg option not supported in this configuration.
 +---+
 SET @@global.sql_mode='';
 Warnings:
-Warning	3129	Unsetting sql mode 'NO_AUTO_CREATE_USER' is deprecated. It will be made read-only in a future release.
+Warning	3090	Changing sql mode 'NO_AUTO_CREATE_USER' is deprecated. It will be removed in a future release.
 Warning (Code 1286): Unknown storage engine 'nonexistent'
 Warning (Code 1266): Using storage engine MyISAM for table 't2'
 Warning (Code 1286): Unknown storage engine 'nonexistent2'
@@ -525,5 +525,16 @@ a
 #
 mysql: [ERROR] mysql: Empty value for 'port' specified
 mysql: [ERROR] mysql: Empty value for 'port' specified
+#
+# Bug #21464621: MYSQL CLI SHOULD SUGGEST CONNECT-EXPIRED-PASSWORD WHEN ERROR 1862 OCCURS
+#
+CREATE USER bug21464621 IDENTIFIED BY 'password' PASSWORD EXPIRE;
+mysql: [Warning] Using a password on the command line interface can be insecure.
+Please use --connect-expired-password option or invoke mysql in interactive mode.
+mysql: [Warning] Using a password on the command line interface can be insecure.
+mysql: [Warning] Using a password on the command line interface can be insecure.
+user()
+bug21464621@localhost
+DROP USER bug21464621;
 
 End of tests

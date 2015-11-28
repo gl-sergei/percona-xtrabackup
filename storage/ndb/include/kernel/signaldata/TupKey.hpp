@@ -1,5 +1,5 @@
 /*
-   Copyright (c) 2003, 2013, Oracle and/or its affiliates. All rights reserved.
+   Copyright (c) 2003, 2015, Oracle and/or its affiliates. All rights reserved.
 
    This program is free software; you can redistribute it and/or modify
    it under the terms of the GNU General Public License as published by
@@ -75,19 +75,21 @@ private:
   static Uint32 getInterpretedFlag(Uint32 const& requestInfo);
   static Uint32 getRowidFlag(Uint32 const& requestInfo);
   static Uint32 getReorgFlag(Uint32 const& requestInfo);
+  static Uint32 getPrioAFlag(Uint32 const& requestInfo);
   static void setDirtyFlag(Uint32 & requestInfo, Uint32 value);
   static void setSimpleFlag(Uint32 & requestInfo, Uint32 value);
   static void setOperation(Uint32 & requestInfo, Uint32 value);
   static void setInterpretedFlag(Uint32 & requestInfo, Uint32 value);
   static void setRowidFlag(Uint32 & requestInfo, Uint32 value);
   static void setReorgFlag(Uint32 & requestInfo, Uint32 value);
+  static void setPrioAFlag(Uint32 & requestInfo, Uint32 value);
 
   /*
     Request Info
 
               111111 1111222222222233
     0123456789012345 6789012345678901
-    ds....ooo.izrr.. ................
+    ds....ooo.izrra. ................
   */
 
   enum RequestInfo {
@@ -96,7 +98,8 @@ private:
     OPERATION_POS   =  6, OPERATION_MASK   = 7,
     INTERPRETED_POS = 10, INTERPRETED_MASK = 1,
     ROWID_POS       = 11, ROWID_MASK       = 1,
-    REORG_POS       = 12, REORG_MASK       = 3
+    REORG_POS       = 12, REORG_MASK       = 3,
+    PRIO_A_POS      = 14, PRIO_A_MASK      = 1
   };
 };
 
@@ -134,6 +137,12 @@ inline Uint32
 TupKeyReq::getReorgFlag(Uint32 const& requestInfo)
 {
   return (requestInfo >> REORG_POS) & REORG_MASK;
+}
+
+inline Uint32
+TupKeyReq::getPrioAFlag(Uint32 const& requestInfo)
+{
+  return (requestInfo >> PRIO_A_POS) & PRIO_A_MASK;
 }
 
 inline void
@@ -184,6 +193,14 @@ TupKeyReq::setReorgFlag(Uint32 & requestInfo, Uint32 value)
   requestInfo |= value << REORG_POS;
 }
 
+inline void
+TupKeyReq::setPrioAFlag(Uint32 & requestInfo, Uint32 value)
+{
+  assert(value <= PRIO_A_MASK);
+  assert((requestInfo & (PRIO_A_MASK << PRIO_A_POS)) == 0);
+  requestInfo |= value << PRIO_A_POS;
+}
+
 class TupKeyConf {
   /**
    * Reciver(s)
@@ -201,7 +218,7 @@ class TupKeyConf {
   friend bool printTUPKEYCONF(FILE * output, const Uint32 * theData, Uint32 len, Uint16 receiverBlockNo);
 
 public:
-  STATIC_CONST( SignalLength = 6 );
+  STATIC_CONST( SignalLength = 7 );
 
 private:
 
@@ -211,9 +228,11 @@ private:
   Uint32 userPtr;
   Uint32 readLength;  // Length in Uint32 words
   Uint32 writeLength;
-  Uint32 noFiredTriggers;
+  Uint32 numFiredTriggers;
   Uint32 lastRow;
   Uint32 rowid;
+  // Number of interpreter instructions executed.
+  Uint32 noExecInstructions;
 };
 
 class TupKeyRef {
@@ -233,7 +252,7 @@ class TupKeyRef {
   friend bool printTUPKEYREF(FILE * output, const Uint32 * theData, Uint32 len, Uint16 receiverBlockNo);
 
 public:
-  STATIC_CONST( SignalLength = 2 );
+  STATIC_CONST( SignalLength = 3 );
 
 private:
 
@@ -242,6 +261,8 @@ private:
    */
   Uint32 userRef;
   Uint32 errorCode;
+  // Number of interpreter instructions executed.
+  Uint32 noExecInstructions;
 };
 
 

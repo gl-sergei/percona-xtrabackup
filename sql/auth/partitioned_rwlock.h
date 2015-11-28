@@ -46,10 +46,10 @@ public:
                     for partitions.
   */
   bool init(uint parts
-#ifdef HAVE_PSI_RWLOCK_INTERFACE
-    , PSI_rwlock_key psi_key
+#ifdef HAVE_PSI_INTERFACE
+            , PSI_rwlock_key psi_key
 #endif
-  )
+            )
   {
     m_parts= parts;
     if (!(m_locks_array= new (std::nothrow) mysql_rwlock_t[m_parts]))

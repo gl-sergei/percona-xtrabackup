@@ -11,22 +11,16 @@ connection ddl;
 drop table if exists t1,t2,t3,t4;
 --enable_warnings
 
-#######################################
-# Enable ndb$info counters for SPJ block.
-
-connection ddl;
---source ndbinfo_create.inc
-
 connection spj;
 # Save old mysqld counter values.
+--disable_warnings ONCE
 create temporary table server_counts_at_startup
        select * from information_schema.global_status 
        where variable_name in 
        ('Ndb_pruned_scan_count',
         'Ndb_sorted_scan_count',
         'Ndb_pushed_queries_defined',
-        'Ndb_pushed_queries_dropped',
-        'Ndb_pushed_queries_executed');
+        'Ndb_pushed_queries_dropped');
 
 ##############
 # Test start
@@ -2905,6 +2899,7 @@ select * from t1 t1, t1 t2
 
 # Save old counter values.
 # Save old mysqld counter values.
+--disable_warnings ONCE
 create temporary table server_counts
        select * from information_schema.global_status 
        where variable_name in 
@@ -2913,7 +2908,6 @@ create temporary table server_counts
         'Ndb_sorted_scan_count',
         'Ndb_pushed_queries_defined',
         'Ndb_pushed_queries_dropped',
-        'Ndb_pushed_queries_executed',
 	'Ndb_pushed_reads');
 
 # Run some queries that should increment the counters.
@@ -2934,6 +2928,7 @@ select count(*) from t1 t1, t1 t2
        	     t2.a = t1.c and t2.b = t1.c; 
 
 # Calculate the change in mysqld counters.
+--disable_warnings ONCE
 select new.variable_name, new.variable_value - old.variable_value
        from server_counts as old,
          information_schema.global_status as new
@@ -4449,6 +4444,7 @@ insert into t1 values (1,NULL,1,1);
 explain extended select * from t1 as x1 left join (t1 as x2 join t1 as x3 on x2.d=x3.c) on x1.b=x3.b; 
 
 # Record value before query.
+--disable_warnings ONCE
 create temporary table scan_count
        select * from information_schema.global_status 
        where variable_name = 'Ndb_scan_count';
@@ -4458,6 +4454,7 @@ create temporary table scan_count
 select * from t1 as x1 left join (t1 as x2 join t1 as x3 on x2.d=x3.c) on x1.b=x3.b; 
 
 # Bug causes value to increase by 3 rather than 2.
+--disable_warnings ONCE
 select scan_count.VARIABLE_NAME,
        old.VARIABLE_VALUE - scan_count.VARIABLE_VALUE  
        from scan_count,information_schema.global_status as old 
@@ -4669,6 +4666,7 @@ DROP TABLE ndb_order_test, ndb_user_test;
 connection spj;
 
 # Calculate the change in mysqld counters.
+--disable_warnings ONCE
 select new.variable_name, new.variable_value - old.variable_value
        from server_counts_at_startup as old,
          information_schema.global_status as new
@@ -4676,8 +4674,6 @@ select new.variable_name, new.variable_value - old.variable_value
        order by new.variable_name;
 
 drop table server_counts_at_startup;
-
---source ndbinfo_drop.inc
 
 set ndb_join_pushdown = @save_ndb_join_pushdown;
 

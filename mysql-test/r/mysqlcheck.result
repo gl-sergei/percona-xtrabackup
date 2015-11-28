@@ -49,6 +49,7 @@ mysql.func                                         OK
 mysql.general_log
 note     : The storage engine for the table doesn't support optimize
 mysql.gtid_executed
+Warning  : Please do not modify the gtid_executed table. This is a mysql internal system table to store GTIDs for committed transactions. Modifying it can lead to an inconsistent GTID state.
 note     : Table does not support optimize, doing recreate + analyze instead
 status   : OK
 mysql.help_category
@@ -156,6 +157,7 @@ mysql.func                                         Table is already up to date
 mysql.general_log
 note     : The storage engine for the table doesn't support optimize
 mysql.gtid_executed
+Warning  : Please do not modify the gtid_executed table. This is a mysql internal system table to store GTIDs for committed transactions. Modifying it can lead to an inconsistent GTID state.
 note     : Table does not support optimize, doing recreate + analyze instead
 status   : OK
 mysql.help_category
@@ -414,8 +416,8 @@ test.bug47205
 error    : Table rebuild required. Please do "ALTER TABLE `bug47205` FORCE" or dump/reload to fix it!
 
 Repairing tables
-bug47205
-Running  : ALTER TABLE `bug47205` FORCE
+`test`.`bug47205`
+Running  : ALTER TABLE `test`.`bug47205` FORCE
 status   : OK
 # Table should now be ok
 CHECK TABLE bug47205 FOR UPGRADE;
@@ -448,5 +450,31 @@ CREATE DATABASE b12688860_db;
 mysqlcheck: [Warning] Using a password on the command line interface can be insecure.
 WARNING: --fix-db-names is deprecated and will be removed in a future version
 DROP DATABASE b12688860_db;
+#
+# WL#2284: Increase the length of a user name
+#
+CREATE USER 'user_with_length_32_abcdefghijkl'@'localhost';
+GRANT ALL ON *.* TO 'user_with_length_32_abcdefghijkl'@'localhost';
+mysql.user                                         OK
+DROP USER 'user_with_length_32_abcdefghijkl'@'localhost';
+#
+# Bug#20868496: MYSQL_UPGRADE IN 5.7.7+ REPAIR LOOKS USER TABLES
+#               IN TEST WHEN LOAD FROM 50/51/55
+#
+CREATE DATABASE db1;
+CREATE DATABASE db2;
+CREATE TABLE db1.t1 (a INT) ENGINE=MYISAM;
+CREATE TABLE db2.t2 (a INT);
+db1.t1
+Error    : Incorrect file format 't1'
+error    : Corrupt
+db2.t2                                             OK
+
+Repairing tables
+db1.t1
+Error    : Incorrect file format 't1'
+error    : Corrupt
+DROP DATABASE db1;
+DROP DATABASE db2;
 
 End of tests

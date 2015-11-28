@@ -152,10 +152,32 @@ ENDIF()
 MYSQL_ADD_PLUGIN(innobase ${INNOBASE_SOURCES} STORAGE_ENGINE
   MANDATORY
   MODULE_OUTPUT_NAME ha_innodb
-  LINK_LIBRARIES ${ZLIB_LIBRARY})
+  LINK_LIBRARIES ${ZLIB_LIBRARY} ${LZ4_LIBRARY})
 
 IF(WITH_INNOBASE_STORAGE_ENGINE)
   ADD_DEPENDENCIES(innobase GenError)
+ENDIF()
+
+# Avoid generating Hardware Capabilities due to crc32 instructions
+IF(CMAKE_SYSTEM_NAME MATCHES "SunOS" AND CMAKE_SYSTEM_PROCESSOR MATCHES "i386")
+  INCLUDE(${MYSQL_CMAKE_SCRIPT_DIR}/compile_flags.cmake)
+  ADD_COMPILE_FLAGS(
+    ut/ut0crc32.cc
+    COMPILE_FLAGS "-Wa,-nH"
+  )
+ENDIF()
+
+# A GCC bug causes crash when compiling these files on ARM64 with -O1+
+# Compile them with -O0 as a workaround until the GCC bug is fixed.
+IF(CMAKE_COMPILER_IS_GNUCXX AND CMAKE_SYSTEM_PROCESSOR MATCHES "aarch64")
+  INCLUDE(${MYSQL_CMAKE_SCRIPT_DIR}/compile_flags.cmake)
+  ADD_COMPILE_FLAGS(
+    btr/btr0btr.cc
+    btr/btr0cur.cc
+    buf/buf0buf.cc
+    gis/gis0sea.cc
+    COMPILE_FLAGS "-O0"
+  )
 ENDIF()
 
 # Must be after all ADD_DEFINITIONS() to be inherited by the

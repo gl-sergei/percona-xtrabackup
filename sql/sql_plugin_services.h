@@ -23,6 +23,33 @@ struct st_service_ref {
   void *service;
 };
 
+#ifndef EMBEDDED_LIBRARY
+static struct srv_session_service_st srv_session_service_handler= {
+  srv_session_init_thread,
+  srv_session_deinit_thread,
+  srv_session_open,
+  srv_session_detach,
+  srv_session_close,
+  srv_session_server_is_available
+};
+
+static struct command_service_st command_handler= {
+  command_service_run_command,
+};
+
+static struct srv_session_info_service_st srv_session_info_handler= {
+  srv_session_info_get_thd,
+  srv_session_info_get_session_id,
+  srv_session_info_get_current_db,
+  srv_session_info_get_client_port,
+  srv_session_info_set_client_port,
+  srv_session_info_set_connection_type,
+  srv_session_info_killed,
+  srv_session_info_session_count,
+  srv_session_info_thread_count
+};
+#endif
+
 static struct my_snprintf_service_st my_snprintf_handler = {
   my_snprintf,
   my_vsnprintf
@@ -67,6 +94,7 @@ static struct mysql_malloc_service_st mysql_malloc_handler=
 {
   my_malloc,
   my_realloc,
+  my_claim,
   my_free,
   my_memdup,
   my_strdup,
@@ -87,6 +115,7 @@ static struct mysql_parser_service_st parser_handler=
   mysql_parser_join_thread,
   mysql_parser_set_current_database,
   mysql_parser_parse,
+  mysql_parser_get_statement_type,
   mysql_parser_get_statement_digest,
   mysql_parser_get_number_params,
   mysql_parser_extract_prepared_params,
@@ -105,8 +134,34 @@ static struct transaction_write_set_service_st transaction_write_set_handler= {
   get_transaction_write_set,
 };
 
+static struct mysql_locking_service_st locking_service_handler=
+{
+  mysql_acquire_locking_service_locks,
+  mysql_release_locking_service_locks
+};
+
+#ifndef NO_EMBEDDED_ACCESS_CHECKS
+static struct security_context_service_st security_context_handler={
+  thd_get_security_context,
+  thd_set_security_context,
+  security_context_create,
+  security_context_destroy,
+  security_context_copy,
+  security_context_lookup,
+  security_context_get_option,
+  security_context_set_option
+};
+#endif
+
 static struct st_service_ref list_of_services[]=
 {
+#ifndef EMBEDDED_LIBRARY
+  { "srv_session_service",
+    VERSION_srv_session_service,&srv_session_service_handler },
+  { "command_service",     VERSION_command, &command_handler },
+  { "srv_session_info_service",
+     VERSION_srv_session_info_service, &srv_session_info_handler },
+#endif
   { "my_snprintf_service", VERSION_my_snprintf, &my_snprintf_handler },
   { "thd_alloc_service",   VERSION_thd_alloc,   &thd_alloc_handler },
   { "thd_wait_service",    VERSION_thd_wait,    &thd_wait_handler },
@@ -121,6 +176,11 @@ static struct st_service_ref list_of_services[]=
   { "rpl_transaction_ctx_service",
     VERSION_rpl_transaction_ctx_service, &rpl_transaction_ctx_handler },
   { "transaction_write_set_service",
-    VERSION_transaction_write_set_service, &transaction_write_set_handler }
+    VERSION_transaction_write_set_service, &transaction_write_set_handler },
+#ifndef NO_EMBEDDED_ACCESS_CHECKS
+  { "security_context_service",
+    VERSION_security_context_service, &security_context_handler },
+#endif
+  { "mysql_locking_service", VERSION_locking_service, &locking_service_handler }
 };
 

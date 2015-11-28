@@ -205,6 +205,11 @@ static void set_thread_THD_noop(PSI_thread *thread NNN, THD *thd NNN)
   return;
 }
 
+static void set_thread_os_id_noop(PSI_thread *thread NNN)
+{
+  return;
+}
+
 static PSI_thread*
 get_thread_noop(void NNN)
 {
@@ -228,6 +233,11 @@ static void set_thread_db_noop(const char* db NNN, int db_len NNN)
 }
 
 static void set_thread_command_noop(int command NNN)
+{
+  return;
+}
+
+static void set_connection_type_noop(opaque_vio_type conn_type NNN)
 {
   return;
 }
@@ -424,6 +434,12 @@ static PSI_file* end_file_open_wait_noop(PSI_file_locker *locker NNN,
 
 static void end_file_open_wait_and_bind_to_descriptor_noop
   (PSI_file_locker *locker NNN, File file NNN)
+{
+  return;
+}
+
+static void end_temp_file_open_wait_and_bind_to_descriptor_noop
+  (PSI_file_locker *locker NNN, File file NNN, const char *filaneme NNN)
 {
   return;
 }
@@ -794,17 +810,23 @@ static void register_memory_noop(const char *category NNN,
   return;
 }
 
-static PSI_memory_key memory_alloc_noop(PSI_memory_key key NNN, size_t size NNN)
+static PSI_memory_key memory_alloc_noop(PSI_memory_key key NNN, size_t size NNN, struct PSI_thread ** owner NNN)
 {
   return PSI_NOT_INSTRUMENTED;
 }
 
-static PSI_memory_key memory_realloc_noop(PSI_memory_key key NNN, size_t old_size NNN, size_t new_size NNN)
+static PSI_memory_key memory_realloc_noop(PSI_memory_key key NNN, size_t old_size NNN, size_t new_size NNN, struct PSI_thread ** owner NNN)
 {
   return PSI_NOT_INSTRUMENTED;
 }
 
-static void memory_free_noop(PSI_memory_key key NNN, size_t size NNN)
+static PSI_memory_key memory_claim_noop(PSI_memory_key key NNN, size_t size NNN, struct PSI_thread ** owner)
+{
+  *owner= NULL;
+  return PSI_NOT_INSTRUMENTED;
+}
+
+static void memory_free_noop(PSI_memory_key key NNN, size_t size NNN, struct PSI_thread * owner NNN)
 {
   return;
 }
@@ -882,11 +904,13 @@ static PSI PSI_noop=
   new_thread_noop,
   set_thread_id_noop,
   set_thread_THD_noop,
+  set_thread_os_id_noop,
   get_thread_noop,
   set_thread_user_noop,
   set_thread_user_host_noop,
   set_thread_db_noop,
   set_thread_command_noop,
+  set_connection_type_noop,
   set_thread_start_time_noop,
   set_thread_state_noop,
   set_thread_info_noop,
@@ -917,6 +941,7 @@ static PSI PSI_noop=
   start_file_open_wait_noop,
   end_file_open_wait_noop,
   end_file_open_wait_and_bind_to_descriptor_noop,
+  end_temp_file_open_wait_and_bind_to_descriptor_noop,
   start_file_wait_noop,
   end_file_wait_noop,
   start_file_close_wait_noop,
@@ -975,6 +1000,7 @@ static PSI PSI_noop=
   register_memory_noop,
   memory_alloc_noop,
   memory_realloc_noop,
+  memory_claim_noop,
   memory_free_noop,
 
   unlock_table_noop,

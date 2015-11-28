@@ -20,7 +20,7 @@
 --echo #Creating the spatial Geometry object
 USE test;
 
-CREATE TABLE gis_geometrycollection (fid INTEGER NOT NULL PRIMARY KEY, g GEOMETRYCOLLECTION);
+CREATE TABLE gis_geometrycollection (fid INTEGER NOT NULL PRIMARY KEY, g GEOMETRY);
 
 ############################################################################################
 # Inserting the values specific to the spatial objects                                     #
@@ -465,7 +465,7 @@ SELECT MBROVERLAPS(g,ST_GEOMFROMTEXT(@star_lines_near_horizontal)) FROM gis_geom
 --echo #====================================================================================
 --echo # linestring,polygon
 --echo #====================================================================================
-SELECT MBROVERLAPS(ST_GEOMFROMTEXT(@star_line_horizontal),ST_GEOMFROMTEXT('POLYGON((11 15,19 15,19 10))'));
+SELECT MBROVERLAPS(ST_GEOMFROMTEXT(@star_line_horizontal),ST_GEOMFROMTEXT('POLYGON((11 15,19 15,19 10,11 15))'));
 
 SELECT MBROVERLAPS(ST_GEOMFROMTEXT(@star_line_horizontal),ST_GEOMFROMTEXT(@star_elem_horizontal));
 
@@ -473,11 +473,13 @@ SELECT MBROVERLAPS(ST_GEOMFROMTEXT(@star_line_horizontal),ST_GEOMFROMTEXT(@star_
 
 SELECT MBROVERLAPS(ST_GEOMFROMTEXT(@star_line_horizontal),ST_GEOMFROMTEXT(@star_elem_horizontal_3));
 
+--error ER_GIS_INVALID_DATA
 SELECT MBROVERLAPS(g,ST_GEOMFROMTEXT('POLYGON((11 15,19 15,11 15))')) FROM gis_geometrycollection WHERE fid=110;
 
 --echo #====================================================================================
 --echo # linestring,multipolygon
 --echo #====================================================================================
+--error ER_GIS_INVALID_DATA
 SELECT MBROVERLAPS(ST_GEOMFROMTEXT(@star_line_horizontal),ST_GEOMFROMTEXT('MULTIPOLYGON(((11 15,19 15,11 15)),((25 0,0 15,25 0)))'));
 
 SELECT MBROVERLAPS(ST_GEOMFROMTEXT(@star_line_horizontal),ST_GEOMFROMTEXT(@star_of_elems));
@@ -486,6 +488,7 @@ SELECT MBROVERLAPS(ST_GEOMFROMTEXT(@star_line_horizontal),ST_GEOMFROMTEXT(@star_
 
 SELECT MBROVERLAPS(ST_GEOMFROMTEXT(@star_line_horizontal),ST_GEOMFROMTEXT(@star_of_elems_3));
 
+--error ER_GIS_INVALID_DATA
 SELECT MBROVERLAPS(g,ST_GEOMFROMTEXT('MULTIPOLYGON(((11 15,19 15,11 15)),((25 0,0 15,25 0)))')) FROM gis_geometrycollection WHERE fid=110;
 
 --echo #====================================================================================
@@ -732,7 +735,7 @@ SELECT MBROVERLAPS(ST_GEOMFROMTEXT(@star_of_elems),ST_GEOMFROMTEXT(@star_elem_ve
 
 SELECT MBROVERLAPS(ST_GEOMFROMTEXT(@star_of_elems),ST_GEOMFROMTEXT(@star));
 
-SELECT MBROVERLAPS(ST_GEOMFROMTEXT(@star_of_elems),ST_GEOMFROMTEXT('POLYGON((0 0,15 25,35 0,0 0))'));
+SELECT MBROVERLAPS(ST_GEOMFROMTEXT(@star_of_elems),ST_GEOMFROMTEXT('POLYGON((0 0,15 25,35 0,0 0,0 0))'));
 
 SELECT MBROVERLAPS(g,ST_GEOMFROMTEXT(@star_elem_vertical)) FROM gis_geometrycollection WHERE fid=103;
 
@@ -745,7 +748,7 @@ SELECT MBROVERLAPS(g,ST_GEOMFROMTEXT(@star_elem_vertical)) FROM gis_geometrycoll
 --echo #====================================================================================
 SELECT MBROVERLAPS(ST_GEOMFROMTEXT(@star_of_elems),ST_GEOMFROMTEXT(@star_of_elems));
 
-SELECT MBROVERLAPS(ST_GEOMFROMTEXT(@star_of_elems),ST_GEOMFROMTEXT('MULTIPOLYGON(((0 0,15 25,35 0,0 0),(5 0,15 25,25 0,15 5,5 0)))'));
+SELECT MBROVERLAPS(ST_GEOMFROMTEXT(@star_of_elems),ST_GEOMFROMTEXT('MULTIPOLYGON(((0 0,15 25,35 0,0 0,0 0),(5 0,15 25,25 0,15 5,5 0)))'));
 
 SELECT MBROVERLAPS(g,ST_GEOMFROMTEXT(@star_of_elems)) FROM gis_geometrycollection WHERE fid=103;
 
@@ -821,7 +824,7 @@ SELECT MBROVERLAPS(ST_GEOMFROMTEXT(@star_collection_elems),ST_GEOMFROMTEXT(@star
 
 SELECT MBROVERLAPS(ST_GEOMFROMTEXT(@star_collection_elems),ST_GEOMFROMTEXT(@star));
 
-SELECT MBROVERLAPS(ST_GEOMFROMTEXT(@star_collection_elems),ST_GEOMFROMTEXT('POLYGON((0 0,15 25,35 0,0 0))'));
+SELECT MBROVERLAPS(ST_GEOMFROMTEXT(@star_collection_elems),ST_GEOMFROMTEXT('POLYGON((0 0,15 25,35 0,0 0,0 0))'));
 
 SELECT MBROVERLAPS(g,ST_GEOMFROMTEXT(@star_elem_vertical)) FROM gis_geometrycollection WHERE fid=115;
 
@@ -834,7 +837,7 @@ SELECT MBROVERLAPS(g,ST_GEOMFROMTEXT(@star_elem_vertical)) FROM gis_geometrycoll
 --echo #====================================================================================
 SELECT MBROVERLAPS(ST_GEOMFROMTEXT(@star_collection_elems),ST_GEOMFROMTEXT(@star_of_elems));
 
-SELECT MBROVERLAPS(ST_GEOMFROMTEXT(@star_collection_elems),ST_GEOMFROMTEXT('MULTIPOLYGON(((0 0,15 25,35 0,0 0),(5 0,15 25,25 0,15 5,5 0)))'));
+SELECT MBROVERLAPS(ST_GEOMFROMTEXT(@star_collection_elems),ST_GEOMFROMTEXT('MULTIPOLYGON(((0 0,15 25,35 0,0 0,0 0),(5 0,15 25,25 0,15 5,5 0)))'));
 
 SELECT MBROVERLAPS(g,ST_GEOMFROMTEXT(@star_collection_elems)) FROM gis_geometrycollection WHERE fid=115;
 
@@ -1120,7 +1123,7 @@ SELECT ST_OVERLAPS(g,ST_GEOMFROMTEXT(@star_lines_near_horizontal)) FROM gis_geom
 --echo #====================================================================================
 --echo # linestring,polygon
 --echo #====================================================================================
-SELECT ST_OVERLAPS(ST_GEOMFROMTEXT(@star_line_horizontal),ST_GEOMFROMTEXT('POLYGON((11 15,19 15,19 10))'));
+SELECT ST_OVERLAPS(ST_GEOMFROMTEXT(@star_line_horizontal),ST_GEOMFROMTEXT('POLYGON((11 15,19 15,19 10,11 15))'));
 
 SELECT ST_OVERLAPS(ST_GEOMFROMTEXT(@star_line_horizontal),ST_GEOMFROMTEXT(@star_elem_horizontal));
 
@@ -1128,11 +1131,13 @@ SELECT ST_OVERLAPS(ST_GEOMFROMTEXT(@star_line_horizontal),ST_GEOMFROMTEXT(@star_
 
 SELECT ST_OVERLAPS(ST_GEOMFROMTEXT(@star_line_horizontal),ST_GEOMFROMTEXT(@star_elem_horizontal_3));
 
+--error ER_GIS_INVALID_DATA
 SELECT ST_OVERLAPS(g,ST_GEOMFROMTEXT('POLYGON((11 15,19 15,11 15))')) FROM gis_geometrycollection WHERE fid=110;
 
 --echo #====================================================================================
 --echo # linestring,multipolygon
 --echo #====================================================================================
+--error ER_GIS_INVALID_DATA
 SELECT ST_OVERLAPS(ST_GEOMFROMTEXT(@star_line_horizontal),ST_GEOMFROMTEXT('MULTIPOLYGON(((11 15,19 15,11 15)),((25 0,0 15,25 0)))'));
 
 SELECT ST_OVERLAPS(ST_GEOMFROMTEXT(@star_line_horizontal),ST_GEOMFROMTEXT(@star_of_elems));
@@ -1141,6 +1146,7 @@ SELECT ST_OVERLAPS(ST_GEOMFROMTEXT(@star_line_horizontal),ST_GEOMFROMTEXT(@star_
 
 SELECT ST_OVERLAPS(ST_GEOMFROMTEXT(@star_line_horizontal),ST_GEOMFROMTEXT(@star_of_elems_3));
 
+--error ER_GIS_INVALID_DATA
 SELECT ST_OVERLAPS(g,ST_GEOMFROMTEXT('MULTIPOLYGON(((11 15,19 15,11 15)),((25 0,0 15,25 0)))')) FROM gis_geometrycollection WHERE fid=110;
 
 --echo #====================================================================================
@@ -1308,9 +1314,9 @@ SELECT ST_OVERLAPS(g,ST_GEOMFROMTEXT(@star_elem_vertical)) FROM gis_geometrycoll
 
 SELECT ST_OVERLAPS(g,ST_GEOMFROMTEXT(@star_elem_vertical)) FROM gis_geometrycollection WHERE fid=400;
 
-SELECT ST_OVERLAPS(ST_GEOMFROMTEXT('POLYGON((0 0,0 10,10 10,10 0,0 0),(2 2,2 4,4 4,4 2,2 2))'), ST_GEOMFROMTEXT('POLYGON((0 0,0 5,5 5,5 0,0 0))'));
+SELECT ST_OVERLAPS(ST_GEOMFROMTEXT('POLYGON((0 0,0 10,10 10,10 0,0 0,0 0),(2 2,2 4,4 4,4 2,2 2))'), ST_GEOMFROMTEXT('POLYGON((0 0,0 5,5 5,5 0,0 0))'));
 
-SELECT ST_OVERLAPS(ST_GEOMFROMTEXT('POLYGON((0 0,0 10,10 10,10 0,0 0),(2 2,2 4,4 4,4 2,2 2),(6 6,6 8,8 8,8 6,6 6))'),
+SELECT ST_OVERLAPS(ST_GEOMFROMTEXT('POLYGON((0 0,0 10,10 10,10 0,0 0,0 0),(2 2,2 4,4 4,4 2,2 2),(6 6,6 8,8 8,8 6,6 6))'),
                    ST_GEOMFROMTEXT('POLYGON((0 0,0 5,5 5,5 0,0 0))'));
 
 --echo #====================================================================================
@@ -1392,7 +1398,7 @@ SELECT ST_OVERLAPS(ST_GEOMFROMTEXT(@star_of_elems),ST_GEOMFROMTEXT(@star_elem_ve
 
 SELECT ST_OVERLAPS(ST_GEOMFROMTEXT(@star_of_elems),ST_GEOMFROMTEXT(@star));
 
-SELECT ST_OVERLAPS(ST_GEOMFROMTEXT(@star_of_elems),ST_GEOMFROMTEXT('POLYGON((0 0,15 25,35 0,0 0))'));
+SELECT ST_OVERLAPS(ST_GEOMFROMTEXT(@star_of_elems),ST_GEOMFROMTEXT('POLYGON((0 0,15 25,35 0,0 0,0 0))'));
 
 SELECT ST_OVERLAPS(g,ST_GEOMFROMTEXT(@star_elem_vertical)) FROM gis_geometrycollection WHERE fid=103;
 
@@ -1400,18 +1406,18 @@ SELECT ST_OVERLAPS(g,ST_GEOMFROMTEXT(@star_elem_vertical)) FROM gis_geometrycoll
 
 SELECT ST_OVERLAPS(g,ST_GEOMFROMTEXT(@star_elem_vertical)) FROM gis_geometrycollection WHERE fid=403;
 
-SELECT ST_OVERLAPS(ST_GEOMFROMTEXT('MULTIPOLYGON(((0 0,0 10,10 10,10 0,0 0)),((0 0,0 -10,-10 -10,-10 0,0 0)))'),
+SELECT ST_OVERLAPS(ST_GEOMFROMTEXT('MULTIPOLYGON(((0 0,0 10,10 10,10 0,0 0,0 0)),((0 0,0 -10,-10 -10,-10 0,0 0)))'),
                    ST_GEOMFROMTEXT('POLYGON((0 0,0 5,5 5,5 0,0 0))'));
 
-SELECT ST_OVERLAPS(ST_GEOMFROMTEXT('MULTIPOLYGON(((0 0,0 10,10 10,10 0,0 0)),((0 0,0 -10,-10 -10,-10 0,0 0)))'),
-                   ST_GEOMFROMTEXT('POLYGON((0 0,0 10,10 10,10 0,0 0))'));
+SELECT ST_OVERLAPS(ST_GEOMFROMTEXT('MULTIPOLYGON(((0 0,0 10,10 10,10 0,0 0,0 0)),((0 0,0 -10,-10 -10,-10 0,0 0)))'),
+                   ST_GEOMFROMTEXT('POLYGON((0 0,0 10,10 10,10 0,0 0,0 0))'));
 
 --echo #====================================================================================
 --echo # multipolygon,multipolygon
 --echo #====================================================================================
 SELECT ST_OVERLAPS(ST_GEOMFROMTEXT(@star_of_elems),ST_GEOMFROMTEXT(@star_of_elems));
 
-SELECT ST_OVERLAPS(ST_GEOMFROMTEXT(@star_of_elems),ST_GEOMFROMTEXT('MULTIPOLYGON(((0 0,15 25,35 0,0 0),(5 0,15 25,25 0,15 5,5 0)))'));
+SELECT ST_OVERLAPS(ST_GEOMFROMTEXT(@star_of_elems),ST_GEOMFROMTEXT('MULTIPOLYGON(((0 0,15 25,35 0,0 0,0 0),(5 0,15 25,25 0,15 5,5 0)))'));
 
 SELECT ST_OVERLAPS(g,ST_GEOMFROMTEXT(@star_of_elems)) FROM gis_geometrycollection WHERE fid=103;
 
@@ -1487,7 +1493,7 @@ SELECT ST_OVERLAPS(ST_GEOMFROMTEXT(@star_collection_elems),ST_GEOMFROMTEXT(@star
 
 SELECT ST_OVERLAPS(ST_GEOMFROMTEXT(@star_collection_elems),ST_GEOMFROMTEXT(@star));
 
-SELECT ST_OVERLAPS(ST_GEOMFROMTEXT(@star_collection_elems),ST_GEOMFROMTEXT('POLYGON((0 0,15 25,35 0,0 0))'));
+SELECT ST_OVERLAPS(ST_GEOMFROMTEXT(@star_collection_elems),ST_GEOMFROMTEXT('POLYGON((0 0,15 25,35 0,0 0,0 0))'));
 
 SELECT ST_OVERLAPS(g,ST_GEOMFROMTEXT(@star_elem_vertical)) FROM gis_geometrycollection WHERE fid=115;
 
@@ -1500,7 +1506,7 @@ SELECT ST_OVERLAPS(g,ST_GEOMFROMTEXT(@star_elem_vertical)) FROM gis_geometrycoll
 --echo #====================================================================================
 SELECT ST_OVERLAPS(ST_GEOMFROMTEXT(@star_collection_elems),ST_GEOMFROMTEXT(@star_of_elems));
 
-SELECT ST_OVERLAPS(ST_GEOMFROMTEXT(@star_collection_elems),ST_GEOMFROMTEXT('MULTIPOLYGON(((0 0,15 25,35 0,0 0),(5 0,15 25,25 0,15 5,5 0)))'));
+SELECT ST_OVERLAPS(ST_GEOMFROMTEXT(@star_collection_elems),ST_GEOMFROMTEXT('MULTIPOLYGON(((0 0,15 25,35 0,0 0,0 0),(5 0,15 25,25 0,15 5,5 0)))'));
 
 SELECT ST_OVERLAPS(g,ST_GEOMFROMTEXT(@star_collection_elems)) FROM gis_geometrycollection WHERE fid=115;
 

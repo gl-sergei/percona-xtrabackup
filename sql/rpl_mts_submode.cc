@@ -13,9 +13,11 @@
    along with this program; if not, write to the Free Software
    Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301  USA */
 
+#include "debug_sync.h"
 #include "rpl_mts_submode.h"
 
 #include "hash.h"                           // HASH
+#include "log.h"                            // sql_print_information
 #include "log_event.h"                      // Query_log_event
 #include "rpl_rli.h"                        // Relay_log_info
 #include "rpl_rli_pdb.h"                    // db_worker_hash_entry
@@ -102,9 +104,9 @@ Mts_submode_database::wait_for_workers_to_finish(Relay_log_info *rli,
   DBUG_ENTER("Mts_submode_database::wait_for_workers_to_finish");
 
   llstr(rli->get_event_relay_log_pos(), llbuf);
-  sql_print_information("Coordinator and workers enter synchronization procedure "
-                        "when scheduling event relay-log: %s pos: %s",
-                        rli->get_event_relay_log_name(), llbuf);
+  DBUG_PRINT("info", ("Coordinator and workers enter synchronization "
+                      "procedure when scheduling event relay-log: %s "
+                      "pos: %s", rli->get_event_relay_log_name(), llbuf));
 
   for (uint i= 0, ret= 0; i < hash->records; i++)
   {
@@ -159,9 +161,9 @@ Mts_submode_database::wait_for_workers_to_finish(Relay_log_info *rli,
 
   if (!ignore)
   {
-    sql_print_information("Coordinator synchronized with Workers, "
-                          "waited entries: %d, cant_sync: %d",
-                          ret, cant_sync);
+    DBUG_PRINT("info", ("Coordinator synchronized with workers, "
+                        "waited entries: %d, cant_sync: %d",
+                        ret, cant_sync));
 
     rli->mts_group_status= Relay_log_info::MTS_NOT_IN_GROUP;
   }
@@ -554,24 +556,11 @@ Mts_submode_logical_clock::schedule_next_event(Relay_log_info* rli,
     break;
   }
 
+  DBUG_PRINT("info", ("sequence_number %lld, last_committed %lld",
+                      sequence_number, last_committed));
+
   if (first_event)
   {
-    if (sequence_number == SEQ_UNINIT)
-    {
-      /*
-        Either master is old, or the current group of events is malformed.
-        In either case execution is allowed in effectively sequential mode, and warned.
-      */
-      sql_print_warning("Either event (relay log name:position) (%s:%llu) "
-                        "is from an old master therefore is not tagged "
-                        "with logical timestamps, or the current group of "
-                        "events miss a proper group header event. Execution is "
-                        "proceeded, but it is recommended to make sure "
-                        "replication is resumed from a valid start group "
-                        "position.",
-                        rli->get_event_relay_log_name(),
-                        rli->get_event_relay_log_pos());
-    }
     first_event= false;
   }
   else
@@ -605,6 +594,9 @@ Mts_submode_logical_clock::schedule_next_event(Relay_log_info* rli,
     compile_time_assert(SEQ_UNINIT == 0);
     if (unlikely(sequence_number > last_sequence_number + 1))
     {
+      DBUG_PRINT("info", ("sequence_number gap found, "
+                          "last_sequence_number %lld, sequence_number %lld",
+                          last_sequence_number, sequence_number));
       DBUG_ASSERT(rli->replicate_same_server_id || true /* TODO: account autopositioning */);
       gap_successor= true;
     }
@@ -878,15 +870,26 @@ Mts_submode_logical_clock::get_least_occupied_worker(Relay_log_info *rli,
 
       set_timespec_nsec(&ts[0], 0);
       // Update thd info as waiting for workers to finish.
-      thd->enter_stage(&stage_slave_waiting_for_workers_to_finish, old_stage,
+      thd->enter_stage(&stage_slave_waiting_for_workers_to_process_queue,
+                       old_stage,
                        __func__, __FILE__, __LINE__);
       while (!worker && !thd->killed)
       {
         /*
-          wait and get a free worker.
-          todo: replace with First Available assignement policy
+          Busy wait with yielding thread control before to next attempt
+          to find a free worker. As of current, a worker
+          can't have more than one assigned group of events in its
+          queue.
+
+          todo: replace this At-Most-One assignment policy with
+                First Available Worker as
+                this method clearly can't be considered as optimal.
         */
+#if !defined(_WIN32)
+        sched_yield();
+#else
         my_sleep(rli->mts_coordinator_basic_nap);
+#endif
         worker= get_free_worker(rli);
       }
       THD_STAGE_INFO(thd, *old_stage);
@@ -958,7 +961,8 @@ Mts_submode_logical_clock::
   DBUG_PRINT("info",("delegated %d, jobs_done %d", delegated_jobs,
                           jobs_done));
   // Update thd info as waiting for workers to finish.
-  thd->enter_stage(&stage_slave_waiting_for_workers_to_finish, old_stage,
+  thd->enter_stage(&stage_slave_waiting_for_workers_to_process_queue,
+                   old_stage,
                     __func__, __FILE__, __LINE__);
   while (delegated_jobs > jobs_done && !thd->killed && !is_error)
   {
@@ -967,6 +971,13 @@ Mts_submode_logical_clock::
     if (mts_checkpoint_routine(rli, 0, true, true /*need_data_lock=true*/))
       DBUG_RETURN(-1);
   }
+  DBUG_EXECUTE_IF("wait_for_workers_to_finish_after_wait",
+                  {
+                    const char act[]= "now WAIT_FOR coordinator_continue";
+                    DBUG_ASSERT(!debug_sync_set_action(rli->info_thd,
+                                                       STRING_WITH_LEN(act)));
+                  });
+
   // The current commit point sequence may end here (e.g Rotate to new log)
   rli->gaq->lwm.sequence_number= SEQ_UNINIT;
   // Restore previous info.

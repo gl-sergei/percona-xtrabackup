@@ -284,6 +284,7 @@ xb_fil_cur_read(
 					  cursor->zip_size : cursor->page_size,
 					  cursor->page_size,
 					  cursor->zip_size != 0);
+	IORequest		read_request(IORequest::READ);
 
 	cursor->read_filter->get_next_batch(&cursor->read_filter_ctxt,
 					    &offset, &to_read);
@@ -332,7 +333,7 @@ read_retry:
 	cursor->buf_offset = offset;
 	cursor->buf_page_no = (ulint) (offset >> cursor->page_size_shift);
 
-	success = os_file_read(cursor->file, cursor->buf, offset,
+	success = os_file_read(read_request, cursor->file, cursor->buf, offset,
 			       to_read);
 	if (!success) {
 		return(XB_FIL_CUR_ERROR);

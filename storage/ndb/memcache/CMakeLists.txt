@@ -1,4 +1,4 @@
-# Copyright (c) 2011, 2013, Oracle and/or its affiliates. All rights reserved.
+# Copyright (c) 2013, 2015, Oracle and/or its affiliates. All rights reserved.
 # 
 # This program is free software; you can redistribute it and/or modify
 # it under the terms of the GNU General Public License as published by
@@ -136,9 +136,12 @@ set(NDB_MEMCACHE_SOURCE_FILES
     src/workitem.c
     src/workqueue.c
     src/Scheduler.cc
+    src/GlobalConfigManager.cc
+    src/SchedulerConfigManager.cc
     src/schedulers/S_sched.cc
     src/schedulers/Stockholm.cc
     src/schedulers/Scheduler73.cc
+    src/schedulers/Trondheim.cc
     ${CACHE_SRC}/items.c
     ${CACHE_SRC}/assoc.c
     ${CACHE_SRC}/slabs.c
@@ -188,9 +191,9 @@ CHECK_CXX_SOURCE_RUNS("
     HAVE_FUNC_IN_CXX)
 
 # Define DEBUG_OUTPUT by default (enables runtime "debug" option in memcached)
-if(HAVE_FUNC_IN_CXX) 
+# if(HAVE_FUNC_IN_CXX)
   add_definitions(-DDEBUG_OUTPUT)
-endif()
+# endif()
 
 
 ########### GENERATED FILES #############
@@ -204,6 +207,17 @@ configure_file(${CMAKE_CURRENT_SOURCE_DIR}/sandbox.sh.in
                ${CMAKE_CURRENT_BINARY_DIR}/sandbox.sh)
                
 # Build the perl include file used by mtr
+# - setup special variables since perl hasn't got
+#   the same understanding of "boolean variables" as cmake has.
+#   i.e the cmake variables can be "1", "ON", "TRUE" etc.
+set(NDB_MEMCACHED_IS_AVAILABLE 0)
+if (MEMCACHED_FOUND)
+  set(NDB_MEMCACHED_IS_AVAILABLE 1)
+endif()
+set(NDB_MEMCACHED_IS_BUNDLED 0)
+if (WITH_BUNDLED_MEMCACHED)
+  set(NDB_MEMCACHED_IS_BUNDLED 1)
+endif()
 configure_file(${CMAKE_CURRENT_SOURCE_DIR}/memcached_path.pl.in
                ${CMAKE_CURRENT_BINARY_DIR}/memcached_path.pl)
 

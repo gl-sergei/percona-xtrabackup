@@ -1,6 +1,6 @@
 /*****************************************************************************
 
-Copyright (c) 1997, 2014, Oracle and/or its affiliates. All Rights Reserved.
+Copyright (c) 1997, 2015, Oracle and/or its affiliates. All Rights Reserved.
 
 This program is free software; you can redistribute it and/or modify it under
 the terms of the GNU General Public License as published by the Free Software
@@ -257,25 +257,10 @@ struct recv_addr_t{
 	hash_node_t	addr_hash;/*!< hash node in the hash bucket chain */
 };
 
-template<typename F>
-struct ut_when_dtor {
-	ut_when_dtor(F& p) : f(p) {}
-	~ut_when_dtor() {
-		f();
-	}
-private:
-	F& f;
-};
-
 struct recv_dblwr_t {
 	/** Add a page frame to the doublewrite recovery buffer. */
 	void add(const byte* page) {
 		pages.push_back(page);
-	}
-
-	/** Clear the list of pages (invoked by ut_when_dtor) */
-	void operator() () {
-		pages.clear();
 	}
 
 	/** Find a doublewrite copy of a page.
@@ -413,27 +398,6 @@ the log and store the scanned log records in the buffer pool: we will
 use these free frames to read in pages when we start applying the
 log records to the database. */
 extern ulint	recv_n_pool_free_frames;
-
-/***********************************************************************//**
-Checks the consistency of the checkpoint info
-@return	TRUE if ok */
-UNIV_INTERN
-ibool
-recv_check_cp_is_consistent(
-/*========================*/
-	const byte*	buf);	/*!< in: buffer containing checkpoint info */
-
-/******************************************************//**
-Checks the 4-byte checksum to the trailer checksum field of a log
-block.  We also accept a log block in the old format before
-InnoDB-3.23.52 where the checksum field contains the log block number.
-@return TRUE if ok, or if the log block may be in the format of InnoDB
-version predating 3.23.52 */
-UNIV_INTERN
-ibool
-log_block_checksum_is_ok_or_old_format(
-/*===================================*/
-	const byte*	block);	/*!< in: pointer to a log block */
 
 /********************************************************//**
 Looks for the maximum consistent checkpoint from the log groups.

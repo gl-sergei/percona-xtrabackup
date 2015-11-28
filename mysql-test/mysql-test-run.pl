@@ -164,7 +164,7 @@ our $opt_vs_config = $ENV{'MTR_VS_CONFIG'};
 
 # If you add a new suite, please check TEST_DIRS in Makefile.am.
 #
-my $DEFAULT_SUITES= "main,sys_vars,binlog,federated,gis,rpl,innodb,innodb_gis,innodb_fts,innodb_zip,innodb_undo,perfschema,funcs_1,opt_trace,parts,auth_sec,query_rewrite_plugins,gcol,sysschema";
+my $DEFAULT_SUITES= "main,sys_vars,binlog,federated,gis,rpl,innodb,innodb_gis,innodb_fts,innodb_zip,innodb_undo,perfschema,funcs_1,opt_trace,parts,auth_sec,query_rewrite_plugins,gcol,sysschema,test_service_sql_api";
 my $opt_suites;
 
 our $opt_verbose= 0;  # Verbose output, enable with --verbose
@@ -209,6 +209,7 @@ our @opt_cases;                  # The test cases names in argv
 our $opt_embedded_server;
 # -1 indicates use default, override with env.var.
 our $opt_ctest= env_or_val(MTR_UNIT_TESTS => -1);
+our $opt_ctest_report;
 # Unit test report stored here for delayed printing
 my $ctest_report;
 
@@ -295,6 +296,7 @@ our $opt_user = "root";
 
 our $opt_valgrind= 0;
 my $opt_valgrind_mysqld= 0;
+my $opt_valgrind_clients= 0;
 my $opt_valgrind_mysqltest= 0;
 my @default_valgrind_args= ("--show-reachable=yes");
 my @valgrind_args;
@@ -323,6 +325,8 @@ our $opt_warnings= 1;
 our $ndbcluster_enabled= 0;
 my $opt_include_ndbcluster= 0;
 my $opt_skip_ndbcluster= 0;
+
+my $opt_skip_sys_schema= 0;
 
 my $exe_ndbd;
 my $exe_ndbmtd;
@@ -373,6 +377,9 @@ sub main {
   }
   if (!$opt_suites) {
     $opt_suites= $DEFAULT_SUITES;
+  }
+  if ($opt_skip_sys_schema) {
+    $opt_suites =~ s/,sysschema//;
   }
   mtr_report("Using suites: $opt_suites") unless @opt_cases;
 
@@ -533,7 +540,7 @@ sub main {
 
   push @$completed, run_ctest() if $opt_ctest;
 
-  if ($opt_valgrind) {
+  if ($opt_valgrind_mysqld) {
     # Create minimalistic "test" for the reporting
     my $tinfo = My::Test->new
       (
@@ -1090,6 +1097,7 @@ sub command_line_setup {
 	     'combination=s'            => \@opt_combinations,
              'skip-combinations'        => \&collect_option,
              'experimental=s'           => \@opt_experimentals,
+             'skip-sys-schema'          => \$opt_skip_sys_schema,
 	     # skip-im is deprecated and silently ignored
 	     'skip-im'                  => \&ignore_option,
 
@@ -1142,6 +1150,7 @@ sub command_line_setup {
              'gcov'                     => \$opt_gcov,
              'gprof'                    => \$opt_gprof,
              'valgrind|valgrind-all'    => \$opt_valgrind,
+	     'valgrind-clients'         => \$opt_valgrind_clients,
              'valgrind-mysqltest'       => \$opt_valgrind_mysqltest,
              'valgrind-mysqld'          => \$opt_valgrind_mysqld,
              'valgrind-options=s'       => sub {
@@ -1200,6 +1209,7 @@ sub command_line_setup {
 	     'report-times'             => \$opt_report_times,
 	     'result-file'              => \$opt_resfile,
 	     'unit-tests!'              => \$opt_ctest,
+	     'unit-tests-report!'	=> \$opt_ctest_report,
 	     'stress=s'                 => \$opt_stress,
 
              'help|h'                   => \$opt_usage,
@@ -1481,7 +1491,7 @@ sub command_line_setup {
   {
     $opt_tmpdir=       "$opt_vardir/tmp" unless $opt_tmpdir;
 
-    if (check_socket_path_length("$opt_tmpdir/mysql_testsocket.sock"))
+    if (check_socket_path_length("$opt_tmpdir/mysql_testsocket.sock",$opt_parallel))
     {
       mtr_report("Too long tmpdir path '$opt_tmpdir'",
 		 " creating a shorter one...");
@@ -1648,12 +1658,21 @@ sub command_line_setup {
   }
 
   # --------------------------------------------------------------------------
-  # Don't run ctest if tests or suites named
+  # Set default values for opt_ctest (--unit-tests)
   # --------------------------------------------------------------------------
 
-  $opt_ctest= 0 if $opt_ctest == -1 && ($opt_suites || @opt_cases);
-  # Override: disable if running in the PB test environment
-  $opt_ctest= 0 if $opt_ctest == -1 && defined $ENV{PB2WORKDIR};
+  if ($opt_ctest == -1) {
+    if (defined $opt_ctest_report && $opt_ctest_report) {
+      # Turn on --unit-tests by default if --unit-tests-report is used
+      $opt_ctest= 1;
+    } elsif ($opt_suites || @opt_cases) {
+      # Don't run ctest if tests or suites named
+      $opt_ctest= 0;
+    } elsif (defined $ENV{PB2WORKDIR}) {
+      # Override: disable if running in the PB test environment
+      $opt_ctest= 0;
+    }
+  }
 
   # --------------------------------------------------------------------------
   # Check use of wait-all
@@ -1699,6 +1718,8 @@ sub command_line_setup {
     mtr_report("Turning on valgrind for all executables");
     $opt_valgrind= 1;
     $opt_valgrind_mysqld= 1;
+    # Enable this when mysqlpump and mysqlbinlog are fixed.
+    # $opt_valgrind_clients= 1;
     $opt_valgrind_mysqltest= 1;
 
     # Increase the timeouts when running with valgrind
@@ -1710,6 +1731,11 @@ sub command_line_setup {
   elsif ( $opt_valgrind_mysqld )
   {
     mtr_report("Turning on valgrind for mysqld(s) only");
+    $opt_valgrind= 1;
+  }
+  elsif ( $opt_valgrind_clients )
+  {
+    mtr_report("Turning on valgrind for test clients");
     $opt_valgrind= 1;
   }
   elsif ( $opt_valgrind_mysqltest )
@@ -2127,12 +2153,16 @@ sub client_debug_arg($$) {
 
 
 sub client_arguments ($;$) {
- my $client_name= shift;
+  my $client_name= shift;
   my $group_suffix= shift;
   my $client_exe= mtr_exe_exists("$path_client_bindir/$client_name");
 
   my $args;
   mtr_init_args(\$args);
+  if ( $opt_valgrind_clients )
+  {
+    valgrind_client_arguments($args, \$client_exe);
+  }
   mtr_add_arg($args, "--defaults-file=%s", $path_config_file);
   if (defined($group_suffix)) {
     mtr_add_arg($args, "--defaults-group-suffix=%s", $group_suffix);
@@ -2149,7 +2179,11 @@ sub client_arguments_no_grp_suffix($) {
   my $client_name= shift;
   my $client_exe= mtr_exe_exists("$path_client_bindir/$client_name");
   my $args;
-
+  mtr_init_args(\$args);
+  if ( $opt_valgrind_clients )
+  {
+    valgrind_client_arguments($args, \$client_exe);
+  }
   return mtr_args2str($client_exe, @$args);
 }
 
@@ -2167,6 +2201,10 @@ sub mysqlslap_arguments () {
 
   my $args;
   mtr_init_args(\$args);
+  if ( $opt_valgrind_clients )
+  {
+    valgrind_client_arguments($args, \$exe);
+  }
   mtr_add_arg($args, "--defaults-file=%s", $path_config_file);
   client_debug_arg($args, "mysqlslap");
   return mtr_args2str($exe, @$args);
@@ -2179,6 +2217,10 @@ sub mysqldump_arguments ($) {
 
   my $args;
   mtr_init_args(\$args);
+  if ( $opt_valgrind_clients )
+  {
+    valgrind_client_arguments($args, \$exe);
+  }
   mtr_add_arg($args, "--defaults-file=%s", $path_config_file);
   mtr_add_arg($args, "--defaults-group-suffix=%s", $group_suffix);
   client_debug_arg($args, "mysqldump-$group_suffix");
@@ -2189,8 +2231,8 @@ sub mysqldump_arguments ($) {
 sub mysql_client_test_arguments(){
   my $exe;
   # mysql_client_test executable may _not_ exist
-  $exe= mtr_exe_maybe_exists(vs_config_dirs('tests', 'mysql_client_test'),
-			     "$basedir/tests/mysql_client_test",
+  $exe= mtr_exe_maybe_exists(vs_config_dirs('testclients', 'mysql_client_test'),
+			     "$basedir/testclients/mysql_client_test",
 			     "$basedir/bin/mysql_client_test");
   return "" unless $exe;
   my $args;
@@ -2206,7 +2248,23 @@ sub mysql_client_test_arguments(){
   return mtr_args2str($exe, @$args);
 }
 
+sub mysqlpump_arguments ($) {
+  my($group_suffix) = @_;
+  my $exe= mtr_exe_exists(vs_config_dirs('client/dump','mysqlpump'),
+                          "$basedir/client/mysqlpump",
+                          "$path_client_bindir/mysqlpump");
 
+  my $args;
+  mtr_init_args(\$args);
+  if ( $opt_valgrind_clients )
+  {
+    valgrind_client_arguments($args, \$exe);
+  }
+  mtr_add_arg($args, "--defaults-file=%s", $path_config_file);
+  mtr_add_arg($args, "--defaults-group-suffix=%s", $group_suffix);
+  client_debug_arg($args, "mysqlpump-$group_suffix");
+  return mtr_args2str($exe, @$args);
+}
 #
 # Set environment to be used by childs of this process for
 # things that are constant during the whole lifetime of mysql-test-run
@@ -2478,6 +2536,8 @@ sub environment_setup {
   $ENV{'MYSQL_IMPORT'}=                client_arguments("mysqlimport");
   $ENV{'MYSQL_SHOW'}=                  client_arguments("mysqlshow");
   $ENV{'MYSQL_CONFIG_EDITOR'}=         client_arguments_no_grp_suffix("mysql_config_editor");
+  $ENV{'MYSQL_PUMP'}=                  mysqlpump_arguments(".1");
+
   if (!IS_WINDOWS)
   {
     $ENV{'MYSQL_INSTALL_DB'}=         client_arguments_no_grp_suffix("mysql_install_db");
@@ -2506,8 +2566,8 @@ sub environment_setup {
   # some versions, test using it should be skipped
   # ----------------------------------------------------
   my $exe_bug25714=
-      mtr_exe_maybe_exists(vs_config_dirs('tests', 'bug25714'),
-                           "$basedir/tests/bug25714");
+      mtr_exe_maybe_exists(vs_config_dirs('testclients', 'bug25714'),
+                           "$basedir/testclients/bug25714");
   $ENV{'MYSQL_BUG25714'}=  native_path($exe_bug25714);
 
   # ----------------------------------------------------
@@ -2759,7 +2819,7 @@ sub setup_vardir() {
   # On some operating systems, there is a limit to the length of a
   # UNIX domain socket's path far below PATH_MAX.
   # Don't allow that to happen
-  if (check_socket_path_length("$opt_tmpdir/testsocket.sock")){
+  if (check_socket_path_length("$opt_tmpdir/mysql_testsocket.sock",$opt_parallel)) {
     mtr_error("Socket path '$opt_tmpdir' too long, it would be ",
 	      "truncated and thus not possible to use for connection to ",
 	      "MySQL Server. Set a shorter with --tmpdir=<path> option");
@@ -2966,7 +3026,7 @@ sub check_ndbcluster_support ($) {
   mtr_report(" - enabling ndbcluster");
   $ndbcluster_enabled= 1;
   # Add MySQL Cluster test suites
-  $DEFAULT_SUITES.=",ndb,ndb_binlog,rpl_ndb,ndb_rpl,ndb_memcache,ndbcluster";
+  $DEFAULT_SUITES.=",ndb,ndb_binlog,rpl_ndb,ndb_rpl,ndb_memcache,ndbcluster,ndb_ddl";
   return;
 }
 
@@ -3215,29 +3275,45 @@ sub ndbd_start {
   return;
 }
 
-
+# Start memcached with the special ndb_engine.so plugin
+# making it use NDB as backend.
 sub memcached_start {
   my ($cluster, $memcached) = @_;
 
   my $name = $memcached->name();
   mtr_verbose("memcached_start '$name'");
 
-  my $found_perl_source = my_find_file($basedir,
-     ["storage/ndb/memcache",        # source
-      "mysql-test/lib",              # install
-      "share/mysql-test/lib"],       # install
-      "memcached_path.pl", NOT_REQUIRED);
+  # Clear env used by include/have_memcached.inc
+  $ENV{'NDB_MEMCACHED_STARTED'} = 0;
 
-  mtr_verbose("Found memcache script: '$found_perl_source'");
-  $found_perl_source ne "" or return;
-
+  # Look for the ndb_engine.so memcache plugin
   my $found_so = my_find_file($bindir,
     ["storage/ndb/memcache",        # source or build
      "lib", "lib64"],               # install
-    "ndb_engine.so");
+    "ndb_engine.so", NOT_REQUIRED);
+  if ($found_so eq "")
+  {
+    # The ndb_engine memcache plugin is not a mandatory
+    # component, silently skip to start memcached if it's not
+    # found
+    mtr_verbose("Could not find the ndb_engine memcache plugin");
+    return;
+  }
   mtr_verbose("Found memcache plugin: '$found_so'");
+ 
+  # Look for the generated perl script which tells
+  # location of memcached etc.
+  my $found_perl_source = my_find_file($bindir,
+     ["storage/ndb/memcache",        # source
+      "mysql-test/lib",              # install
+      "share/mysql-test/lib"],       # install
+      "memcached_path.pl");
+  mtr_verbose("Found memcache script: '$found_perl_source'");
 
+  # Source the found perl script which tells
+  # location of memcached etc.
   require "$found_perl_source";
+
   if(! memcached_is_available())
   {
     mtr_error("Memcached not available.");
@@ -3245,15 +3321,32 @@ sub memcached_start {
   my $exe = "";
   if(memcached_is_bundled())
   {
+    # The bundled memcached has been built
+    # and made part of the package, find where
+    # it ended up and use it.
     $exe = my_find_bin($bindir,
-    ["libexec", "sbin", "bin", "storage/ndb/memcache/extra/memcached"],
-    "memcached", NOT_REQUIRED);
+      ["libexec",
+       "sbin",
+       "bin",
+       "storage/ndb/memcache/extra/memcached"],
+      "memcached");
+    mtr_verbose("Found bundled memcached '$exe'");
   }
   else
   {
+    # External memcached has been used to build ndb_engine.so
+    # The path to that memcached has been hardcoded in
+    # memcached_path.pl, use that path.
+    # This requires same machine as build or memcached
+    # also installed in same location as when it was built.
     $exe = get_memcached_exe_path();
+    if ($exe eq "" or ! -x $exe)
+    {
+      mtr_error("Failed to find memcached binary '$exe'");
+    }
+    mtr_verbose("Using memcached binary '$exe'");
   }
-  $exe ne "" or mtr_error("Failed to find memcached.");
+
 
   my $args;
   mtr_init_args(\$args);
@@ -3290,6 +3383,9 @@ sub memcached_start {
   mtr_verbose("Started $proc");
 
   $memcached->{proc} = $proc;
+  
+  # Set env used by include/have_memcached.inc
+  $ENV{'NDB_MEMCACHED_STARTED'} = 1;
 
   return;
 }
@@ -3606,11 +3702,6 @@ sub mysql_install_db {
   mtr_add_arg($args, "--lc-messages-dir=%s", $install_lang);
   mtr_add_arg($args, "--character-sets-dir=%s", $install_chsdir);
 
-  # On some old linux kernels, aio on tmpfs is not supported
-  # Remove this if/when Bug #58421 fixes this in the server
-  if ($^O eq "linux" && $opt_mem) {
-    mtr_add_arg($args, "--loose-skip-innodb-use-native-aio");
-  }
   # Do not generate SSL/RSA certificates automatically.
   mtr_add_arg($args, "--loose-auto_generate_certs=OFF");
   mtr_add_arg($args, "--loose-sha256_password_auto_generate_rsa_keys=OFF");
@@ -3703,7 +3794,9 @@ sub mysql_install_db {
               "in working directory.");
   }
 
-  if ( ! $opt_embedded_server )
+  # Only load the full sys schema if enabled and not running embedded tests,
+  # otherwise create an empty schema
+  if ( ! $opt_skip_sys_schema && ! $opt_embedded_server )
   {
     # Add the sys schema, but only in non-embedded installs
     my $path_sys_schema= my_find_file($install_basedir,
@@ -3716,6 +3809,10 @@ sub mysql_install_db {
     {
       mtr_appendfile_to_file($path_sys_schema, $bootstrap_sql_file);
     }
+  }
+  else
+  {
+      mtr_tofile($bootstrap_sql_file, "CREATE DATABASE sys;\n");
   }
 
   # Make sure no anonymous accounts exists as a safety precaution
@@ -3758,6 +3855,13 @@ sub mysql_install_db {
     mtr_error("Error executing mysqld --bootstrap\n" .
               "Could not install system database from $bootstrap_sql_file\n" .
 	      "see $path_bootstrap_log for errors");
+  }
+
+  # Remove the auto.cnf so that a new auto.cnf is generated
+  # for master and slaves when the server is restarted
+  if (-f "$datadir/auto.cnf")
+  {
+    unlink "$datadir/auto.cnf";
   }
 }
 
@@ -4308,6 +4412,22 @@ sub run_testcase ($) {
       {
 	exit(0);
       }
+    }
+    if ($opt_manual_gdb || $opt_manual_lldb || $opt_manual_ddd ||
+        $opt_manual_debug || $opt_manual_dbx)
+    {
+      # The configuration has been set up and user has been prompted for
+      # how to start the servers manually in the requested deugger.
+      # At this time mtr.pl have no knowledge about the server processes
+      # and thus can't wait for them to finish or antyhing. In order to make
+      # it apparent to user what to do next, just print message and hang
+      # around until user kills mtr.pl
+      mtr_print("User prompted how to start server(s) manually in debugger");
+      while (1)
+      {
+        mtr_milli_sleep(100);
+      }
+      exit(0); # Never reached
     }
     mtr_print("Waiting for server(s) to exit...");
     if ( $opt_wait_all ) {
@@ -6056,11 +6176,6 @@ sub start_servers($) {
       # Save this test case information, so next can examine it
       $mysqld->{'started_tinfo'}= $tinfo;
 
-      # Wait until server's uuid is generated. This avoids that master and
-      # slave generate the same UUID sporadically.
-      sleep_until_file_created("$datadir/auto.cnf", $opt_start_timeout,
-                               $mysqld->{'proc'});
-
     }
 
   }
@@ -6599,6 +6714,28 @@ sub strace_server_arguments {
   $$exe= "strace";
 }
 
+
+#
+# Modify the exe and args so that client program is run in valgrind
+#
+sub valgrind_client_arguments {
+  my $args= shift;
+  my $exe=  shift;
+  mtr_add_arg($args, "--tool=memcheck");
+  mtr_add_arg($args, "--quiet");
+  mtr_add_arg($args, "--leak-check=full");
+  mtr_add_arg($args, "--show-leak-kinds=definite,indirect");
+  mtr_add_arg($args, "--errors-for-leak-kinds=definite,indirect");
+  mtr_add_arg($args, "--num-callers=16");
+  mtr_add_arg($args, "--suppressions=%s/valgrind.supp", $glob_mysql_test_dir)
+    if -f "$glob_mysql_test_dir/valgrind.supp";
+  mtr_add_arg($args, "--error-exitcode=42");
+
+  mtr_add_arg($args, $$exe);
+  $$exe= $opt_valgrind_path || "valgrind";
+}
+
+
 #
 # Modify the exe and args so that program is run in valgrind
 #
@@ -6629,6 +6766,9 @@ sub valgrind_arguments {
 
   # Add valgrind options, can be overriden by user
   mtr_add_arg($args, '%s', $_) for (@valgrind_args);
+
+  # Non-zero exit code, to ensure failure is reported.
+  mtr_add_arg($args, "--error-exitcode=42");
 
   mtr_add_arg($args, $$exe);
 
@@ -6766,6 +6906,8 @@ sub run_ctest() {
 
   open (CTEST, " > $ctfile") or die ("Could not open output file $ctfile");
 
+  $ctest_report .= $ctest_out if $opt_ctest_report;
+
   # Put ctest output in log file, while analyzing results
   for (split ('\n', $ctest_out)) {
     print CTEST "$_\n";
@@ -6883,6 +7025,9 @@ Options to control what test suites or cases to run
   skip-test-list=FILE   Skip the tests listed in FILE. Each line in the file
                         is an entry and should be formatted as: 
                         <TESTNAME> : <COMMENT>
+  skip-sys-schema       Skip loading of the sys schema, and running the
+                        sysschema test suite. An empty sys database is
+                        still created
 
 Options that specify ports
 
@@ -6965,6 +7110,7 @@ Options for valgrind
   valgrind              Run the "mysqltest" and "mysqld" executables using
                         valgrind with default options
   valgrind-all          Synonym for --valgrind
+  valgrind-clients      Run clients started by .test files with valgrind
   valgrind-mysqltest    Run the "mysqltest" and "mysql_client_test" executable
                         with valgrind
   valgrind-mysqld       Run the "mysqld" executable with valgrind
@@ -7033,6 +7179,7 @@ Misc options
   nounit-tests          Do not run unit tests. Normally run if configured
                         and if not running named tests/suites
   unit-tests            Run unit tests even if they would otherwise not be run
+  unit-tests-report     Include report of every test included in unit tests.
   stress=ARGS           Run stress test, providing options to
                         mysql-stress-test.pl. Options are separated by comma.
 

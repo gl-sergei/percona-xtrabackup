@@ -51,10 +51,10 @@ local_init(const char *root)
 	ds_ctxt_t *ctxt;
 
 	if (my_mkdir(root, 0777, MYF(0)) < 0
-	    && my_errno != EEXIST && my_errno != EISDIR)
+	    && my_errno() != EEXIST && my_errno() != EISDIR)
 	{
 		my_error(EE_CANT_MKDIR, MYF(ME_BELL),
-			 root, my_errno);
+			 root, my_errno());
 		return NULL;
 	}
 
@@ -82,9 +82,9 @@ local_open(ds_ctxt_t *ctxt, const char *path,
 
 	/* Create the directory if needed */
 	dirname_part(dirpath, fullpath, &dirpath_len);
-	if (my_mkdir(dirpath, 0777, MYF(0)) < 0 && my_errno != EEXIST) {
+	if (my_mkdir(dirpath, 0777, MYF(0)) < 0 && my_errno() != EEXIST) {
 		my_error(EE_CANT_MKDIR, MYF(ME_BELL),
-			 dirpath, my_errno);
+			 dirpath, my_errno());
 		return NULL;
 	}
 

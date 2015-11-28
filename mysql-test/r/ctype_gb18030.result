@@ -1122,7 +1122,7 @@ HEX(WEIGHT_STRING(CAST(0x81309D3081309D3081309D30 AS CHAR), 25, 4, 0xC0))
 #
 SET sql_mode = 'NO_ENGINE_SUBSTITUTION';
 Warnings:
-Warning	3129	Unsetting sql mode 'NO_AUTO_CREATE_USER' is deprecated. It will be made read-only in a future release.
+Warning	3090	Changing sql mode 'NO_AUTO_CREATE_USER' is deprecated. It will be removed in a future release.
 SELECT is_ipv4(inet_ntoa('1'));
 is_ipv4(inet_ntoa('1'))
 1
@@ -1794,6 +1794,10 @@ AA95C0E59E509AED	1
 CCE7	1
 99CC	1
 8BF5819AEDC3	1
+DROP TABLE t1;
+CREATE TABLE t1 (a int) ENGINE=InnoDB;
+LOAD DATA INFILE '../../std_data/bug21542698.dat' INTO TABLE t1 CHARACTER SET gb18030;
+ERROR HY000: Invalid gb18030 character string: 'MZ'
 DROP TABLE t1;
 DROP DATABASE gb18030;
 SET sql_mode = default;

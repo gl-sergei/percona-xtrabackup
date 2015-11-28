@@ -26,8 +26,7 @@
        Other OSes - pthread
   2) my_cond_*()
        Functions that use SAFE_MUTEX (default for debug).
-       FAST_MUTEX (default for release - non Windows). If neither
-       of these apply, native_cond_*() is used.
+       Otherwise native_cond_*() is used.
   3) mysql_cond*()
        Functions that include Performance Schema instrumentation.
        See include/mysql/psi/mysql_thread.h
@@ -51,6 +50,7 @@ typedef pthread_cond_t native_cond_t;
 
 static DWORD get_milliseconds(const struct timespec *abstime)
 {
+#ifndef HAVE_STRUCT_TIMESPEC
   long long millis;
   union ft64 now;
 
@@ -81,6 +81,14 @@ static DWORD get_milliseconds(const struct timespec *abstime)
     millis= UINT_MAX;
 
   return (DWORD)millis;
+#else
+  /*
+    Convert timespec to millis and subtract current time.
+    my_getsystime() returns time in 100 ns units.
+  */
+  return (DWORD)(abstime->tv_sec * 1000 + abstime->tv_nsec / 1000000 -
+                 my_getsystime() / 10000);
+#endif
 }
 #endif /* _WIN32 */
 
@@ -121,7 +129,9 @@ static inline int native_cond_timedwait(native_cond_t *cond,
 static inline int native_cond_wait(native_cond_t *cond, native_mutex_t *mutex)
 {
 #ifdef _WIN32
-  return native_cond_timedwait(cond, mutex, NULL);
+  if (!SleepConditionVariableCS(cond, mutex, INFINITE))
+    return ETIMEDOUT;
+  return 0;
 #else
   return pthread_cond_wait(cond, mutex);
 #endif
@@ -164,8 +174,6 @@ static inline int my_cond_timedwait(native_cond_t *cond, my_mutex_t *mp,
 {
 #ifdef SAFE_MUTEX
   return safe_cond_timedwait(cond, mp, abstime, file, line);
-#elif defined MY_PTHREAD_FASTMUTEX
-  return native_cond_timedwait(cond, &mp->mutex, abstime);
 #else
   return native_cond_timedwait(cond, mp, abstime);
 #endif
@@ -179,8 +187,6 @@ static inline int my_cond_wait(native_cond_t *cond, my_mutex_t *mp
 {
 #ifdef SAFE_MUTEX
   return safe_cond_wait(cond, mp, file, line);
-#elif defined MY_PTHREAD_FASTMUTEX
-  return native_cond_wait(cond, &mp->mutex);
 #else
   return native_cond_wait(cond, mp);
 #endif

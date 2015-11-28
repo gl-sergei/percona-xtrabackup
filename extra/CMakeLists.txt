@@ -1,4 +1,4 @@
-# Copyright (c) 2006, 2014, Oracle and/or its affiliates. All rights reserved.
+# Copyright (c) 2006, 2015, Oracle and/or its affiliates. All rights reserved.
 # 
 # This program is free software; you can redistribute it and/or modify
 # it under the terms of the GNU General Public License as published by
@@ -22,6 +22,8 @@ ${CMAKE_BINARY_DIR}/storage/ndb/include
 ${CMAKE_SOURCE_DIR}/storage/ndb/include/ndbapi
 ${CMAKE_SOURCE_DIR}/storage/ndb/include/mgmapi)
 
+INCLUDE(${MYSQL_CMAKE_SCRIPT_DIR}/compile_flags.cmake)
+
 # Default install component for the files is Server here
 SET(MYSQL_INSTALL_COMPONENT Server)
 
@@ -31,6 +33,14 @@ IF(NOT CMAKE_CROSSCOMPILING)
  SET_TARGET_PROPERTIES(comp_err PROPERTIES LINKER_LANGUAGE CXX)
 ENDIF()
 
+IF (BUILD_BUNDLED_LZ4)
+  ADD_CONVENIENCE_LIBRARY(lz4_lib
+    lz4/lz4.c
+    lz4/lz4frame.c
+    lz4/lz4hc.c
+    lz4/xxhash.c
+  )
+ENDIF()
 
 ADD_CUSTOM_COMMAND(OUTPUT ${PROJECT_BINARY_DIR}/include/mysqld_error.h 
                    ${PROJECT_BINARY_DIR}/sql/share/english/errmsg.sys

@@ -1,5 +1,5 @@
 /*
-   Copyright (c) 2003, 2014, Oracle and/or its affiliates. All rights reserved.
+   Copyright (c) 2003, 2015, Oracle and/or its affiliates. All rights reserved.
 
    This program is free software; you can redistribute it and/or modify
    it under the terms of the GNU General Public License as published by
@@ -33,6 +33,7 @@
 #include <AttributeHeader.hpp>
 #include <KeyDescriptor.hpp>
 #include <Checksum.hpp>
+#include <signaldata/NodeRecoveryStatusRep.hpp>
 #include <signaldata/DictSchemaInfo.hpp>
 #include <signaldata/DictTabInfo.hpp>
 #include <signaldata/DropTabFile.hpp>
@@ -556,6 +557,10 @@ void Dbdict::execCONTINUEB(Signal* signal)
     sendSignal(calcDictBlockRef(c_masterNodeId), GSN_GET_TABINFOREQ, signal,
                GetTabInfoReq::SignalLength, JBB);
     break;
+  case ZNEXT_GET_TAB_REQ:
+    jam();
+    startNextGetTabInfoReq(signal);
+    break;
   default :
     ndbrequire(false);
     break;
@@ -597,7 +602,7 @@ void Dbdict::packTableIntoPages(Signal* signal)
       jam();
       sendGET_TABINFOREF(signal, &req_copy,
                          GetTabInfoRef::TableNotDefined, __LINE__);
-      initRetrieveRecord(0, 0, 0);
+      initRetrieveRecord(signal, 0, 0);
       return;
     }
 
@@ -617,7 +622,7 @@ void Dbdict::packTableIntoPages(Signal* signal)
         // cannot see another uncommitted trans
         sendGET_TABINFOREF(signal, &req_copy,
                            (GetTabInfoRef::ErrorCode)err, __LINE__);
-        initRetrieveRecord(0, 0, 0);
+        initRetrieveRecord(signal, 0, 0);
         return;
       }
     }
@@ -645,7 +650,7 @@ void Dbdict::packTableIntoPages(Signal* signal)
       jam();
       sendGET_TABINFOREF(signal, &req_copy,
                          GetTabInfoRef::TableNotDefined, __LINE__);
-      initRetrieveRecord(0, 0, 0);
+      initRetrieveRecord(signal, 0, 0);
       return;
     }
 
@@ -662,7 +667,7 @@ void Dbdict::packTableIntoPages(Signal* signal)
       Uint32 dstRef = c_retrieveRecord.blockRef;
       sendSignal(dstRef, GSN_GET_TABINFOREF, signal,
                  GetTabInfoRef::SignalLength, JBB);
-      initRetrieveRecord(0,0,0);
+      initRetrieveRecord(signal,0,0);
       return;
     }
     break;
@@ -2098,6 +2103,7 @@ Dbdict::Dbdict(Block_context& ctx):
   c_attributeRecordHash(c_attributeRecordPool),
   c_obj_name_hash(c_obj_pool),
   c_obj_id_hash(c_obj_pool),
+  c_gettabinforeq_q(*this),
   c_schemaOpHash(c_schemaOpPool),
   c_schemaTransHash(c_schemaTransPool),
   c_schemaTransList(c_schemaTransPool),
@@ -2449,7 +2455,7 @@ void Dbdict::initWriteSchemaRecord()
 
 void Dbdict::initRetrieveRecord(Signal* signal, Uint32 i, Uint32 returnCode)
 {
-  c_retrieveRecord.busyState = false;
+  jam();
   c_retrieveRecord.blockRef = 0;
   c_retrieveRecord.m_senderData = RNIL;
   c_retrieveRecord.tableId = RNIL;
@@ -2457,6 +2463,26 @@ void Dbdict::initRetrieveRecord(Signal* signal, Uint32 i, Uint32 returnCode)
   c_retrieveRecord.retrievedNoOfPages = 0;
   c_retrieveRecord.retrievedNoOfWords = 0;
   c_retrieveRecord.m_useLongSig = false;
+
+  if (!c_gettabinforeq_q.isEmpty())
+  {
+    jam();
+    ndbrequire(signal != NULL);
+
+    /* Take a real-time break now, CONTINUEB will
+     * start processing the next request.
+     * busyState = true will maintain fairness
+     */
+    signal->theData[0] = ZNEXT_GET_TAB_REQ;
+    sendSignal(reference(), GSN_CONTINUEB, signal,
+               1, JBB);
+  }
+  else
+  {
+    /* Done */
+    c_retrieveRecord.busyState = false;
+  }
+
 }//initRetrieveRecord()
 
 void Dbdict::initSchemaRecord()
@@ -2984,6 +3010,9 @@ void Dbdict::execREAD_CONFIG_REQ(Signal* signal)
   bat[1].ClusterSize = ZSIZE_OF_PAGES_IN_WORDS * 4;
   bat[1].bits.q = ZLOG_SIZE_OF_PAGES_IN_WORDS; // 2**13 = 8192 elements
   bat[1].bits.v = 5;  // 32 bits per element
+
+  /* Initialize Segment Sub pool in GetTabInfoReq queue */
+  ndbrequire(c_gettabinforeq_q.init(jamBuffer()));
 
   initCommonData();
   initRecords();
@@ -4557,8 +4586,10 @@ Dbdict::restart_fromWriteSchemaFile(Signal* signal,
 }
 
 void
-Dbdict::execGET_TABINFOREF(Signal* signal){
+Dbdict::execGET_TABINFOREF(Signal* signal)
+{
   jamEntry();
+
   /** 
    * Make copy of 'ref' such that we can build 'req' without overwriting 
    * source.
@@ -4569,6 +4600,13 @@ Dbdict::execGET_TABINFOREF(Signal* signal){
   if (ref_copy.errorCode == GetTabInfoRef::Busy)
   {
     jam();
+
+    const Uint32 senderRef = ref_copy.senderRef;
+    ndbout_c("DICT : GET_TABINFOREF(Busy)  Retained for upgrade "
+             "compatibility.  Sender node : %u block : %u version : %x",
+             refToNode(senderRef),
+             refToMain(senderRef),
+             getNodeInfo(refToNode(senderRef)).m_version);
 
     /**
      * Master is busy. Send delayed CONTINUEB to self to add some delay, then
@@ -10449,22 +10487,22 @@ void Dbdict::execGET_TABINFOREQ(Signal* signal)
     return;
   }
 
-  GetTabInfoReq * const req = (GetTabInfoReq *)&signal->theData[0];
-  SectionHandle handle(this, signal);
-
   /**
-   * If I get a GET_TABINFO_REQ from myself
-   * it's is a one from the time queue
+   * First stage response / queueing handled here
+   * Actual processing is done in doGET_TABINFOREQ()
    */
-  bool fromTimeQueue = (signal->senderBlockRef() == reference());
 
-  if (ERROR_INSERTED(6215) && fromTimeQueue == false)
+  GetTabInfoReq * const req = (GetTabInfoReq *)&signal->theData[0];
+
+  if (ERROR_INSERTED(6215) &&
+      (signal->senderBlockRef() != reference()))
   {
     jam();
     // API tries 100 times and (80/100)^100 is quite small..
     if (rand() % 100 >= 20)
     {
       jam();
+      SectionHandle handle(this, signal);
       releaseSections(handle);
       sendGET_TABINFOREF(signal, req, GetTabInfoRef::Busy, __LINE__);
       return;
@@ -10472,62 +10510,69 @@ void Dbdict::execGET_TABINFOREQ(Signal* signal)
     // no CLEAR_ERROR_INSERT_VALUE
   }
 
-  if (c_retrieveRecord.busyState && fromTimeQueue == true) {
-    jam();
-
-    sendSignalWithDelay(reference(), GSN_GET_TABINFOREQ, signal, 30,
-			signal->length(),
-			&handle);
-    return;
-  }//if
-
-  const Uint32 MAX_WAITERS = (MAX_NDB_NODES*3)/2;
-
-  // Test sending GET_TABINFOREF to DICT (Bug#14647210).
-  const bool testRef = refToMain(signal->senderBlockRef()) == DBDICT &&
-    ERROR_INSERTED_CLEAR(6026);
-  
-  if ((c_retrieveRecord.busyState || testRef) && fromTimeQueue == false)
+  const bool testRef = (ERROR_INSERTED(6026) &&
+                        refToMain(signal->senderBlockRef()) == DBDICT &&
+                        (signal->senderBlockRef() != reference()));
+  if (testRef)
   {
-    jam();
-
-    const Uint32 senderVersion = 
-      getNodeInfo(refToNode(signal->senderBlockRef())).m_version;
-
-    /**
-     * DBDICT may possibly generate large numbers of signals if many nodes
-     * are started at the same time, so we do not want to queue those using
-     * sendSignalWithDelay(). See also Bug#14647210. Signals from other 
-     * blocks we do queue localy, since these blocks may not retry on
-     * GET_TABINFOREF with error==busy, and since they also should not 
-     * generate large bursts of GET_TABINFOREQ.
-     */
-    if (c_retrieveRecord.noOfWaiters < MAX_WAITERS &&
-        (refToMain(signal->senderBlockRef()) != DBDICT ||
-         !ndbd_dict_get_tabinforef_implemented(senderVersion)))
-    {
-      jam();
-      c_retrieveRecord.noOfWaiters++;
-
-      sendSignalWithDelay(reference(), GSN_GET_TABINFOREQ, signal, 30,
-			  signal->length(),
-			  &handle);
-      return;
-    }
-
-    if (!c_retrieveRecord.busyState)
-    {
-      ndbout << "Sending extra TABINFOREF to node"
-             << refToNode(signal->senderBlockRef()) << endl;
-    }
+    ndbout_c("DICT : ERROR_INSERT(6026) simulating old internal "
+             "GET_TABINFOREF");
+    CLEAR_ERROR_INSERT_VALUE;
+    SectionHandle handle(this, signal);
     releaseSections(handle);
     sendGET_TABINFOREF(signal, req, GetTabInfoRef::Busy, __LINE__);
     return;
   }
 
-  if(fromTimeQueue){
+  if (c_retrieveRecord.busyState)
+  {
     jam();
-    c_retrieveRecord.noOfWaiters--;
+    NodeInfo sendersNI = getNodeInfo(refToNode(req->senderRef));
+    bool internalReq = (sendersNI.m_type == NodeInfo::DB);
+
+    /* Queue request
+     * Will be processed later when current requests + queue are completed
+     */
+    if (!c_gettabinforeq_q.tryEnqReq(internalReq,
+                                     signal))
+    {
+      jam();
+      /**
+       * Enqueue failure resulting in Busy signal only allowed for
+       * external requests
+       */
+      ndbrequire(!internalReq);
+
+      SectionHandle handle(this, signal);
+      releaseSections(handle);
+
+      sendGET_TABINFOREF(signal, req, GetTabInfoRef::Busy, __LINE__);
+    }
+
+    return;
+  }
+
+  /* Not busy, cannot be anything queued... */
+  ndbrequire(c_gettabinforeq_q.isEmpty());
+
+  doGET_TABINFOREQ(signal);
+} // execGET_TABINFOREQ()
+
+void
+Dbdict::doGET_TABINFOREQ(Signal* signal)
+{
+  jam();
+  GetTabInfoReq * const req = (GetTabInfoReq *)&signal->theData[0];
+
+  SectionHandle handle(this, signal);
+
+  if(ERROR_INSERTED(6216))
+  {
+    ndbout_c("Delaying GSN_GET_TABINFOREQ\n");
+    sendSignalWithDelay(reference(), GSN_GET_TABINFOREQ, signal, 10000,
+                       signal->length(),
+                       &handle);
+    return;
   }
 
   const bool useLongSig = (req->requestType & GetTabInfoReq::LongSignalConf);
@@ -10578,7 +10623,7 @@ void Dbdict::execGET_TABINFOREQ(Signal* signal)
 
   // If istable/index, allow ADD_STARTED (not to ref)
 
-  D("execGET_TABINFOREQ" << V(transId) << " " << *objEntry);
+  D("doGET_TABINFOREQ" << V(transId) << " " << *objEntry);
 
   if (transId != 0 && transId == objEntry->m_transId)
   {
@@ -10598,6 +10643,15 @@ void Dbdict::execGET_TABINFOREQ(Signal* signal)
       return;
     }
   }
+
+  /**
+   * From this point we agree to process this request
+   * and are 'busy' w.r.t. GETTABINFOREQ.
+   * Further incoming GETTABINFOREQ signals will
+   * be queued or rejected.
+   * When we finish processing this one, we must
+   * start any queued req.
+   */
 
   c_retrieveRecord.busyState = true;
   c_retrieveRecord.blockRef = req->senderRef;
@@ -10675,7 +10729,7 @@ void Dbdict::execGET_TABINFOREQ(Signal* signal)
   signal->theData[2] = objEntry->m_tableType;
   signal->theData[3] = c_retrieveRecord.retrievePage;
   sendSignal(reference(), GSN_CONTINUEB, signal, len, JBB);
-}//execGET_TABINFOREQ()
+}//doGET_TABINFOREQ()
 
 void Dbdict::sendGetTabResponse(Signal* signal)
 {
@@ -20428,9 +20482,24 @@ Dbdict::execDICT_UNLOCK_ORD(Signal* signal)
   if (ord->lockType == DictLockReq::SumaStartMe ||
       ord->lockType == DictLockReq::SumaHandOver)
   {
+    Uint32 nodeId = refToNode(ord->senderRef);
     jam();
-    g_eventLogger->info("clearing SumaStartMe dict lock for %u", refToNode(ord->senderRef));
-    c_sub_startstop_lock.clear(refToNode(ord->senderRef));
+    g_eventLogger->info("clearing SumaStartMe dict lock for %u", nodeId);
+    c_sub_startstop_lock.clear(nodeId);
+
+    if (ord->lockType == DictLockReq::SumaHandOver)
+    {
+      /**
+       * Inform the master DIH that the SUMA handover is now completed, this
+       * is the very last phase of the node recovery. This code is only
+       * executed in the master node.
+       */
+      SumaHandoverCompleteRep *rep =
+        (SumaHandoverCompleteRep*)signal->getDataPtrSend();
+      rep->nodeId = nodeId;
+      EXECUTE_DIRECT(DBDIH, GSN_SUMA_HANDOVER_COMPLETE_REP, signal,
+                     SumaHandoverCompleteRep::SignalLength);
+    }
     return;
   }
 
@@ -20856,12 +20925,15 @@ void Dbdict::check_takeover_replies(Signal* signal)
             ndbout_c("New master locked transaction %u", trans_key);
 #endif
           }
+          trans_ptr.p->m_nodes.clear();
           trans_ptr.p->m_rollforward_op = -1;
           trans_ptr.p->m_rollforward_op_state = SchemaOp::OS_COMPLETED;
           trans_ptr.p->m_rollback_op = 0;
           trans_ptr.p->m_rollback_op_state = SchemaOp::OS_INITIAL;
           trans_ptr.p->m_lowest_trans_state = SchemaTrans::TS_ENDING;
           trans_ptr.p->m_highest_trans_state = SchemaTrans::TS_INITIAL;
+          trans_ptr.p->check_partial_rollforward = false;
+          trans_ptr.p->ressurected_op = false;
         }
 
         trans_ptr.p->m_isMaster = true;
@@ -21012,6 +21084,12 @@ void Dbdict::check_takeover_replies(Signal* signal)
 #ifdef VM_TRACE
         ndbout_c("Node %u had %u operations, master has %u",i , nodePtr.p->takeOverConf.op_count, masterNodePtr.p->takeOverConf.op_count);
 #endif
+
+        /** BEWARE:
+         * 'takeOverConf' is not valid if a node replied TAKEOVER_REF,
+         * in that case node was cleared from 'masterNodePtr.p->m_nodes'.
+         */
+        ndbassert(masterNodePtr.p->m_nodes.get(i));
         if (nodePtr.p->takeOverConf.op_count == 0)
         {
           if (SchemaTrans::weight(trans_ptr.p->m_state)
@@ -21037,43 +21115,8 @@ void Dbdict::check_takeover_replies(Signal* signal)
             // Is this possible??
           }
         }
-        else if (nodePtr.p->takeOverConf.op_count <
-                 masterNodePtr.p->takeOverConf.op_count)
-        {
-          jam();
-          /*
-              Operation is missing on slave
-          */
-          if (SchemaTrans::weight(trans_ptr.p->m_state) <
-              SchemaTrans::weight(SchemaTrans::TS_PREPARING))
-          {
-            /*
-              Last parsed operation is missing on slave, skip it
-              when aborting parse.
-            */
-            jam();
-#ifdef VM_TRACE
-            ndbout_c("Node %u did not have all operations for transaction %u, skip > %u", i, trans_ptr.p->trans_key, nodePtr.p->takeOverConf.highest_op);
-#endif
-            nodePtr.p->recoveryState = NodeRecord::RS_PARTIAL_ROLLBACK;
-            nodePtr.p->start_op = nodePtr.p->takeOverConf.highest_op;
-            nodePtr.p->start_op_state = nodePtr.p->takeOverConf.highest_op_state;
-          }
-          else
-          {
-            /*
-              Slave has already ended some operations
-            */
-            jam();
-#ifdef VM_TRACE
-            ndbout_c("Node %u did not have all operations for transaction %u, skip < %u", i, trans_ptr.p->trans_key, nodePtr.p->takeOverConf.lowest_op);
-#endif
-            nodePtr.p->recoveryState = NodeRecord::RS_PARTIAL_ROLLFORWARD;
-            nodePtr.p->start_op = nodePtr.p->takeOverConf.lowest_op;
-            nodePtr.p->start_op_state = nodePtr.p->takeOverConf.lowest_op_state;
-          }
-        }
-        else if (nodePtr.p->takeOverConf.op_count >
+        else if (!masterNodePtr.p->m_nodes.get(c_masterNodeId) ||
+                 nodePtr.p->takeOverConf.op_count >
                  masterNodePtr.p->takeOverConf.op_count)
         {
           /*
@@ -21109,6 +21152,7 @@ void Dbdict::check_takeover_replies(Signal* signal)
 #ifdef VM_TRACE
                 ndbout_c("Created missing operation %u, on new master", missing_op_ptr.p->op_key);
 #endif
+                ndbassert(masterNodePtr.p->m_nodes.get(c_masterNodeId));
                 missing_op_ptr.p->m_state = nodePtr.p->takeOverConf.highest_op_state;
                 masterNodePtr.p->recoveryState = NodeRecord::RS_PARTIAL_ROLLBACK;
                 masterNodePtr.p->start_op = masterNodePtr.p->takeOverConf.highest_op;
@@ -21165,6 +21209,44 @@ void Dbdict::check_takeover_replies(Signal* signal)
               assert(false);
             }
             continue;
+          }
+        }
+        else if (nodePtr.p->takeOverConf.op_count <
+                 masterNodePtr.p->takeOverConf.op_count)
+        {
+          jam();
+          ndbassert(masterNodePtr.p->m_nodes.get(c_masterNodeId));
+
+          /*
+              Operation is missing on slave
+          */
+          if (SchemaTrans::weight(trans_ptr.p->m_state) <
+              SchemaTrans::weight(SchemaTrans::TS_PREPARING))
+          {
+            /*
+              Last parsed operation is missing on slave, skip it
+              when aborting parse.
+            */
+            jam();
+#ifdef VM_TRACE
+            ndbout_c("Node %u did not have all operations for transaction %u, skip > %u", i, trans_ptr.p->trans_key, nodePtr.p->takeOverConf.highest_op);
+#endif
+            nodePtr.p->recoveryState = NodeRecord::RS_PARTIAL_ROLLBACK;
+            nodePtr.p->start_op = nodePtr.p->takeOverConf.highest_op;
+            nodePtr.p->start_op_state = nodePtr.p->takeOverConf.highest_op_state;
+          }
+          else
+          {
+            /*
+              Slave has already ended some operations
+            */
+            jam();
+#ifdef VM_TRACE
+            ndbout_c("Node %u did not have all operations for transaction %u, skip < %u", i, trans_ptr.p->trans_key, nodePtr.p->takeOverConf.lowest_op);
+#endif
+            nodePtr.p->recoveryState = NodeRecord::RS_PARTIAL_ROLLFORWARD;
+            nodePtr.p->start_op = nodePtr.p->takeOverConf.lowest_op;
+            nodePtr.p->start_op_state = nodePtr.p->takeOverConf.lowest_op_state;
           }
         }
       }
@@ -27663,17 +27745,26 @@ Dbdict::execSCHEMA_TRANS_BEGIN_REQ(Signal* signal)
       break;
     }
 
-    if (c_takeOverInProgress)
+    if (!localTrans)
     {
-      /**
-       * There is a dict takeover in progress. There may thus another
-       * transaction that should be rolled backward or forward before we
-       * can allow another transaction to start.
-       */
-      jam();
-      setError(error, SchemaTransBeginRef::Busy, __LINE__);
-      break;
+      ndbassert(getOwnNodeId() == c_masterNodeId);
+      NodeRecordPtr masterNodePtr;
+      c_nodes.getPtr(masterNodePtr, c_masterNodeId);
+
+      if (masterNodePtr.p->nodeState == NodeRecord::NDB_MASTER_TAKEOVER)
+      {
+        jam();
+        /**
+         * There is a dict takeover in progress. There may thus be another
+         * transaction that should be rolled backward or forward before we
+         * can allow another transaction to start.
+         * (Multiple concurrent schema transactions are not supported)
+         */
+        setError(error, SchemaTransBeginRef::Busy, __LINE__);
+        break;
+      }
     }
+    ndbassert(!c_takeOverInProgress);
 
     if (!check_ndb_versions() && !localTrans)
     {
@@ -27853,8 +27944,14 @@ Dbdict::execSCHEMA_TRANS_END_REQ(Signal* signal)
   SchemaTransPtr trans_ptr;
   ErrorInfo error;
   do {
-    findSchemaTrans(trans_ptr, trans_key);
-    if (trans_ptr.isNull()) {
+    const bool localTrans = (requestInfo & DictSignal::RF_LOCAL_TRANS);
+    if (getOwnNodeId() != c_masterNodeId && !localTrans) {
+      jam();
+      setError(error, SchemaTransEndRef::NotMaster, __LINE__);
+      break;
+    }
+
+    if (!findSchemaTrans(trans_ptr, trans_key)) {
       jam();
       setError(error, SchemaTransEndRef::InvalidTransKey, __LINE__);
       break;
@@ -27866,42 +27963,9 @@ Dbdict::execSCHEMA_TRANS_END_REQ(Signal* signal)
       break;
     }
 
-    bool localTrans = (trans_ptr.p->m_requestInfo & DictSignal::RF_LOCAL_TRANS);
+    const bool localTrans2 =
+      (trans_ptr.p->m_requestInfo & DictSignal::RF_LOCAL_TRANS);
 
-    if (getOwnNodeId() != c_masterNodeId && !localTrans) {
-      jam();
-      // future when MNF is handled
-      //ndbassert(false);
-      setError(error, SchemaTransEndRef::NotMaster, __LINE__);
-      break;
-    }
-
-    if (c_takeOverInProgress)
-    {
-      /**
-       * There is a dict takeover in progress, and the transaction may thus
-       * be in an inconsistent state. Therefore we cannot process this request
-       * now.
-       */
-      jam();
-      setError(error, SchemaTransEndRef::Busy, __LINE__);
-      break;
-    }
-#ifdef MARTIN
-    ndbout_c("Dbdict::execSCHEMA_TRANS_END_REQ: trans %u, state %u", trans_ptr.i, trans_ptr.p->m_state);
-#endif
-
-    //XXX Check state
-
-    if (hasError(trans_ptr.p->m_error))
-    {
-      jam();
-      ndbassert(false);
-      setError(error, SchemaTransEndRef::InvalidTransState, __LINE__);
-      break;
-    }
-
-    bool localTrans2 = requestInfo & DictSignal::RF_LOCAL_TRANS;
     if (localTrans != localTrans2)
     {
       jam();
@@ -27909,6 +27973,37 @@ Dbdict::execSCHEMA_TRANS_END_REQ(Signal* signal)
       setError(error, SchemaTransEndRef::InvalidTransState, __LINE__);
       break;
     }
+
+    if (!localTrans)
+    {
+      ndbassert(getOwnNodeId() == c_masterNodeId);
+      NodeRecordPtr masterNodePtr;
+      c_nodes.getPtr(masterNodePtr, c_masterNodeId);
+
+      if (masterNodePtr.p->nodeState == NodeRecord::NDB_MASTER_TAKEOVER)
+      {
+        jam();
+        /**
+         * There is a dict takeover in progress.
+         * Transaction might be in an inconsistent state where its fate 
+         * has not been decided yet. When takeover eventually completes,
+         * it will ::sendTransClientReply() which will inform the client
+         * about the fate of the Txn in a TRANS_END_REP.
+         * For now we don't send any reply, and let the client wait for
+         * TRANS_END_REP.
+         */
+        return;
+      }
+    }
+
+#ifdef MARTIN
+    ndbout_c("Dbdict::execSCHEMA_TRANS_END_REQ: trans %u, state %u", trans_ptr.i, trans_ptr.p->m_state);
+#endif
+
+    // Assert that we are not in an inconsistent/incomplete state
+    ndbassert(!hasError(trans_ptr.p->m_error));
+    ndbassert(!c_takeOverInProgress);
+    ndbassert(trans_ptr.p->m_counter.done());
 
     trans_ptr.p->m_clientState = TransClient::EndReq;
 
@@ -32456,4 +32551,59 @@ Dbdict::send_event(Signal* signal,
   signal->theData[3] = type;
   signal->theData[4] = refToNode(trans_ptr.p->m_clientRef);
   sendSignal(CMVMI_REF, GSN_EVENT_REP, signal, 5, JBB);
+}
+
+void
+Dbdict::startNextGetTabInfoReq(Signal* signal)
+{
+  jam();
+
+  /* Retrieve record should be in busy state to block
+   * queue-jumpers.  We can clear it now as we will
+   * execute direct from the head of the queue(s)
+   */
+  ndbrequire(c_retrieveRecord.busyState);
+  ndbrequire(!c_gettabinforeq_q.isEmpty());
+
+  /* Directly start next queued request
+   * Prefer internalQueue, but give externalQueue entries
+   * a proportional share to avoid starvation.
+   */
+  ndbrequire(c_gettabinforeq_q.deqReq(signal));
+
+  signal->header.theLength = GetTabInfoReq::SignalLength;
+
+  c_retrieveRecord.busyState = false;
+
+  /**
+   * Todo : Queue + jam signal id to indicate which req
+   * we are starting in trace file
+   */
+  doGET_TABINFOREQ(signal);
+
+  if (!c_retrieveRecord.busyState)
+  {
+    jam();
+    /* That GET_TABINFOREQ is done with no
+     * blocking work.
+     * Any more on the queue?
+     */
+    if (!c_gettabinforeq_q.isEmpty())
+    {
+      jam();
+      /* We will trigger starting the next 
+       * entry.
+       */
+      /* TODO : Option to do immediate DIRECT 
+       * exec of next req up to limit of n
+       */
+
+      /* Stop queue-jumpers */
+      c_retrieveRecord.busyState = true;
+
+      signal->theData[0] = ZNEXT_GET_TAB_REQ;
+      sendSignal(reference(), GSN_CONTINUEB, signal,
+                 1, JBB);
+    }
+  }
 }

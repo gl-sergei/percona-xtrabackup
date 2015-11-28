@@ -17,6 +17,7 @@
    51 Franklin Street, Suite 500, Boston, MA 02110-1335 USA */
 
 #include "my_global.h"                  // NO_EMBEDDED_ACCESS_CHECKS
+#include "my_thread_local.h"            // my_thread_id
 #include <mysql/plugin_auth.h>          // MYSQL_SERVER_AUTH_INFO
 #include "sql_plugin_ref.h"             // plugin_ref
 
@@ -24,6 +25,7 @@
 class THD;
 typedef struct charset_info_st CHARSET_INFO;
 class ACL_USER;
+class Protocol_classic;
 typedef struct st_net NET;
 
 /* Classes */
@@ -64,13 +66,12 @@ struct MPVIO_EXT : public MYSQL_PLUGIN_VIO
   enum { SUCCESS, FAILURE, RESTART } status;
 
   /* encapsulation members */
-  ulong client_capabilities;
   char *scramble;
   MEM_ROOT *mem_root;
   struct  rand_struct *rand;
   my_thread_id  thread_id;
   uint      *server_status;
-  NET *net;
+  Protocol_classic *protocol;
   ulong max_client_packet_length;
   char *ip;
   char *host;

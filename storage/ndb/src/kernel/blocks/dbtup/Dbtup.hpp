@@ -1,5 +1,5 @@
 /*
-   Copyright (c) 2003, 2014, Oracle and/or its affiliates. All rights reserved.
+   Copyright (c) 2003, 2015, Oracle and/or its affiliates. All rights reserved.
 
    This program is free software; you can redistribute it and/or modify
    it under the terms of the GNU General Public License as published by
@@ -261,11 +261,10 @@ private:
 
 public:
   class Dblqh *c_lqh;
+  class Backup *c_backup;
   Tsman* c_tsman;
   Lgman* c_lgman;
   Pgman* c_pgman;
-  // copy of pgman.m_ptr set after each get_page
-  Ptr<GlobalPage> m_pgman_ptr;
 
   enum CallbackIndex {
     // lgman
@@ -629,7 +628,14 @@ struct Fragrecord {
   // No of allocated but unused words for var-sized fields.
   Uint64 m_varWordsFree;
 
-  Uint32 m_max_page_no;
+  /**
+   * m_max_page_cnt contains the next page number to use when allocating
+   * a new page and all pages with lower page numbers are filled with
+   * rows. At fragment creation it is 0 since no pages are yet allocated.
+   * With 1 page allocated it is set to 1. The actual max page number with
+   * 1 page is however 0 since we start with page numbers from 0.
+   */
+  Uint32 m_max_page_cnt;
   Uint32 m_free_page_id_list;
   DynArr256::Head m_page_map;
   DLFifoList<Page>::Head thFreeFirst;   // pages with atleast 1 free record
@@ -1565,11 +1571,13 @@ struct KeyReqStruct {
   bool            last_row;
   bool            m_use_rowid;
   Uint8           m_reorg;
+  Uint8           m_prio_a_flag;
   bool            m_deferred_constraints;
   bool            m_disable_fk_checks;
 
   Signal*         signal;
-  Uint32 no_fired_triggers;
+  Uint32 num_fired_triggers;
+  Uint32 no_exec_instructions;
   Uint32 frag_page_id;
   Uint32 hash_value;
   Uint32 gci_hi;
@@ -2640,7 +2648,8 @@ private:
   void checkDetachedTriggers(KeyReqStruct *req_struct,
                              Operationrec* regOperPtr,
                              Tablerec* regTablePtr,
-                             bool disk);
+                             bool disk,
+                             Uint32 diskPagePtrI);
 
   void fireImmediateTriggers(KeyReqStruct *req_struct,
                              DLList<TupTriggerData>& triggerList, 
@@ -2664,7 +2673,8 @@ private:
   void fireDetachedTriggers(KeyReqStruct *req_struct,
                             DLList<TupTriggerData>& triggerList,
                             Operationrec* regOperPtr,
-                            bool disk);
+                            bool disk,
+                            Uint32 diskPagePtrI);
 
   void executeTrigger(KeyReqStruct *req_struct,
                       TupTriggerData* trigPtr, 
@@ -2764,7 +2774,7 @@ private:
 //------------------------------------------------------------------
   void tupkeyErrorLab(KeyReqStruct*);
   void do_tup_abortreq(Signal*, Uint32 flags);
-  bool do_tup_abort_operation(Signal*, Tuple_header *,
+  void do_tup_abort_operation(Signal*, Tuple_header *,
                               Operationrec*,
                               Fragrecord*,
                               Tablerec*);
@@ -2855,8 +2865,7 @@ private:
 			Operationrec* regOperPtr,
 			Tablerec* regTabPtr);
   
-  void send_TUPKEYREF(Signal* signal,
-                      Operationrec* regOperPtr);
+  void send_TUPKEYREF(const KeyReqStruct* req_struct);
   void early_tupkey_error(KeyReqStruct*);
 
   void printoutTuplePage(Uint32 fragid, Uint32 pageid, Uint32 printLimit);
@@ -2874,9 +2883,14 @@ private:
 		  Tablerec* regTabPtr,
 		  bool disk);
   
-  Uint32 calculateChecksum(Tuple_header*, Tablerec* regTabPtr);
-  void setChecksum(Tuple_header*, Tablerec* regTabPtr);
-  int corruptedTupleDetected(KeyReqStruct*);
+  Uint32 calculateChecksum(Tuple_header*, const Tablerec* regTabPtr);
+  void setChecksum(Tuple_header*, const Tablerec* regTabPtr);
+  void setInvalidChecksum(Tuple_header*, const Tablerec* regTabPtr);
+  void updateChecksum(Tuple_header *,
+                      const Tablerec *,
+                      Uint32 old_header,
+                      Uint32 new_header);
+  int corruptedTupleDetected(KeyReqStruct*, Tablerec*);
 
   void complexTrigger(Signal* signal,
                       KeyReqStruct *req_struct,
@@ -3405,7 +3419,7 @@ private:
   Dbtup::Apply_undo f_undo;
   Uint32 c_proxy_undo_data[20 + MAX_TUPLE_SIZE_IN_WORDS];
 
-  void disk_restart_undo_next(Signal*);
+  void disk_restart_undo_next(Signal*, Uint32 applied = 0);
   void disk_restart_undo_lcp(Uint32, Uint32, Uint32 flag, Uint32 lcpId);
   void disk_restart_undo_callback(Signal* signal, Uint32, Uint32);
   void disk_restart_undo_alloc(Apply_undo*);
@@ -3420,19 +3434,47 @@ private:
 #endif
   
   void findFirstOp(OperationrecPtr&);
-  bool is_rowid_lcp_scanned(const Local_key& key1,
-                           const Dbtup::ScanOp& op);
-  void commit_operation(Signal*, Uint32, Uint32, Tuple_header*, PagePtr,
-			Operationrec*, Fragrecord*, Tablerec*);
-  void commit_refresh(Signal*, Uint32, Uint32, Tuple_header*, PagePtr,
-                      KeyReqStruct*, Operationrec*, Fragrecord*, Tablerec*);
+  bool is_rowid_in_remaining_lcp_set(const Page* page,
+                                     const Local_key& key1,
+                                     const Dbtup::ScanOp& op) const;
+  void commit_operation(Signal*,
+                        Uint32,
+                        Uint32,
+                        Tuple_header*,
+                        PagePtr,
+			Operationrec*,
+                        Fragrecord*,
+                        Tablerec*,
+                        Ptr<GlobalPage> diskPagePtr);
+
+  void commit_refresh(Signal*,
+                      Uint32,
+                      Uint32,
+                      Tuple_header*,
+                      PagePtr,
+                      KeyReqStruct*,
+                      Operationrec*,
+                      Fragrecord*,
+                      Tablerec*,
+                      Ptr<GlobalPage> diskPagePtr);
+
   int retrieve_data_page(Signal*,
                          Page_cache_client::Request,
-                         OperationrecPtr);
+                         OperationrecPtr,
+                         Ptr<GlobalPage> &diskPagePtr);
   int retrieve_log_page(Signal*, FragrecordPtr, OperationrecPtr);
 
-  void dealloc_tuple(Signal* signal, Uint32, Uint32, Page*, Tuple_header*,
-		     KeyReqStruct*, Operationrec*, Fragrecord*, Tablerec*);
+  void dealloc_tuple(Signal* signal,
+                     Uint32,
+                     Uint32,
+                     Page*,
+                     Tuple_header*,
+                     KeyReqStruct*,
+                     Operationrec*,
+                     Fragrecord*,
+                     Tablerec*,
+                     Ptr<GlobalPage> diskPagePtr);
+
   bool store_extra_row_bits(Uint32, const Tablerec*, Tuple_header*, Uint32,
                             bool);
   void read_extra_row_bits(Uint32, const Tablerec*, Tuple_header*, Uint32 *,
@@ -3463,7 +3505,7 @@ private:
   void check_page_map(Fragrecord*);
   bool find_page_id_in_list(Fragrecord*, Uint32 pid);
 #endif
-  void handle_lcp_keep(Signal*, Fragrecord*, ScanOp*);
+  void handle_lcp_keep(Signal*, FragrecordPtr, ScanOp*);
   void handle_lcp_keep_commit(const Local_key*,
                               KeyReqStruct *,
                               Operationrec*, Fragrecord*, Tablerec*);

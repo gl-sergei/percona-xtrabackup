@@ -1,5 +1,5 @@
 /*
-   Copyright (c) 2003, 2014, Oracle and/or its affiliates. All rights reserved.
+   Copyright (c) 2003, 2015, Oracle and/or its affiliates. All rights reserved.
 
    This program is free software; you can redistribute it and/or modify
    it under the terms of the GNU General Public License as published by
@@ -472,7 +472,7 @@ void Dbtup::execTUP_ADD_ATTRREQ(Signal* signal)
       
       D("Logfile_client - execTUP_ADD_ATTRREQ");
       Logfile_client lgman(this, c_lgman, regFragPtr.p->m_logfile_group_id);
-      if((terrorCode = lgman.alloc_log_space(sz)))
+      if((terrorCode = lgman.alloc_log_space(sz, jamBuffer())))
       {
         jamEntry();
         addattrrefuseLab(signal, regFragPtr, fragOperPtr, regTabPtr.p, fragId);
@@ -488,6 +488,8 @@ void Dbtup::execTUP_ADD_ATTRREQ(Signal* signal)
 	signal->theData[0] = 1;
 	return;
       case -1:
+        g_eventLogger->warning("Out of space in RG_DISK_OPERATIONS resource,"
+                              " increase config parameter GlobalSharedMemory");
 	ndbrequire("NOT YET IMPLEMENTED" == 0);
 	break;
       }
@@ -803,7 +805,7 @@ void Dbtup::execTUPFRAGREQ(Signal* signal)
   regFragPtr.p->noOfPages = 0;
   regFragPtr.p->noOfVarPages = 0;
   regFragPtr.p->m_varWordsFree = 0;
-  regFragPtr.p->m_max_page_no = 0;
+  regFragPtr.p->m_max_page_cnt = 0;
   regFragPtr.p->m_free_page_id_list = FREE_PAGE_RNIL;
   ndbrequire(regFragPtr.p->m_page_map.isEmpty());
   regFragPtr.p->m_restore_lcp_id = RNIL;
@@ -2028,7 +2030,7 @@ void Dbtup::releaseFragment(Signal* signal, Uint32 tableId,
     Uint32 sz= sizeof(Disk_undo::Drop) >> 2;
     D("Logfile_client - releaseFragment");
     Logfile_client lgman(this, c_lgman, logfile_group_id);
-    int r0 = lgman.alloc_log_space(sz);
+    int r0 = lgman.alloc_log_space(sz, jamBuffer());
     jamEntry();
     if (r0)
     {
@@ -2045,9 +2047,11 @@ void Dbtup::releaseFragment(Signal* signal, Uint32 tableId,
       jam();
       return;
     case -1:
+      g_eventLogger->warning("Out of space in RG_DISK_OPERATIONS resource,"
+                             " increase config parameter GlobalSharedMemory");
       warningEvent("Failed to get log buffer for drop table: %u",
 		   tabPtr.i);
-      lgman.free_log_space(sz);
+      lgman.free_log_space(sz, jamBuffer());
       jamEntry();
       goto done;
       break;
@@ -2121,7 +2125,6 @@ Dbtup::drop_fragment_unmap_pages(Signal *signal,
     Page_cache_client pgman(this, c_pgman);
     int res= pgman.get_page(signal, req, flags);
     jamEntry();
-    m_pgman_ptr = pgman.m_ptr;
     switch(res)
     {
     case 0:
@@ -2186,7 +2189,9 @@ Dbtup::drop_fragment_free_extent(Signal *signal,
 	cb.m_callbackIndex = DROP_FRAGMENT_FREE_EXTENT_LOG_BUFFER_CALLBACK;
 #if NOT_YET_UNDO_FREE_EXTENT
 	Uint32 sz= sizeof(Disk_undo::FreeExtent) >> 2;
-	(void) c_lgman->alloc_log_space(fragPtr.p->m_logfile_group_id, sz);
+	(void) c_lgman->alloc_log_space(fragPtr.p->m_logfile_group_id,
+                                        sz,
+                                        jamBuffer());
         jamEntry();
 	
 	Logfile_client lgman(this, c_lgman, fragPtr.p->m_logfile_group_id);
@@ -2198,6 +2203,8 @@ Dbtup::drop_fragment_free_extent(Signal *signal,
 	  jam();
 	  return;
 	case -1:
+          g_eventLogger->warning("Out of space in RG_DISK_OPERATIONS resource,"
+                             " increase config parameter GlobalSharedMemory");
 	  ndbrequire("NOT YET IMPLEMENTED" == 0);
 	  break;
 	default:
@@ -2673,7 +2680,7 @@ Dbtup::get_frag_info(Uint32 tableId, Uint32 fragId, Uint32* maxPage)
   
   if (maxPage)
   {
-    * maxPage = fragPtr.p->m_max_page_no;
+    * maxPage = fragPtr.p->m_max_page_cnt;
   }
 
   return true;

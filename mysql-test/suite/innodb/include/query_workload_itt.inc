@@ -86,8 +86,6 @@ set @@sort_buffer_size = @old_sort_buffer_size;
 explain format = json select distinct t4.a,e from t4, t1 order by t4.b;
 select distinct t4.a,e from t4, t1 order by t4.b;
 
-set big_tables = 1;
-
 #
 # union
 explain format = json select * from t1 union all select * from t2;
@@ -161,7 +159,6 @@ select b, count(a), sum(a), avg(a), std(a), min(a),
 #
 # choose innodb to create tmp table
 --disable_warnings
---replace_result INNODB TMP_TABLE_ENGINE MYISAM TMP_TABLE_ENGINE
 select sql_big_result * from information_schema.global_variables where variable_name like 'internal_tmp_disk_storage_engine';
 --enable_warnings
 

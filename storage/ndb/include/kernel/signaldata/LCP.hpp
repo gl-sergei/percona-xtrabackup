@@ -1,5 +1,5 @@
 /*
-   Copyright (c) 2003, 2013, Oracle and/or its affiliates. All rights reserved.
+   Copyright (c) 2003, 2015, Oracle and/or its affiliates. All rights reserved.
 
    This program is free software; you can redistribute it and/or modify
    it under the terms of the GNU General Public License as published by
@@ -42,12 +42,30 @@ struct StartLcpReq {
   friend bool printSTART_LCP_REQ(FILE *, const Uint32 *, Uint32, Uint16);  
 public:
 
-  STATIC_CONST( SignalLength = 2 + 2 * NdbNodeBitmask::Size );
+  STATIC_CONST( SignalLength = 2 + 2 * NdbNodeBitmask::Size + 1 );
   Uint32 senderRef;
   Uint32 lcpId;
   
   NdbNodeBitmask participatingDIH;
   NdbNodeBitmask participatingLQH;
+
+  enum PauseStart
+  {
+    NormalLcpStart = 0,
+    PauseLcpStartFirst = 1,
+    PauseLcpStartSecond = 2
+  };
+
+  /**
+   * pauseStart = 0 normal start
+   * pauseStart = 1 starting node into already running LCP,
+   *                bitmasks contains participants
+   * pauseStart = 2 starting node into already running LCP,
+   *                bitmasks contains completion bitmasks
+   * pauseStart = 1 requires no response since pauseStart = 2 will arrive
+   *                immediately after it.
+   */
+  PauseStart pauseStart;
 };
 
 class StartLcpConf {
@@ -128,6 +146,7 @@ struct LcpFragRep {
   friend bool printLCP_FRAG_REP(FILE *, const Uint32 *, Uint32, Uint16);  
 
   STATIC_CONST( SignalLength = 7 );
+  STATIC_CONST( SignalLengthTQ = 8 );
   STATIC_CONST( BROADCAST_REQ = 0 );
 
   Uint32 nodeId;
@@ -137,6 +156,7 @@ struct LcpFragRep {
   Uint32 fragId;
   Uint32 maxGciCompleted;
   Uint32 maxGciStarted;
+  Uint32 fromTQ;
 };
 
 class LcpCompleteRep {
@@ -154,11 +174,13 @@ class LcpCompleteRep {
   friend bool printLCP_COMPLETE_REP(FILE *, const Uint32 *, Uint32, Uint16);  
 public:
   STATIC_CONST( SignalLength = 3 );
+  STATIC_CONST( SignalLengthTQ = 4 );
   
 private:
   Uint32 nodeId;
   Uint32 blockNo;
   Uint32 lcpId;
+  Uint32 fromTQ;
 };
 
 struct LcpPrepareReq 
@@ -269,7 +291,7 @@ struct LcpStatusConf
 
   friend bool printLCP_STATUS_CONF(FILE *, const Uint32 *, Uint32, Uint16);  
 public:
-  STATIC_CONST( SignalLength = 11 );
+  STATIC_CONST( SignalLength = 12 );
 
   enum LcpState
   {
@@ -300,9 +322,15 @@ private:
    * For LCP_SCANNED contains bytes remaining to be flushed
    * to file.
    *  (Decreases as buffer drains to file)
+   *
+   * lcpScannedPages is number of pages scanned by TUP, it is possible
+   * to scan for a long while only finding LCP_SKIP records, so this
+   * is necessary to check as well for progress.
    */
   Uint32 completionStateHi;
   Uint32 completionStateLo;
+
+  Uint32 lcpScannedPages;
 };
 
 struct LcpStatusRef
@@ -338,6 +366,49 @@ private:
   Uint32 error;
 };
 
+class PauseLcpReq
+{
+public:
+  STATIC_CONST (SignalLength = 3 );
+
+  enum PauseAction
+  {
+    NoAction = 0,
+    Pause = 1,
+    UnPauseIncludedInLcp = 2,
+    UnPauseNotIncludedInLcp = 3
+  };
+  Uint32 senderRef;
+  Uint32 pauseAction;
+  Uint32 startNodeId;
+};
+
+class PauseLcpConf
+{
+public:
+  STATIC_CONST (SignalLength = 2 );
+
+  Uint32 senderRef;
+  Uint32 startNodeId;
+};
+
+class FlushLcpRepReq
+{
+public:
+  STATIC_CONST (SignalLength = 2 );
+
+  Uint32 senderRef;
+  Uint32 startNodeId;
+};
+
+class FlushLcpRepConf
+{
+public:
+  STATIC_CONST (SignalLength = 2 );
+
+  Uint32 senderRef;
+  Uint32 startNodeId;
+};
 
 #undef JAM_FILE_ID
 

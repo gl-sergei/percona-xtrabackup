@@ -22,6 +22,12 @@ FIND_PATH(WIX_DIR heat.exe
 )
 
 IF(NOT WIX_DIR)
+  FIND_PATH(WIX_DIR heat.exe
+    "$ENV{ProgramFiles}/WiX Toolset V3.10/bin"
+  )
+ENDIF()
+
+IF(NOT WIX_DIR)
   IF(NOT _WIX_DIR_CHECKED)
     SET(_WIX_DIR_CHECKED 1 CACHE INTERNAL "")
     MESSAGE(STATUS "Cannot find wix 3, installer project will not be generated")
@@ -61,6 +67,20 @@ IF(CMAKE_SIZEOF_VOID_P EQUAL 8)
   SET(WixWin64 " Win64='yes'")
 ELSE()
   SET(WixWin64 " Win64='no'")
+ENDIF()
+
+IF("${VERSION}" MATCHES "-ndb-")
+  MESSAGE(STATUS "This is Cluster build")
+  # Setup DISPLAY_XXX_VERSION which create_msi.cmake will
+  # use as version to "display" when building the msi
+  # (i.e replacing for example 5.6.21 with 7.4.3)
+  MESSAGE(STATUS "Setting DISPLAY_XXX_VERSION")
+  SET(DISPLAY_MAJOR_VERSION ${NDB_VERSION_MAJOR})
+  SET(DISPLAY_MINOR_VERSION ${NDB_VERSION_MINOR})
+  SET(DISPLAY_PATCH_VERSION ${NDB_VERSION_BUILD})
+  MESSAGE(STATUS "DISPLAY_MAJOR_VERSION: ${DISPLAY_MAJOR_VERSION}")
+  MESSAGE(STATUS "DISPLAY_MINOR_VERSION: ${DISPLAY_MINOR_VERSION}")
+  MESSAGE(STATUS "DISPLAY_PATCH_VERSION: ${DISPLAY_PATCH_VERSION}")
 ENDIF()
 
 CONFIGURE_FILE(${CMAKE_CURRENT_SOURCE_DIR}/mysql_server_extra.wxs.in

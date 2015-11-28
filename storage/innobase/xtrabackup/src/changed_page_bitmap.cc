@@ -186,17 +186,18 @@ log_online_read_bitmap_page(
 	ibool				*checksum_ok)	/*!<out: TRUE if page
 							checksum OK */
 {
-	ulint	checksum;
-	ulint	actual_checksum;
-	ibool	success;
+	ulint		checksum;
+	ulint		actual_checksum;
+	ibool		success;
+	IORequest	read_request(IORequest::READ);
 
 	ut_a(bitmap_file->size >= MODIFIED_PAGE_BLOCK_SIZE);
 	ut_a(bitmap_file->offset
 	     <= bitmap_file->size - MODIFIED_PAGE_BLOCK_SIZE);
 	ut_a(bitmap_file->offset % MODIFIED_PAGE_BLOCK_SIZE == 0);
 
-	success = os_file_read(bitmap_file->file, page, bitmap_file->offset,
-				  MODIFIED_PAGE_BLOCK_SIZE);
+	success = os_file_read(read_request, bitmap_file->file, page,
+			       bitmap_file->offset, MODIFIED_PAGE_BLOCK_SIZE);
 
 	if (UNIV_UNLIKELY(!success)) {
 

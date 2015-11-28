@@ -28,6 +28,7 @@
 #include "sql_bitmap.h"    // Bitmap
 #include "sql_sort.h"      // Filesort_info
 #include "table_id.h"      // Table_id
+#include "lock.h"          // Tablespace_hash_set
 
 /* Structs that defines the TABLE */
 class File_parser;
@@ -269,6 +270,7 @@ typedef struct st_grant_internal_info GRANT_INTERNAL_INFO;
  */
 struct GRANT_INFO
 {
+  GRANT_INFO();
   /**
      @brief A copy of the privilege information regarding the current host,
      database, object and user.
@@ -581,6 +583,7 @@ struct TABLE_SHARE
 
   uchar	*default_values;		/* row with default values */
   LEX_STRING comment;			/* Comment about table */
+  LEX_STRING compress;			/* Compression algorithm */
   const CHARSET_INFO *table_charset;	/* Default charset of string fields */
 
   MY_BITMAP all_set;
@@ -1191,6 +1194,10 @@ public:
      tree only.
    */
   my_bool key_read;
+  /**
+     Certain statements which need the full row, set this to ban index-only
+     access.
+  */
   my_bool no_keyread;
   my_bool locked_by_logger;
   /**
@@ -1266,7 +1273,8 @@ public:
   void prepare_for_position(void);
 
   void mark_column_used(THD *thd, Field *field, enum enum_mark_columns mark);
-  void mark_columns_used_by_index_no_reset(uint index, MY_BITMAP *map);
+  void mark_columns_used_by_index_no_reset(uint index, MY_BITMAP *map,
+                                           uint key_parts= UINT_MAX);
   void mark_columns_used_by_index(uint index);
   void mark_auto_increment_column(void);
   void mark_columns_needed_for_update(void);
@@ -1274,7 +1282,8 @@ public:
   void mark_columns_needed_for_insert(void);
   void mark_columns_per_binlog_row_image(void);
   void mark_generated_columns(bool is_update);
-  bool is_field_dependent_on_generated_columns(uint field_index);
+  bool is_field_used_by_generated_columns(uint field_index);
+  void mark_gcol_in_maps(Field *field);
   inline void column_bitmaps_set(MY_BITMAP *read_set_arg,
                                  MY_BITMAP *write_set_arg)
   {
@@ -1328,6 +1337,19 @@ public:
     }
   }
 
+  /**
+    Check whether the given index has a virtual generated columns.
+
+    @param index_no        the given index to check
+
+    @returns true if if index is defined over at least one virtual generated
+    column
+  */
+  inline bool index_contains_some_virtual_gcol(uint index_no)
+  {
+    DBUG_ASSERT(index_no < s->keys);
+    return key_info[index_no].flags & HA_VIRTUAL_GEN_KEY;
+  }
   bool update_const_key_parts(Item *conds);
 
   bool check_read_removal(uint index);
@@ -1364,6 +1386,12 @@ public:
   /// Return whether table is nullable
   bool is_nullable() const { return nullable; }
 
+  /// @return true if table contains one or more generated columns
+  bool has_gcol() const { return vfield; }
+
+  /// @return true if table contains one or more virtual generated columns
+  bool has_virtual_gcol() const;
+
   /**
     Initialize the optimizer cost model.
  
@@ -1380,6 +1408,26 @@ public:
     Return the cost model object for this table.
   */
   const Cost_model_table* cost_model() const { return &m_cost_model; }
+
+  /**
+    Fix table's generated columns' (GC) expressions
+   
+    @details When a table is opened from the dictionary, the GCs' expressions
+    are fixed during opening (see fix_fields_gcol_func()). After query
+    execution, Item::cleanup() is called on them (see cleanup_gc_items()). When
+    the table is opened from the table cache, the GCs need to be fixed again
+    and this function does that.
+
+    @param[in] thd     the current thread
+    @return true if error, else false
+  */
+  bool refix_gc_items(THD *thd);
+  
+  /**
+    Clean any state in items associated with generated columns to be ready for
+    the next statement.
+  */
+  void cleanup_gc_items();
 };
 
 
@@ -1551,6 +1599,7 @@ public:
   ALTER user ... PASSWORD EXPIRE ...
 */
 typedef struct st_lex_alter {
+  bool update_password_expired_fields;
   bool update_password_expired_column;
   bool use_default_password_lifetime;
   uint16 expire_after_days;
@@ -1656,7 +1705,8 @@ struct TABLE_LIST
                              const char *table_name_arg,
                              size_t table_name_length_arg,
                              const char *alias_arg,
-                             enum thr_lock_type lock_type_arg)
+                             enum thr_lock_type lock_type_arg,
+                             enum enum_mdl_type mdl_type_arg)
   {
     memset(this, 0, sizeof(*this));
     m_map= 1;
@@ -1668,11 +1718,24 @@ struct TABLE_LIST
     lock_type= lock_type_arg;
     MDL_REQUEST_INIT(&mdl_request,
                      MDL_key::TABLE, db, table_name,
-                     mdl_type_for_dml(lock_type),
+                     mdl_type_arg,
                      MDL_TRANSACTION);
     callback_func= 0;
     opt_hints_table= NULL;
     opt_hints_qb= NULL;
+  }
+
+  inline void init_one_table(const char *db_name_arg,
+                             size_t db_length_arg,
+                             const char *table_name_arg,
+                             size_t table_name_length_arg,
+                             const char *alias_arg,
+                             enum thr_lock_type lock_type_arg)
+  {
+    init_one_table(db_name_arg, db_length_arg,
+                   table_name_arg, table_name_length_arg,
+                   alias_arg, lock_type_arg,
+                   mdl_type_for_dml(lock_type_arg));
   }
 
   /// Create a TABLE_LIST object representing a nested join
@@ -1763,14 +1826,7 @@ struct TABLE_LIST
   }
 
   /// Prepare check option for a view
-  inline bool prepare_check_option(THD *thd)
-  {
-    DBUG_ASSERT(is_view());
-    bool res= false;
-    if (effective_with_check)
-      res= prep_check_option(thd, effective_with_check);
-    return res;
-  }
+  bool prepare_check_option(THD *thd, bool is_cascaded= false);
 
   /// Merge WHERE condition of view or derived table into outer query
   bool merge_where(THD *thd);
@@ -1836,33 +1892,31 @@ struct TABLE_LIST
   }
 
   /// Return true if table is updatable
-  bool is_updatable() const
-  {
-    return updatable;
-  }
+  bool is_updatable() const { return m_updatable; }
 
   /// Set table as updatable. (per default, a table is non-updatable)
-  void set_updatable()
-  {
-    updatable= true;
-  }
+  void set_updatable() { m_updatable= true; }
+
+  /// Return true if table is insertable-into
+  bool is_insertable() const { return m_insertable; }
+
+  /// Set table as insertable-into. (per default, a table is not insertable)
+  void set_insertable() { m_insertable= true; }
 
   /**
     Return true if this is a view or derived table that is defined over
-    more than one base tables, and false otherwise.
-    Only to be used for updatable tables/views.
-    An updatable view has to be merged (materialization not allowed), so
-    it is safe to call leaf_tables_count().
+    more than one base table, and false otherwise.
   */
   bool is_multiple_tables() const
   {
-    DBUG_ASSERT(is_updatable());
     if (is_view_or_derived())
+    {
+      DBUG_ASSERT(is_merged());         // Cannot be a materialized view
       return leaf_tables_count() > 1;
+    }
     else
     {
-      // A nested_join cannot be an updatable table.
-      DBUG_ASSERT(nested_join == NULL);
+      DBUG_ASSERT(nested_join == NULL); // Must be a base table
       return false;
     }
   }
@@ -1876,6 +1930,24 @@ struct TABLE_LIST
     TABLE_LIST *tr= this;
     while (tr->merge_underlying_list)
       tr= tr->merge_underlying_list;
+    return tr;
+  }
+
+  /// Return any leaf table that is not an inner table of an outer join
+  /// @todo when WL#6570 is implemented, replace with first_leaf_table()
+  TABLE_LIST *any_outer_leaf_table()
+  {
+    TABLE_LIST *tr= this;
+    while (tr->merge_underlying_list)
+    {
+      tr= tr->merge_underlying_list;
+      /*
+        "while" is used, however, an "if" might be sufficient since there is
+        no more than one inner table in a join nest (with outer_join true).
+      */
+      while (tr->outer_join)
+        tr= tr->next_local;
+    }
     return tr;
   }
   /**
@@ -1910,6 +1982,30 @@ struct TABLE_LIST
   {
     DBUG_ASSERT(derived);
     return derived;
+  }
+
+  /// Set temporary name from underlying temporary table:
+  void set_name_temporary()
+  {
+    DBUG_ASSERT(is_view_or_derived() && uses_materialization());
+    table_name= table->s->table_name.str;
+    table_name_length= table->s->table_name.length;
+    db= (char *)"";
+    db_length= 0;
+  }
+
+  /// Reset original name for temporary table.
+  void reset_name_temporary()
+  {
+    DBUG_ASSERT(is_view_or_derived() && uses_materialization());
+    DBUG_ASSERT(db != view_db.str && table_name != view_name.str);
+    if (is_view())
+    {
+      db= view_db.str;
+      db_length= view_db.length;
+    }
+    table_name= view_name.str;
+    table_name_length= view_name.length;
   }
 
   /// Resolve a derived table or view reference
@@ -2265,6 +2361,12 @@ public:
   LEX_STRING    timestamp;              ///< GMT time stamp of last operation
   st_lex_user   definer;                ///< definer of view
   ulonglong     file_version;           ///< version of file's field set
+  /**
+    @note: This field is currently not reliable when read from dictionary:
+    If an underlying view is changed, updatable_view is not changed,
+    due to lack of dependency checking in dictionary implementation.
+    Prefer to use is_updatable() during preparation and optimization.
+  */
   ulonglong     updatable_view;         ///< VIEW can be updated
   /** 
       @brief The declared algorithm, if this is a view.
@@ -2277,11 +2379,6 @@ public:
   ulonglong     algorithm;
   ulonglong     view_suid;              ///< view is suid (TRUE by default)
   ulonglong     with_check;             ///< WITH CHECK OPTION
-  /*
-    effective value of WITH CHECK OPTION (differ for temporary table
-    algorithm)
-  */
-  uint8         effective_with_check;
 
 private:
   /// The view algorithm that is actually used, if this is a view.
@@ -2298,7 +2395,8 @@ public:
   size_t        db_length;
   size_t        table_name_length;
 private:
-  bool          updatable;		/* VIEW/TABLE can be updated now */
+  bool          m_updatable;		/* VIEW/TABLE can be updated */
+  bool          m_insertable;           /* VIEW/TABLE can be inserted into */
 public:
   bool		straight;		/* optimize with prev table */
   bool          updating;               /* for replicate-do/ignore table */
@@ -2446,7 +2544,6 @@ public:
   // End of group for optimization
 
 private:
-  bool prep_check_option(THD *thd, uint8 check_opt_type);
   /** See comments for set_metadata_id() */
   enum enum_table_ref_type m_table_ref_type;
   /** See comments for TABLE_SHARE::get_table_ref_version() */
@@ -2658,6 +2755,10 @@ typedef struct st_nested_join
     Query block id if this struct is generated from a subquery transform.
   */
   uint query_block_id;
+
+  /// Bitmap of which strategies are enabled for this semi-join nest
+  uint sj_enabled_strategies;
+
   /*
     Lists of trivially-correlated expressions from the outer and inner tables
     of the semi-join, respectively.
@@ -2756,37 +2857,37 @@ void free_table_share(TABLE_SHARE *share);
 
 
 /**
-  Get the tablespace name from within an .FRM file.
+  Get the tablespace name for a table.
 
   This function will open the .FRM file for the given TABLE_LIST element
-  and find the tablespace name, if present.
+  and fill Tablespace_hash_set with the tablespace name used by table and
+  table partitions, if present. For NDB tables with version before 50120,
+  the function will ask the SE for the tablespace name, because for these
+  tables, the tablespace name is not stored in the.FRM file, but only
+  within the SE itself.
 
   @note The function does *not* consider errors. If the file is not present,
         this does not raise an error. The reason is that this function will
         be used for tables that may not exist, e.g. in the context of
         'DROP TABLE IF EXISTS', which does not care whether the table
-        exists or not. If an error occurs, the function will return NULL.
+        exists or not. The function returns success in this case.
 
-  @note The return value is a char pointer to the tablespace name. The
-        string is allocated in the memory root of the thd, and will be
-        freed implicitly.
+  @note Strings inserted into hash are allocated in the memory
+        root of the thd, and will be freed implicitly.
 
-  @note When the tablespace name is written, there is no distinction between
-        a tablespace name which is empty, and the NULL string pointer. Thus,
-        when reading the name, we will always return a string of length 0 or
-        more, unless there is an error, in which case we will return NULL.
+  @param thd    - Thread context.
+  @param table  - Table from which we read the tablespace names.
+  @param tablespace_set (OUT)- Hash set to be filled with tablespace names.
 
-  @note If the tablespace name is invalid, the name will be ignored, and the
-        function will return NULL.
+  @retval true  - On failure, especially due to memory allocation errors
+                  and partition string parse errors.
+  @retval false - On success. Even if tablespaces are not used by table.
+*/
 
-  @param thd    Thread context
-  @param table  Table for which to get the tablespace name
-
-  @return Pointer to string holding a valid tablespace name. If an error
-          occurs, the function returns NULL.
- */
-
-const char *get_tablespace_name(THD *thd, const TABLE_LIST *table);
+bool get_table_and_parts_tablespace_names(
+       THD *thd,
+       TABLE_LIST *table,
+       Tablespace_hash_set *tablespace_set);
 
 int open_table_def(THD *thd, TABLE_SHARE *share, uint db_flags);
 void open_table_error(TABLE_SHARE *share, int error, int db_errno, int errarg);
@@ -2803,7 +2904,7 @@ bool get_field(MEM_ROOT *mem, Field *field, class String *res);
 int closefrm(TABLE *table, bool free_share);
 int read_string(File file, uchar* *to, size_t length);
 void free_blobs(TABLE *table);
-void free_field_buffers_larger_than(TABLE *table, uint32 size);
+void free_blob_buffers_and_reset(TABLE *table, uint32 size);
 int set_zone(int nr,int min_zone,int max_zone);
 ulong make_new_entry(File file,uchar *fileinfo,TYPELIB *formnames,
 		     const char *newname);
@@ -2875,8 +2976,10 @@ inline void mark_as_null_row(TABLE *table)
 
 bool is_simple_order(ORDER *order);
 
-bool update_generated_write_fields(TABLE *table);
-bool update_generated_read_fields(TABLE *table);
+void repoint_field_to_record(TABLE *table, uchar *old_rec, uchar *new_rec);
+bool update_generated_write_fields(const MY_BITMAP *bitmap, TABLE *table);
+bool update_generated_read_fields(uchar *buf, TABLE *table,
+                                  uint active_index= MAX_KEY);
 
 #endif /* MYSQL_CLIENT */
 

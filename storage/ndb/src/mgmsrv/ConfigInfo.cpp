@@ -1,5 +1,5 @@
 /*
-   Copyright (c) 2003, 2014, Oracle and/or its affiliates. All rights reserved.
+   Copyright (c) 2003, 2015, Oracle and/or its affiliates. All rights reserved.
 
    This program is free software; you can redistribute it and/or modify
    it under the terms of the GNU General Public License as published by
@@ -615,8 +615,8 @@ const ConfigInfo::ParamInfo ConfigInfo::m_ParamInfo[] = {
     KEY_INTERNAL,
     "ExecuteOnComputer",
     DB_TOKEN,
-    "String referencing an earlier defined COMPUTER",
-    ConfigInfo::CI_USED,
+    "HostName",
+    ConfigInfo::CI_DEPRECATED,
     false,
     ConfigInfo::CI_STRING,
     0,
@@ -704,6 +704,18 @@ const ConfigInfo::ParamInfo ConfigInfo::m_ParamInfo[] = {
     false,
     ConfigInfo::CI_INT,
     "50",
+    "0",
+    "11000" },
+
+  {
+    CFG_DB_MAX_SEND_DELAY,
+    "MaxSendDelay",
+    DB_TOKEN,
+    "Max number of microseconds to delay sending in ndbmtd",
+    ConfigInfo::CI_USED,
+    false,
+    ConfigInfo::CI_INT,
+    "0",
     "0",
     "11000" },
 
@@ -1063,6 +1075,22 @@ const ConfigInfo::ParamInfo ConfigInfo::m_ParamInfo[] = {
     "2000",
     "20",
     "32000" },
+  {
+    CFG_DB_GCP_TIMEOUT,
+    "TimeBetweenGlobalCheckpointsTimeout",
+    DB_TOKEN,
+    "Minimum timeout for group commit of transactions to disk",
+    /*
+      Actual timeout may be higher, as there must be sufficient time to 
+      correctly detect node failures, such that these are not reported as GCP 
+      stop.
+    */
+    ConfigInfo::CI_USED,
+    0,
+    ConfigInfo::CI_INT,
+    "120000",
+    "10",
+    STR_VALUE(MAX_INT_RNIL) },
 
   {
     CFG_DB_MICRO_GCP_INTERVAL,
@@ -1515,12 +1543,63 @@ const ConfigInfo::ParamInfo ConfigInfo::m_ParamInfo[] = {
     "32k",
     STR_VALUE(MAX_INT_RNIL) },
   
+  {
+    CFG_DB_MIN_DISK_WRITE_SPEED,
+    "MinDiskWriteSpeed",
+    DB_TOKEN,
+    "Minimum bytes per second allowed to be written by LCP and backup",
+    ConfigInfo::CI_USED,
+    false,
+    ConfigInfo::CI_INT64,
+    "10M",
+    "1M",
+    "1024G" },
+  
+  {
+    CFG_DB_MAX_DISK_WRITE_SPEED,
+    "MaxDiskWriteSpeed",
+    DB_TOKEN,
+    "Maximum bytes per second allowed to be written by LCP and backup"
+    " when no restarts are ongoing",
+    ConfigInfo::CI_USED,
+    false,
+    ConfigInfo::CI_INT64,
+    "20M",
+    "1M",
+    "1024G" },
+
+  {
+    CFG_DB_MAX_DISK_WRITE_SPEED_OTHER_NODE_RESTART,
+    "MaxDiskWriteSpeedOtherNodeRestart",
+    DB_TOKEN,
+    "Maximum bytes per second allowed to be written by LCP and backup"
+    " when another node is restarting",
+    ConfigInfo::CI_USED,
+    false,
+    ConfigInfo::CI_INT64,
+    "50M",
+    "1M",
+    "1024G" },
+ 
+  {
+    CFG_DB_MAX_DISK_WRITE_SPEED_OWN_RESTART,
+    "MaxDiskWriteSpeedOwnRestart",
+    DB_TOKEN,
+    "Maximum bytes per second allowed to be written by LCP and backup"
+    " when our node is restarting",
+    ConfigInfo::CI_USED,
+    false,
+    ConfigInfo::CI_INT64,
+    "200M",
+    "1M",
+    "1024G" },
+  
   { 
     CFG_DB_CHECKPOINT_SPEED,
     "DiskCheckpointSpeed",
     DB_TOKEN,
-    "Bytes per second allowed to be written by checkpoint",
-    ConfigInfo::CI_USED,
+    "Minimum bytes per second allowed to be written by checkpoint",
+    ConfigInfo::CI_DEPRECATED,
     false,
     ConfigInfo::CI_INT,
     "10M",
@@ -1528,11 +1607,12 @@ const ConfigInfo::ParamInfo ConfigInfo::m_ParamInfo[] = {
     STR_VALUE(MAX_INT_RNIL) },
   
   { 
-    CFG_DB_CHECKPOINT_SPEED_SR,
+    CFG_DB_CHECKPOINT_SPEED_RESTART,
     "DiskCheckpointSpeedInRestart",
     DB_TOKEN,
-    "Bytes per second allowed to be written by checkpoint during restart",
-    ConfigInfo::CI_USED,
+    "Maximum bytes per second allowed to be written by checkpoints"
+    "during restarts",
+    ConfigInfo::CI_DEPRECATED,
     false,
     ConfigInfo::CI_INT,
     "100M",
@@ -1544,7 +1624,7 @@ const ConfigInfo::ParamInfo ConfigInfo::m_ParamInfo[] = {
     "BackupMemory",
     DB_TOKEN,
     "Total memory allocated for backups per node (in bytes)",
-    ConfigInfo::CI_USED,
+    ConfigInfo::CI_DEPRECATED,
     false,
     ConfigInfo::CI_INT,
     "32M", // sum of BackupDataBufferSize and BackupLogBufferSize
@@ -1560,7 +1640,7 @@ const ConfigInfo::ParamInfo ConfigInfo::m_ParamInfo[] = {
     false,
     ConfigInfo::CI_INT,
     "16M", // remember to change BackupMemory
-    "0",
+    "2M",
     STR_VALUE(MAX_INT_RNIL) },
 
   { 
@@ -1572,7 +1652,7 @@ const ConfigInfo::ParamInfo ConfigInfo::m_ParamInfo[] = {
     false,
     ConfigInfo::CI_INT,
     "16M", // remember to change BackupMemory
-    "0",
+    "2M",
     STR_VALUE(MAX_INT_RNIL) },
 
   { 
@@ -1584,7 +1664,7 @@ const ConfigInfo::ParamInfo ConfigInfo::m_ParamInfo[] = {
     false,
     ConfigInfo::CI_INT,
     "256K",
-    "2K",
+    "32K",
     STR_VALUE(MAX_INT_RNIL) },
 
   { 
@@ -1596,7 +1676,7 @@ const ConfigInfo::ParamInfo ConfigInfo::m_ParamInfo[] = {
     false,
     ConfigInfo::CI_INT,
     "1M",
-    "2K",
+    "256K",
     STR_VALUE(MAX_INT_RNIL) },
 
   { 
@@ -2022,6 +2102,19 @@ const ConfigInfo::ParamInfo ConfigInfo::m_ParamInfo[] = {
     "1"                      /* Max */
   },
 
+  {
+    CFG_DB_PARALLEL_COPY_THREADS,
+    "MaxParallelCopyInstances",
+    DB_TOKEN,
+    "Number of parallel copies during node restarts, 0 means default",
+    ConfigInfo::CI_USED,
+    false,
+    ConfigInfo::CI_INT,
+    "0",
+    "0",                     /* Min */
+    "64"                      /* Max */
+  },
+
 
   {
     CFG_DB_2PASS_INR,
@@ -2256,6 +2349,18 @@ const ConfigInfo::ParamInfo ConfigInfo::m_ParamInfo[] = {
     "false",
     "true"
   },
+  {
+    CFG_MIXOLOGY_LEVEL,
+    "__debug_mixology_level",
+    DB_TOKEN,
+    "Artificial signal flow mixing to expose bugs.",
+    ConfigInfo::CI_USED,
+    false,
+    ConfigInfo::CI_INT,
+    "0",
+    "0",
+    STR_VALUE(MAX_INT_RNIL)
+  },
 
   {
     CFG_DB_AT_RESTART_SUBSCRIBER_CONNECT_TIMEOUT,
@@ -2353,8 +2458,8 @@ const ConfigInfo::ParamInfo ConfigInfo::m_ParamInfo[] = {
     KEY_INTERNAL,
     "ExecuteOnComputer",
     API_TOKEN,
-    "String referencing an earlier defined COMPUTER",
-    ConfigInfo::CI_USED,
+    "HostName",
+    ConfigInfo::CI_DEPRECATED,
     false,
     ConfigInfo::CI_STRING,
     0,
@@ -2516,6 +2621,51 @@ const ConfigInfo::ParamInfo ConfigInfo::m_ParamInfo[] = {
     "0",
     STR_VALUE(NDB_DEFAULT_HASHMAP_BUCKETS)
   },
+  {
+    CFG_MIXOLOGY_LEVEL,
+    "__debug_mixology_level",
+    API_TOKEN,
+    "Artificial signal flow mixing to expose bugs.",
+    ConfigInfo::CI_USED,
+    false,
+    ConfigInfo::CI_INT,
+    "0",
+    "0",
+    STR_VALUE(MAX_INT_RNIL)
+  },
+
+  {
+    CFG_CONNECT_BACKOFF_MAX_TIME,
+    "ConnectBackoffMaxTime",
+    "API",
+    "Specifies the longest time between connection attempts to a "
+    "data node from an api node in milliseconds (with "
+    "approximately 100ms resolution).  Note that this excludes "
+    "any time while a connection attempt are underway, which in "
+    "worst case can take several seconds.  To disable the backoff "
+    "set it to zero.",
+    ConfigInfo::CI_USED,
+    false,
+    ConfigInfo::CI_INT,
+    "1500",
+    "0",
+    STR_VALUE(MAX_INT_RNIL)
+  },
+
+  {
+    CFG_START_CONNECT_BACKOFF_MAX_TIME,
+    "StartConnectBackoffMaxTime",
+    "API",
+    "This has the same meaning as ConnectBackoffMaxTime, but "
+    "is used instead of it while no data nodes are connected to "
+    "the API node.",
+    ConfigInfo::CI_USED,
+    false,
+    ConfigInfo::CI_INT,
+    "0",
+    "0",
+    STR_VALUE(MAX_INT_RNIL)
+  },
 
   /****************************************************************************
    * MGM
@@ -2617,8 +2767,8 @@ const ConfigInfo::ParamInfo ConfigInfo::m_ParamInfo[] = {
     KEY_INTERNAL,
     "ExecuteOnComputer",
     MGM_TOKEN,
-    "String referencing an earlier defined COMPUTER",
-    ConfigInfo::CI_USED,
+    "HostName",
+    ConfigInfo::CI_DEPRECATED,
     false,
     ConfigInfo::CI_STRING,
     0,
@@ -2628,8 +2778,8 @@ const ConfigInfo::ParamInfo ConfigInfo::m_ParamInfo[] = {
     KEY_INTERNAL,
     "MaxNoOfSavedEvents",
     MGM_TOKEN,
-    "",
-    ConfigInfo::CI_USED,
+    0, // No new parameter to use instead of deprecated
+    ConfigInfo::CI_DEPRECATED,
     false,
     ConfigInfo::CI_INT,
     "100",
@@ -2733,6 +2883,37 @@ const ConfigInfo::ParamInfo ConfigInfo::m_ParamInfo[] = {
     "1500",
     "100",
     STR_VALUE(MAX_INT_RNIL) },
+
+  {
+    CFG_MIXOLOGY_LEVEL,
+    "__debug_mixology_level",
+    MGM_TOKEN,
+    "Artificial signal flow mixing to expose bugs.",
+    ConfigInfo::CI_USED,
+    false,
+    ConfigInfo::CI_INT,
+    "0",
+    "0",
+    STR_VALUE(MAX_INT_RNIL)
+  },
+
+  {
+    CFG_DB_DISK_PAGE_BUFFER_ENTRIES,
+    "DiskPageBufferEntries",
+    DB_TOKEN,
+    "Determines number of unique disk page requests to allocate. "
+    "Specified as multiple of number of buffer pages "
+    "i.e. number of 32k pages in DiskPageBufferMemory. "
+    "Each entry takes about 100 bytes. "
+    "Large disk data transactions "
+    "may require increasing the default.",
+    ConfigInfo::CI_USED,
+    false,
+    ConfigInfo::CI_INT,
+    "10",
+    "1",
+    STR_VALUE(MAX_INT32)
+  },
 
   /****************************************************************************
    * TCP
@@ -3422,7 +3603,6 @@ ConfigInfo::ConfigInfo()
     Properties pinfo(true); 
     pinfo.put("Id",          param._paramId);
     pinfo.put("Fname",       param._fname);
-    pinfo.put("Description", param._description);
 
     /*
       Check that flags are set according to current rules
@@ -3452,6 +3632,7 @@ ConfigInfo::ConfigInfo()
 
     pinfo.put("Type",        param._type);
 
+    // Check that status is an enum and not used as a bitmask
     const Status status = param._status;
     require(status == CI_USED ||
             status == CI_EXPERIMENTAL ||
@@ -3459,6 +3640,23 @@ ConfigInfo::ConfigInfo()
             status == CI_NOTIMPLEMENTED ||
             status == CI_INTERNAL);
     pinfo.put("Status", status);
+
+    // Check description
+    const char* desc = param._description;
+    if (status == CI_DEPRECATED)
+    {
+      // The description of a deprecated parameter may be the name
+      // of another parameter to use or NULL(in such case use empty
+      // string as description)
+      if (desc == NULL)
+        desc = "";
+    }
+    else
+    {
+      // The description may not be NULL
+      require(desc);
+    }
+    pinfo.put("Description", desc);
 
     switch (param._type) {
       case CI_BOOL:
@@ -3978,7 +4176,13 @@ public:
   virtual void parameter(const char* section_name,
                          const Properties* section,
                          const char* param_name,
-                         const ConfigInfo& info){
+                         const ConfigInfo& info)
+  {
+    // Don't print deprecated parameters
+    const Uint32 status = info.getStatus(section, param_name);
+    if (status == ConfigInfo::CI_DEPRECATED)
+      return;
+
     switch (info.getType(section, param_name)) {
     case ConfigInfo::CI_BOOL:
       fprintf(m_out, "%s (Boolean value)\n", param_name);
@@ -4211,13 +4415,16 @@ public:
       pairs.put("initial", "true");
 
     // Get "supported" flag
-    Uint32 status = info.getStatus(section, param_name);
+    const Uint32 status = info.getStatus(section, param_name);
     buf.clear();
-    if (status & ConfigInfo::CI_EXPERIMENTAL)
+    if (status == ConfigInfo::CI_EXPERIMENTAL)
       buf.append("experimental");
 
     if (buf.length())
       pairs.put("supported", buf.c_str());
+
+    if (status == ConfigInfo::CI_DEPRECATED)
+      pairs.put("deprecated", "true");
 
     print_xml("param", pairs);
   }
@@ -4270,7 +4477,6 @@ void ConfigInfo::print_impl(const char* section_filter,
     for (const char* n = it.first(); n != NULL; n = it.next()) {
       // Skip entries with different F- and P-names
       if (getStatus(sec, n) == ConfigInfo::CI_INTERNAL) continue;
-      if (getStatus(sec, n) == ConfigInfo::CI_DEPRECATED) continue;
       if (getStatus(sec, n) == ConfigInfo::CI_NOTIMPLEMENTED) continue;
       printer.parameter(s, sec, n, *this);
     }
@@ -4290,7 +4496,6 @@ void ConfigInfo::print_impl(const char* section_filter,
     for (const char* n = it.first(); n != NULL; n = it.next()) {
       // Skip entries with different F- and P-names
       if (getStatus(sec, n) == ConfigInfo::CI_INTERNAL) continue;
-      if (getStatus(sec, n) == ConfigInfo::CI_DEPRECATED) continue;
       if (getStatus(sec, n) == ConfigInfo::CI_NOTIMPLEMENTED) continue;
       printer.parameter(s, sec, n, *this);
     }
@@ -5042,8 +5247,10 @@ check_2n_number_less_32(Uint32 num)
     case 4:
     case 6:
     case 8:
+    case 10:
     case 12:
     case 16:
+    case 20:
     case 24:
     case 32:
       return true;
@@ -5082,13 +5289,13 @@ checkThreadConfig(InitConfigFileParser::Context & ctx, const char * unused)
 
   if (!check_2n_number_less_32(lqhThreads))
   {
-    ctx.reportError("NumLqhThreads must be 0,1,2,4,6,8,12,16,24 or 32");
+    ctx.reportError("NumLqhThreads must be 0,1,2,4,6,8,10,12,16,20,24 or 32");
     return false;
   }
   if (!check_2n_number_less_32(ndbLogParts) ||
       ndbLogParts < 4)
   {
-    ctx.reportError("NoOfLogParts must be 4,6,8,12,16,24 or 32");
+    ctx.reportError("NoOfLogParts must be 4,6,8,10,12,16,20,24 or 32");
     return false;
   }
   if (ctx.m_currentSection->get("ThreadConfig", &thrconfig))

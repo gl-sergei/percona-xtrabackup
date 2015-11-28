@@ -1,4 +1,4 @@
-# Copyright (c) 2010, 2014, Oracle and/or its affiliates. All rights reserved.
+# Copyright (c) 2010, 2015, Oracle and/or its affiliates. All rights reserved.
 # 
 # This program is free software; you can redistribute it and/or modify
 # it under the terms of the GNU General Public License as published by
@@ -19,33 +19,40 @@ ELSE()
   SET(WIX_ARCH "x86")
 ENDIF()
 
-IF(MSVC_VERSION EQUAL 1800)
-  SET(WIX38_MSVC_DIR "VS2013")
+IF(MSVC_VERSION EQUAL 1900)
+  SET(WIX_MSVC_DIR "VS2015")
+ELSEIF(MSVC_VERSION EQUAL 1800)
+  SET(WIX_MSVC_DIR "VS2013")
 ELSEIF(MSVC_VERSION EQUAL 1600)
-  SET(WIX38_MSVC_DIR "VS2010") 
+  SET(WIX_MSVC_DIR "VS2010") 
 ELSE()
   # When next VS is out, add the correct version here
   MESSAGE(FATAL_ERROR "Unknown VS version")
 ENDIF()
 
-INCLUDE_DIRECTORIES(${WIX_DIR}/../SDK/${WIX38_MSVC_DIR}/inc)
-LINK_DIRECTORIES(${WIX_DIR}/../SDK/${WIX38_MSVC_DIR}/lib/${WIX_ARCH})
+INCLUDE_DIRECTORIES(${WIX_DIR}/../SDK/${WIX_MSVC_DIR}/inc)
+LINK_DIRECTORIES(${WIX_DIR}/../SDK/${WIX_MSVC_DIR}/lib/${WIX_ARCH})
 
 SET(WIXCA_SOURCES CustomAction.cpp CustomAction.def)
 
-MESSAGE(STATUS "Searching for wcautil in ${WIX_DIR}/../SDK/${WIX38_MSVC_DIR}/lib/${WIX_ARCH}")
-MESSAGE(STATUS "Searching for dutil in ${WIX_DIR}/../SDK/${WIX38_MSVC_DIR}/lib/${WIX_ARCH}")
+MESSAGE(STATUS "Searching for wcautil in ${WIX_DIR}/../SDK/${WIX_MSVC_DIR}/lib/${WIX_ARCH}")
+MESSAGE(STATUS "Searching for dutil in ${WIX_DIR}/../SDK/${WIX_MSVC_DIR}/lib/${WIX_ARCH}")
 
 FIND_LIBRARY(WIX_WCAUTIL_LIBRARY 
   NAMES wcautil
-  PATHS ${WIX_DIR}/../SDK/${WIX38_MSVC_DIR}/lib/${WIX_ARCH})
+  PATHS ${WIX_DIR}/../SDK/${WIX_MSVC_DIR}/lib/${WIX_ARCH})
 
 FIND_LIBRARY(WIX_DUTIL_LIBRARY 
   NAMES dutil
-  PATHS ${WIX_DIR}/../SDK/${WIX38_MSVC_DIR}/lib/${WIX_ARCH})
+  PATHS ${WIX_DIR}/../SDK/${WIX_MSVC_DIR}/lib/${WIX_ARCH})
 
 MESSAGE(STATUS "Found: ${WIX_WCAUTIL_LIBRARY}")
 MESSAGE(STATUS "Found: ${WIX_DUTIL_LIBRARY}")
+
+IF("${VERSION}" MATCHES "-ndb-")
+  MESSAGE(STATUS "This is Cluster build, turning on extra custom actions")
+  ADD_DEFINITIONS(-DCLUSTER_EXTRA_CUSTOM_ACTIONS)
+ENDIF()
 
 ADD_VERSION_INFO(wixca SHARED WIXCA_SOURCES)
 ADD_LIBRARY(wixca SHARED EXCLUDE_FROM_ALL ${WIXCA_SOURCES})

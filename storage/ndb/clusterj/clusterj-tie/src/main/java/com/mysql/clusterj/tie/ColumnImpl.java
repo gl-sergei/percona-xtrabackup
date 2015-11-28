@@ -1,5 +1,5 @@
 /*
- *  Copyright (c) 2010, 2013, Oracle and/or its affiliates. All rights reserved.
+ *  Copyright (c) 2010, 2015, Oracle and/or its affiliates. All rights reserved.
  *
  *  This program is free software; you can redistribute it and/or modify
  *  it under the terms of the GNU General Public License as published by
@@ -180,12 +180,14 @@ class ColumnImpl implements Column {
                 break;
             case ColumnConst.Type.Blob:
                 this.prefixLength = 0;
-                this.columnSpace = inlineSize;
+                // space is reserved for a pointer to the blob header, 8 bytes for today's architecture
+                this.columnSpace = 8; // only the blob header has space in the record
                 this.lob = true;
                 break;
             case ColumnConst.Type.Text:
                 this.prefixLength = 0;
-                this.columnSpace = inlineSize;
+                // space is reserved for a pointer to the blob header, 8 bytes for today's architecture
+                this.columnSpace = 8; // only the blob header has space in the record
                 this.charsetNumber = ndbColumn.getCharsetNumber();
                 this.lob = true;
                 mapCharsetName();
@@ -232,7 +234,7 @@ class ColumnImpl implements Column {
                 String message = 
                     local.message("ERR_Unknown_Column_Type",
                     tableName, ndbColumn.getName(), ndbType);
-                logger.info(message);
+                logger.warn(message);
                 throw new ClusterJFatalInternalException(message);
         }
         if (logger.isDetailEnabled()) logger.detail("Column " + columnName
@@ -302,7 +304,7 @@ class ColumnImpl implements Column {
                 String message = 
                     local.message("ERR_Unknown_Column_Type",
                     tableName, columnName, type);
-                logger.info(message);
+                logger.warn(message);
                 throw new ClusterJFatalInternalException(message);
         }
     }

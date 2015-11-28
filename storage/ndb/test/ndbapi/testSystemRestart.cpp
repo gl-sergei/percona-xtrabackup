@@ -1,5 +1,5 @@
 /*
-   Copyright (c) 2003, 2010, Oracle and/or its affiliates. All rights reserved.
+   Copyright (c) 2003, 2015, Oracle and/or its affiliates. All rights reserved.
 
    This program is free software; you can redistribute it and/or modify
    it under the terms of the GNU General Public License as published by
@@ -24,12 +24,68 @@
 #include <signaldata/DumpStateOrd.hpp>
 #include <NdbBackup.hpp>
 #include <Bitmask.hpp>
+#include <DbUtil.hpp>
 
 int runLoadTable(NDBT_Context* ctx, NDBT_Step* step){
 
   int records = ctx->getNumRecords();
   HugoTransactions hugoTrans(*ctx->getTab());
   if (hugoTrans.loadTable(GETNDB(step), records) != 0){
+    return NDBT_FAILED;
+  }
+  return NDBT_OK;
+}
+
+int runFillTable(NDBT_Context* ctx, NDBT_Step* step){
+  Ndb* pNdb = GETNDB(step);
+  NdbDictionary::Table tab(*ctx->getTab());
+
+  /* fill table until its full */
+  HugoTransactions hugoTrans(tab);
+  if(hugoTrans.fillTable(pNdb) != 0){
+    return NDBT_FAILED;
+  }
+
+  /* store the number of rows */
+  int cnt;
+  UtilTransactions utilTrans(tab);
+  if(utilTrans.selectCount(pNdb, 0, &cnt) != 0){
+    g_err << "Select count failed." << endl;
+    return NDBT_FAILED;
+  }
+  ctx->setProperty("recordCount", cnt);
+  return NDBT_OK;
+}
+
+int runVerifyFilledTables(NDBT_Context* ctx, NDBT_Step* step)
+{
+  /* verify the number of rows is intact */
+  Ndb* pNdb = GETNDB(step);
+  int countOld= ctx->getProperty("recordCount");
+  if (countOld == 0){
+    /* table was not filled using fillTable */
+    g_err << "Table initial row count not available" << endl;
+    return NDBT_FAILED;
+  }
+  /* ctx's tab gets invalidated in alter table reorganize partition
+          Hence reloading table again to verify */
+  const char *tableName= ctx->getTableName(0);
+  const NdbDictionary::Table* pTab =
+      NDBT_Table::discoverTableFromDb(pNdb, tableName);
+  if (pTab == NULL){
+    g_err << tableName << " was lost during the test." << endl;
+    return NDBT_FAILED;
+  }
+
+  /* compare new record count with old */
+  int cnt;
+  UtilTransactions utilTrans(*pTab);
+  if(utilTrans.selectCount(pNdb, 0, &cnt) != 0){
+    g_err << "Select count failed." << endl;
+    return NDBT_FAILED;
+  }
+  if(cnt != countOld){
+    g_err << "Number of rows in result table different from expected" << endl;
     return NDBT_FAILED;
   }
   return NDBT_OK;
@@ -1060,6 +1116,117 @@ int runSystemRestart9(NDBT_Context* ctx, NDBT_Step* step){
   return result;
 }
 
+int runSystemRestart10(NDBT_Context* ctx, NDBT_Step* step)
+{
+  Ndb* pNdb = GETNDB(step);
+  int result = NDBT_OK;
+  //Uint32 loops = ctx->getNumLoops();
+  Uint32 loops = 3;
+  int records = ctx->getNumRecords();
+  NdbRestarter restarter;
+  Uint32 i = 1;
+
+  const Uint32 nodeCount = restarter.getNumDbNodes();
+  if(nodeCount < 4){
+    g_info << "SR10 - Needs atleast 4 nodes to test" << endl;
+    return NDBT_OK;
+  }
+
+  Vector<int> nodeIds;
+  for(i = 0; i<nodeCount; i++)
+    nodeIds.push_back(restarter.getDbNodeId(i));
+
+  int a_nodeIds[64];
+  if(nodeCount > 64)
+    abort();
+
+  UtilTransactions utilTrans(*ctx->getTab());
+  HugoTransactions hugoTrans(*ctx->getTab());
+
+  i = 1;
+  while(i < loops && result != NDBT_FAILED){
+    
+    g_info << "Loop " << i << "/"<< loops <<" started" << endl;
+    /**
+     * 1. Load data
+     * 2. Stop one node X (restart -nostart)
+     * 3. Wait 10 seconds to ensure some GCPs are executed.
+     * 4. Stop the rest of the nodes
+     * 5. Start all nodes, but insert an error into the 2nd
+     *    node to prevent it from passing phase 3 for 10
+     *    seconds. The cluster should wait for these 10
+     *    seconds, it cannot proceed at this point without
+     *    it. If it tries to start without it, there will
+     *    be a crash of the system restart.
+     * 6. Verify records
+     */
+
+    g_info << "Loading records..." << endl;
+    hugoTrans.loadTable(pNdb, records);
+   
+    Uint32 j = 0;
+    for(Uint32 k = 0; k<nodeCount; k++)
+    {
+      a_nodeIds[j++] = nodeIds[k];
+    }
+
+    g_info << "Stop 2nd last node" << endl;
+    CHECK(restarter.restartOneDbNode(a_nodeIds[nodeCount - 2],
+				     false, 
+				     true,
+				     false) == 0);
+
+    NdbSleep_SecSleep(10);
+    g_info << "Stop rest of the nodes" << endl;
+    CHECK(restarter.restartAll(false, true, false) == 0);
+    
+    int nodeId = a_nodeIds[nodeCount - 1];
+
+    if (i == 0)
+    {
+      g_info << "Inject Error 1021 into last node to stop it in phase 1" << endl;
+      CHECK(restarter.insertErrorInNode(nodeId, 1021) == 0);
+    }
+    else if (i == 1)
+    {
+      g_info << "Inject Error 1010 into last node to stop it in phase 4" << endl;
+      CHECK(restarter.insertErrorInNode(nodeId, 1010) == 0);
+    }
+    if (i == 2)
+    {
+      g_info << "Start all nodes except the last node" << endl;
+      CHECK(restarter.startNodes(a_nodeIds, nodeCount - 1) == 0);
+      g_info << "Wait for those nodes to start, expect failure" << endl;
+      CHECK(restarter.waitNodesStarted(a_nodeIds, nodeCount - 1, 30) != 0);
+      g_info << "Start the last node" << endl;
+      CHECK(restarter.startNodes(&nodeId, 1) == 0);
+      g_info << "Wait for cluster to be started" << endl;
+      CHECK(restarter.waitNodesStarted(a_nodeIds, nodeCount, 120) == 0);
+    }
+    else
+    {
+      CHECK(restarter.startNodes(a_nodeIds, nodeCount) == 0);
+      g_info << "Wait for cluster to be started" << endl;
+      CHECK(restarter.waitNodesStarted(a_nodeIds, nodeCount, 120) == 0);
+    }
+    g_info << "Perform consistency checks" << endl;
+    CHECK(pNdb->waitUntilReady(5) == 0);
+    int count = records - 1;
+    CHECK(utilTrans.selectCount(pNdb, 64, &count) == 0);
+    CHECK(count == records);
+    
+    CHECK(utilTrans.selectCount(pNdb, 64, &count) == 0);
+    CHECK(count == records);
+    CHECK(utilTrans.clearTable(pNdb) == 0);    
+
+    i++;
+  }
+  
+  g_info << "runSystemRestart10 finished" << endl;  
+
+  return result;
+}
+
 int runBug18385(NDBT_Context* ctx, NDBT_Step* step){
   NdbRestarter restarter;
   const Uint32 nodeCount = restarter.getNumDbNodes();
@@ -1466,7 +1633,8 @@ int runSR_DD_1(NDBT_Context* ctx, NDBT_Step* step)
     ndbout << "Found " << cnt << " records..." << endl;
     ndbout << "Updating..." << endl;
     CHECK(hugoTrans.scanUpdateRecords(pNdb,
-                                      NdbScanOperation::SF_TupScan, cnt) == 0);
+                                      NdbScanOperation::SF_TupScan, cnt) == 0
+          || hugoTrans.getRetryMaxReached());
     ndbout << "Clearing..." << endl;    
     CHECK(hugoTrans.clearTable(pNdb,
                                NdbScanOperation::SF_TupScan, cnt) == 0);
@@ -1573,7 +1741,8 @@ int runSR_DD_2(NDBT_Context* ctx, NDBT_Step* step)
     ndbout << "Found " << cnt << " records..." << endl;
     ndbout << "Updating..." << endl;
     CHECK(hugoTrans.scanUpdateRecords(pNdb,
-                                      NdbScanOperation::SF_TupScan, cnt) == 0);
+                                      NdbScanOperation::SF_TupScan, cnt) == 0
+          || hugoTrans.getRetryMaxReached());
     ndbout << "Clearing..." << endl;    
     CHECK(hugoTrans.clearTable(pNdb,
                                NdbScanOperation::SF_TupScan, cnt) == 0);
@@ -1678,7 +1847,8 @@ int runSR_DD_3(NDBT_Context* ctx, NDBT_Step* step)
       if (hugoTrans.getTransaction() != 0)
         hugoTrans.closeTransaction(pNdb);
 
-      if (hugoTrans.scanUpdateRecords(pNdb, NdbScanOperation::SF_TupScan,0)!=0)
+      if (hugoTrans.scanUpdateRecords(pNdb, NdbScanOperation::SF_TupScan,0)!=0
+          && !hugoTrans.getRetryMaxReached())
 	break;
     } while (NdbTick_CurrentMillisecond() < end);
 
@@ -2421,6 +2591,481 @@ runBug56961(NDBT_Context* ctx, NDBT_Step* step)
   return NDBT_OK;
 }
 
+int runAddNodes(NDBT_Context* ctx, NDBT_Step* step)
+{
+  /*
+   To add new nodes online, the two nodes should be already up in the cluster,
+   with nodegroup 65536. Then they can be added to the cluster online using the
+   ndb_mgm command create nodegroup. Here,
+   1. we retrieve the list of such nodes with ng 65536(internally -256) and
+   2. add them to the cluster by passing them to the mgmapi function
+      ndb_mgm_create_nodegroup().
+   */
+  NdbRestarter restarter;
+
+  Vector<int> newNodes;
+  int ng;
+
+  /* Retrieve the list of nodes with nodegroup 65536(-256) */
+  for(int i= 0; i < restarter.getNumDbNodes(); i++ )
+  {
+    int _node_id= restarter.getDbNodeId(i);
+    if(restarter.getNodeGroup(_node_id) == -256)
+    {
+      /* nodes that don't have a nodegroup yet */
+      newNodes.push_back(_node_id);
+    }
+  }
+
+  /* if there are no new nodes, can't test add node restart */
+  if(newNodes.size() == 0)
+  {
+    g_err << "ERR: "<< step->getName()
+        << " failed on line " << __LINE__ << endl;
+    g_err << "Incorrect cluster configuration."
+        << "Requires additional nodes with nodegroup 65536." << endl;
+    return NDBT_FAILED;
+  }
+
+  /* end of array value for newNodes */
+  newNodes.push_back(0);
+
+  /* include the new nodes into cluster using ndb_mgm_create_nodegroup() */
+  if(ndb_mgm_create_nodegroup(restarter.handle, newNodes.getBase(),
+                              &ng, NULL) != 0)
+  {
+    g_err << "ERR: "<< step->getName()
+        << " failed on line " << __LINE__ << endl;
+    g_err << ndb_mgm_get_latest_error_desc(restarter.handle) << endl;
+    return NDBT_FAILED;
+  }
+  g_info << "New nodes added to nodegroup " << ng << endl;
+
+  return NDBT_OK;
+}
+
+int runAlterTableAndOptimize(NDBT_Context* ctx, NDBT_Step* step)
+{
+  NdbRestarter restarter;
+  /* check if there is a possibility of node killing during redistribution */
+  bool nodesKilledDuringStep= ctx->getProperty("NodesKilledDuringStep");
+
+  /* Redistribute existing cluster data */
+  DbUtil sql("TEST_DB");
+  {
+    BaseString query;
+    int numOfTables = ctx->getNumTables();
+
+    /* ALTER ONLINE TABLE <tbl_name> REORGANIZE PARTITION */
+    for(int i= 0; i < numOfTables; i++ )
+    {
+      SqlResultSet resultSet;
+      query.assfmt("ALTER ONLINE TABLE %s REORGANIZE PARTITION",
+                   ctx->getTableName(i));
+      g_info << "Executing query : "<< query.c_str() << endl;
+
+      if(!sql.doQuery(query.c_str(), resultSet)){
+        if(nodesKilledDuringStep &&
+           sql.getErrorNumber() == 0)
+        {
+          /* query failed probably because of a node kill in another step.
+             wait for the nodes to get into start phase before retrying */
+          if(restarter.waitClusterStarted() != 0){
+            g_err << "Cluster went down during reorganize partition" << endl;
+            return NDBT_FAILED;
+          }
+          /* retry the query for same table */
+          i--;
+          nodesKilledDuringStep= false;
+          continue;
+        } else {
+          /* either the query failed due to returning error code from server
+           or cluster crash */
+          g_err << "QUERY : "<< query.c_str() << "; failed" << endl;
+          return NDBT_FAILED;
+        }
+      }
+    }
+
+    if(nodesKilledDuringStep){
+      /* Nodes were supposed to be killed during alter table,
+         but they never were. Test lost its purpose. Mark it as failed
+         Mostly won't happen. Just insuring. */
+      g_err << "Nodes were never killed during alter table." << endl;
+      return NDBT_FAILED;
+    }
+
+    /* Reclaim freed space by running optimize table */
+    for(int i= 0; i < numOfTables; i++ )
+    {
+      SqlResultSet result;
+      BaseString query;
+      query.assfmt("OPTIMIZE TABLE %s", ctx->getTableName(i));
+      g_info << "Executing query : "<< query.c_str() << endl;
+      if (!sql.doQuery(query.c_str(), result)){
+        g_err << "Failed executing optimize table" << endl;
+        return NDBT_FAILED;
+      }
+    }
+  }
+  return NDBT_OK;
+}
+
+int runKillTwoNodes(NDBT_Context* ctx, NDBT_Step* step)
+{
+  NdbRestarter restarter;
+  int val[] = { DumpStateOrd::CmvmiSetRestartOnErrorInsert, 1 };
+  int kill[] = { 9999, 3000, 10000 };
+  int result = NDBT_OK;
+
+  Vector<int> nodes;
+
+  /* choose first victim */
+  nodes.push_back(restarter.getDbNodeId(rand() % restarter.getNumDbNodes()));
+  /* select a node from different group as next victim */
+  nodes.push_back(restarter.getRandomNodeOtherNodeGroup(nodes[0], rand()));
+  for(int i = 0; i < 2; i++){
+    g_info << "Killing node " << nodes[i] << "..." << endl;
+    CHECK(restarter.dumpStateOneNode(nodes[i], val, 2) == 0);
+    CHECK(restarter.dumpStateOneNode(nodes[i], kill, 3) == 0);
+  }
+
+  /* wait for both of them to come into no start */
+  if(restarter.waitNodesNoStart(nodes.getBase(), 2) != 0)
+  {
+    g_err << "Nodes never restarted" << endl;
+    return NDBT_FAILED;
+  }
+
+  /* start the killed nodes */
+  if(restarter.startNodes(nodes.getBase(), 2) != 0)
+  {
+    g_err << "Unable to start killed node." << endl;
+    return NDBT_FAILED;
+  }
+
+  /* wait for nodes to get started */
+  if(restarter.waitNodesStarted(nodes.getBase(), nodes.size()) != 0)
+  {
+    g_err << "Killed nodes stuck in start phase." << endl;
+    return NDBT_FAILED;
+  }
+
+  return result;
+}
+
+int runRestartOneNode(NDBT_Context* ctx, NDBT_Step* step){
+  Ndb* pNdb = GETNDB(step);
+  int result = NDBT_OK;
+  int timeout = 300;
+  int records = ctx->getNumRecords();
+  int count;
+  NdbRestarter restarter;
+  const int nodeCount = restarter.getNumDbNodes();
+  if(nodeCount < 2){
+    g_info << "RestartOneNode - Needs atleast 2 nodes to test" << endl;
+    return NDBT_OK;
+  }
+  Vector<int> nodeIds;
+  for(int i = 0; i<nodeCount; i++)
+    nodeIds.push_back(restarter.getDbNodeId(i));
+  Uint32 currentRestartNodeIndex = 0;
+  HugoTransactions hugoTrans(*ctx->getTab());
+  int cnt = nodeCount;
+  /**
+  1. Load data
+  2. One by one restart all nodes with -nostart
+  3. Verify records
+  **/
+
+  /*** 1 ***/
+  g_info << "1- Loading Data " << endl;
+  hugoTrans.loadTable(pNdb, records);
+
+  while(cnt-- && result != NDBT_FAILED)
+  {
+    /*** 2 ***/
+    g_info << "2- Restarting node : " << nodeIds[currentRestartNodeIndex]<< endl;
+
+    CHECK(restarter.restartOneDbNode(nodeIds[currentRestartNodeIndex],
+                                          false,//Initial
+                                          true,//nostart
+                                          false//abort
+                                          ) == 0);
+    CHECK(restarter.waitNodesNoStart(&nodeIds[currentRestartNodeIndex], 1, timeout) == 0);
+    CHECK(restarter.startNodes(&nodeIds[currentRestartNodeIndex], 1) == 0);
+    CHECK(restarter.waitNodesStarted(&nodeIds[currentRestartNodeIndex], 1, timeout) == 0);
+    currentRestartNodeIndex = (currentRestartNodeIndex + 1 ) % nodeCount;
+  }
+
+  /*** 3 ***/
+  ndbout << "3- Verifying records..." << endl;
+  if(hugoTrans.selectCount(pNdb, 64, &count) )
+    return NDBT_FAILED;
+  if(hugoTrans.clearTable(pNdb))
+    return NDBT_FAILED;
+
+  /*** done ***/
+  g_info << "runRestartOneNode finished" << endl;
+  return result;
+}
+
+int runMixedModeRestart(NDBT_Context* ctx, NDBT_Step* step){
+  int result = NDBT_OK;
+  int timeout = 300;
+  NdbRestarter restarter;
+  const int nodeCount = restarter.getNumDbNodes();
+  if(nodeCount < 4){
+    g_info << "MixedModeRestart - Needs atleast 4 nodes to test" << endl;
+    return NDBT_OK;
+  }
+  Vector<int> nodeIds;
+  for(int i = 0; i<nodeCount; i++)
+    nodeIds.push_back(restarter.getDbNodeId(i));
+  int nodeToKill = nodeIds[0];
+  int val[] = { DumpStateOrd::CmvmiSetRestartOnErrorInsert, 1 };
+  /**
+  1. Killing two nodes of diffrent groups.
+  2. Starting nodes with and without --initial option.
+  **/
+
+  /*** 1 ***/
+  g_info << "1- Killing two nodes..." << endl;
+  int otherNodeToKill = restarter.getRandomNodeOtherNodeGroup(nodeToKill,rand());
+  if(otherNodeToKill == -1)
+    return NDBT_FAILED;
+
+  int kill[] = { 9999, 3000, 10000 };
+
+  g_info <<"    Killing node : "<< nodeToKill << endl;
+  if(restarter.dumpStateOneNode(nodeToKill, val, 2))
+    return NDBT_FAILED;
+  if(restarter.dumpStateOneNode(nodeToKill, kill, 3))
+    return NDBT_FAILED;
+
+  g_info <<"    Killing node : "<< otherNodeToKill << endl;
+  if(restarter.dumpStateOneNode(otherNodeToKill, val, 2))
+    return NDBT_FAILED;
+  if(restarter.dumpStateOneNode(otherNodeToKill, kill, 3))
+    return NDBT_FAILED;
+
+  /*** 2 ***/
+  g_info << "2 - Starting nodes with and without --initial option..." << endl;
+
+  if(restarter.restartOneDbNode(nodeToKill,
+                                false,//Initial
+                                true,//nostart
+                                false//abort
+                                ))
+    return NDBT_FAILED;
+  if(restarter.waitNodesNoStart(&nodeToKill, 1, timeout))
+    return NDBT_FAILED;
+  if(restarter.startNodes(&nodeToKill, 1))
+    return NDBT_FAILED;
+  if(restarter.waitNodesStarted(&nodeToKill, 1, timeout))
+    return NDBT_FAILED;
+
+  if(restarter.restartOneDbNode(otherNodeToKill,
+                                true,//Initial
+                                true,//nostart
+                                false//abort
+                                ))
+    return NDBT_FAILED;
+  if(restarter.waitNodesNoStart(&otherNodeToKill, 1, timeout))
+    return NDBT_FAILED;
+  if(restarter.startNodes(&otherNodeToKill, 1))
+    return NDBT_FAILED;
+  if(restarter.waitNodesStarted(&otherNodeToKill, 1, timeout))
+    return NDBT_FAILED;
+
+  /*** done ***/
+  g_info << "runMixedModeRestart finished" << endl;
+  return result;
+}
+
+int runStartWithNodeGroupZero(NDBT_Context* ctx, NDBT_Step* step){
+  int result = NDBT_OK;
+  int timeout = 300;
+  NdbRestarter restarter;
+  const int nodeCount = restarter.getNumDbNodes();
+  if(nodeCount < 4){
+    g_info << "StartWithNodeGroupZero - Needs atleast 4 nodes to test" << endl;
+    return NDBT_OK;
+  }
+  Vector<int> nodeIds;
+  for(int i = 0; i<nodeCount; i++)
+    nodeIds.push_back(restarter.getDbNodeId(i));
+  int nodeId = nodeIds[0];
+  int cnt = nodeCount;
+  int nodeGroup = 0;
+  while(cnt-- && nodeGroup == 0 && result != NDBT_FAILED)
+  {
+    /**
+    1. Finding a node of group id other then 0.
+    2. Restart that node
+    3. Check the group id of the above node
+    **/
+    /*** 1 ***/
+    g_info << "1- Findind a node of group id other then 0" << endl;
+    nodeGroup = restarter.getNodeGroup(nodeId);
+    g_info << "    Current node group : " << nodeGroup << endl;
+    if(nodeGroup == 0)
+    {
+      g_info << "    Skiping this node" << endl;
+      nodeId = restarter.getRandomNodeOtherNodeGroup(nodeId, 4);
+      continue;
+    }
+
+    /*** 2 ***/
+    g_info << "2- Restarting node : " << nodeId << " whose Group id is "
+           << nodeGroup << endl;
+
+    CHECK(restarter.restartOneDbNode(nodeId,
+                                     true,//Initial
+                                     true,//nostart
+                                     false//abort
+                                     ) == 0);
+    CHECK(restarter.waitNodesNoStart(&nodeId, 1, timeout) == 0);
+    CHECK(restarter.startNodes(&nodeId, 1) == 0);
+    CHECK(restarter.waitNodesStarted(&nodeId, 1, timeout) == 0);
+    nodeGroup = restarter.getNodeGroup(nodeId);
+    /*** 3 ***/
+    g_info << "3- Checking its group id" << endl;
+    CHECK(nodeGroup !=0)
+    g_info << "    current node group : " << nodeGroup << endl;
+  }
+
+  /*** done ***/
+  g_info << "runStartWithNodeGroupZero finished" << endl;
+
+  return result;
+}
+
+int runMixedModeRestart4Node(NDBT_Context* ctx, NDBT_Step* step){
+  int result = NDBT_OK;
+  NdbRestarter restarter;
+  const int nodeCount = restarter.getNumDbNodes();
+  if(nodeCount < 8){
+    g_info << "MixedModeRestart4Node - Needs atleast 8 nodes to test" << endl;
+    return NDBT_OK;
+  }
+  Vector<int> nodeIds;
+  for(int i = 0; i<nodeCount; i++)
+    nodeIds.push_back(restarter.getDbNodeId(i));
+  int val[] = { DumpStateOrd::CmvmiSetRestartOnErrorInsert, 1 };
+  /**
+  1. Killing four nodes of diffrent groups.
+  2. Starting nodes with and without --initial option.
+  **/
+
+  /*** 1 ***/
+  g_info << "1- Killing four nodes of diffrent groups." << endl;
+  int nodesarray[256];
+  int cnt = 0;
+  int timeout = 300;
+  Bitmask<4> seen_groups;
+  for(int i = 0; i< nodeCount; i++)
+  {
+    int nodeGroup=restarter.getNodeGroup(nodeIds[i]);
+    if (seen_groups.get(nodeGroup))
+    {
+      // One node in this node group already down
+      g_info << "    Continuing as one node from this group is already killed."
+             << " NodeGroup = " << nodeGroup << endl;
+      continue;
+    }
+    seen_groups.set(nodeGroup);
+    int kill[] = { 9999, 3000, 10000 };
+    g_info <<"    Killing node : "<< nodeIds[i] << endl;
+    CHECK(restarter.dumpStateOneNode(nodeIds[i], val, 2) == 0);
+    CHECK(restarter.dumpStateOneNode(nodeIds[i], kill, 3) == 0);
+    nodesarray[cnt++] = nodeIds[i];
+  }
+
+  /*** 2 ***/
+  g_info << "2- Starting nodes with and without --initial option." << endl;
+  bool flag = true;
+  for(int i = 0; i < cnt; i++)
+  {
+    CHECK(restarter.restartOneDbNode(nodesarray[i],
+                                     flag,//Initial
+                                     true,//nostart
+                                     false//abort
+                                     ) == 0);
+    CHECK(restarter.waitNodesNoStart(&nodesarray[i], 1, timeout) == 0);
+    CHECK(restarter.startNodes(&nodesarray[i], 1) == 0);
+    CHECK(restarter.waitNodesStarted(&nodesarray[i], 1, timeout) == 0);
+    flag = false;
+  }
+
+   /*** done ***/
+  g_info << "runMixedModeRestart4Node finished" << endl;
+  return result;
+}
+
+int runKillMasterNodes(NDBT_Context* ctx, NDBT_Step* step){
+  int result = NDBT_OK;
+  NdbRestarter restarter;
+  const int nodeCount = restarter.getNumDbNodes();
+  if(nodeCount < 4){
+    g_info << "KillMasterNodes - Needs atleast 4 nodes to test" << endl;
+    return NDBT_OK;
+  }
+
+  Vector<int> nodeIds;
+  for(int i = 0; i<nodeCount; i++)
+    nodeIds.push_back(restarter.getDbNodeId(i));
+  int val[] = { DumpStateOrd::CmvmiSetRestartOnErrorInsert, 1 };
+  int kill[] = { 9999, 3000, 10000 };
+  /**
+  1. Killing only master node one by one.
+  2. Start nodes without --initial option.
+  **/
+
+  /*** 1 ***/
+  g_info << "1- Killing only master node one by one." << endl;
+  int nodesarray[256];
+  int timeout = 120;
+  int cnt= 0;
+  Bitmask<8> seen_groups;
+  int master = restarter.getMasterNodeId();
+  int newMaster;
+  for(int i = 0; i< nodeCount; i++)
+  {
+    g_info << "Master Node Id : " << master << endl;
+    int nodeGroup = restarter.getNodeGroup(master);
+    CHECK(nodeGroup != -1);
+    if (seen_groups.get(nodeGroup))
+    {
+      // One node in this node group already down
+      g_info << "Breaking because master node belongs to the group whoes one"
+      << "node is already down. Master = " << master << ", node Group = "
+      << nodeGroup << endl;
+      break;
+    }
+    seen_groups.set(nodeGroup);
+    nodesarray[cnt++] = master;
+    newMaster = restarter.getNextMasterNodeId(master);
+    g_info <<"   killing node : "<< master << " group : " << nodeGroup << endl;
+    CHECK(restarter.dumpStateOneNode(master, val, 2) == 0);
+    CHECK(restarter.dumpStateOneNode(master, kill, 3) == 0);
+    CHECK(restarter.waitNodesNoStart(&master, 1) == 0);
+    master = newMaster;
+  }
+
+  /*** 2 ***/
+  g_info << "2- Starting nodes without --initial option..." << endl;
+  for(int i = 0; i<cnt; i++)
+  {
+    CHECK(restarter.startNodes(&nodesarray[i], 1) == 0);
+    CHECK(restarter.waitNodesStarted(&nodesarray[i], 1, timeout) == 0);
+  }
+
+  /*** done ***/
+  g_info << "runKillMasterNodes finished" << endl;
+  return result;
+}
+
 NDBT_TESTSUITE(testSystemRestart);
 TESTCASE("SR1", 
 	 "Basic system restart test. Focus on testing restart from REDO log.\n"
@@ -2567,6 +3212,13 @@ TESTCASE("SR9",
   INITIALIZER(runWaitStarted);
   INITIALIZER(runClearTable);
   STEP(runSystemRestart9);
+}
+TESTCASE("SR10", 
+     "More tests of partitioned system restarts\n")
+{
+  INITIALIZER(runWaitStarted);
+  INITIALIZER(runClearTable);
+  STEP(runSystemRestart10);
 }
 TESTCASE("Bug18385", 
 	 "Perform partition system restart with other nodes with higher GCI"){
@@ -2756,6 +3408,72 @@ TESTCASE("Bug56961", "")
   INITIALIZER(runLoadTable);
   INITIALIZER(runBug56961);
 }
+TESTCASE("MTR_AddNodesAndRestart1",
+         "1. Insert few rows to table"
+         "2. Add nodes to the cluster"
+         "3. Reorganize partition and optimize table"
+         "Should be run only once")
+{
+  ALL_TABLES();
+  INITIALIZER(runWaitStarted);
+  INITIALIZER(runFillTable);
+  INITIALIZER(runAddNodes);
+  STEP(runAlterTableAndOptimize);
+  VERIFIER(runVerifyFilledTables);
+}
+TESTCASE("MTR_AddNodesAndRestart2",
+         "1. Fill the table fully"
+         "2. Add nodes to the cluster"
+         "3. Reorganize partition and optimize table"
+         "4. Kill 2 nodes during reorganization"
+         "Should be run only once")
+{
+  ALL_TABLES();
+  TC_PROPERTY("NodesKilledDuringStep", true);
+  INITIALIZER(runWaitStarted);
+  INITIALIZER(runFillTable);
+  INITIALIZER(runAddNodes);
+  STEP(runAlterTableAndOptimize);
+  STEP(runKillTwoNodes);
+  VERIFIER(runVerifyFilledTables);
+}
+TESTCASE("RestartOneNode",
+	 "Perform one nodes restart\n"
+	 "* 1. Load data\n"
+	 "* 2. Restart 1 node\n"
+	 "* 3. Verify records\n"){
+  INITIALIZER(runWaitStarted);
+  STEP(runRestartOneNode);
+}
+TESTCASE("MixedModeRestart",
+         "Perform kiiling of two node and starting them\n"
+         "* 1. Killing two nodes of diffrent groups\n"
+         "* 2. Starting nodes with and without --initial option\n"){
+  INITIALIZER(runWaitStarted);
+  STEP(runMixedModeRestart);
+}
+TESTCASE("StartWithNodeGroupZero",
+         "check that a node doesn't always attached to group 0 while restart\n"
+         "* 1. Finding a node of group id other then 0\n"
+         "* 2. Restart that node\n"
+         "* 3. Check the group id of the above node\n"){
+  INITIALIZER(runWaitStarted);
+  STEP(runStartWithNodeGroupZero);
+}
+TESTCASE("MixedModeRestart4Node",
+         "Perform killing of four nodes and starting them\n"
+         "* 1. Killing four nodes of diffrent groups\n"
+         "* 2. Starting nodes with and without --initial option\n"){
+  INITIALIZER(runWaitStarted);
+  STEP(runMixedModeRestart4Node);
+}
+TESTCASE("KillMasterNodes",
+	 "perform Killing of master node and then starting them\n"
+	 "* 1. Killing only the master nodes one by one\n"
+         "* 2. Start without --initial option\n"){
+  INITIALIZER(runWaitStarted);
+  STEP(runKillMasterNodes);
+}
 NDBT_TESTSUITE_END(testSystemRestart);
 
 int main(int argc, const char** argv){
@@ -2763,5 +3481,3 @@ int main(int argc, const char** argv){
   NDBT_TESTSUITE_INSTANCE(testSystemRestart);
   return testSystemRestart.execute(argc, argv);
 }
-
-

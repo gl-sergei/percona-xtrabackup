@@ -19,6 +19,19 @@
 */
 #include "my_global.h"
 #include "thr_lock.h"
+
+/* Make sure exported prototypes match the implementation. */
+#include "pfs_file_provider.h"
+#include "pfs_idle_provider.h"
+#include "pfs_memory_provider.h"
+#include "pfs_metadata_provider.h"
+#include "pfs_socket_provider.h"
+#include "pfs_stage_provider.h"
+#include "pfs_statement_provider.h"
+#include "pfs_table_provider.h"
+#include "pfs_thread_provider.h"
+#include "pfs_transaction_provider.h"
+
 #include "mysql/psi/psi.h"
 #include "mysql/psi/mysql_thread.h"
 #include "my_thread.h"
@@ -44,6 +57,37 @@
 #include "pfs_digest.h"
 #include "pfs_program.h"
 #include "pfs_prepared_stmt.h"
+
+/*
+  This is a development tool to investigate memory statistics,
+  do not use in production.
+*/
+#undef PFS_PARANOID
+
+#ifdef PFS_PARANOID
+static void report_memory_accounting_error(
+  const char *api_name,
+  PFS_thread *new_thread,
+  size_t size,
+  PFS_memory_class *klass,
+  PFS_thread *old_thread)
+{
+  pfs_print_error("%s "
+                  "thread <%d> of class <%s> "
+                  "not owner of <%d> bytes in class <%s> "
+                  "allocated by thread <%d> of class <%s>\n",
+                  api_name,
+                  new_thread->m_thread_internal_id,
+                  new_thread->m_class->m_name,
+                  size, klass->m_name,
+                  old_thread->m_thread_internal_id,
+                  old_thread->m_class->m_name);
+
+  DBUG_ASSERT(strcmp(new_thread->m_class->m_name, "thread/sql/event_worker") != 0);
+  DBUG_ASSERT(strcmp(new_thread->m_class->m_name, "thread/sql/event_scheduler") != 0);
+  DBUG_ASSERT(strcmp(new_thread->m_class->m_name, "thread/sql/one_connection") != 0);
+}
+#endif /* PFS_PARANOID */
 
 /**
   @page PAGE_PERFORMANCE_SCHEMA The Performance Schema main page
@@ -2114,6 +2158,7 @@ extern "C" void* pfs_spawn_thread(void *arg)
     pfs= create_thread(klass, typed_arg->m_child_identity, 0);
     if (likely(pfs != NULL))
     {
+      pfs->m_thread_os_id= my_thread_os_id();
       clear_thread_account(pfs);
 
       pfs->m_parent_thread_internal_id= typed_arg->m_thread_internal_id;
@@ -2245,6 +2290,18 @@ void pfs_set_thread_THD_v1(PSI_thread *thread, THD *thd)
 
 /**
   Implementation of the thread instrumentation interface.
+  @sa PSI_v1::set_thread_os_thread_id.
+*/
+void pfs_set_thread_os_id_v1(PSI_thread *thread)
+{
+  PFS_thread *pfs= reinterpret_cast<PFS_thread*> (thread);
+  if (unlikely(pfs == NULL))
+    return;
+  pfs->m_thread_os_id= my_thread_os_id();
+}
+
+/**
+  Implementation of the thread instrumentation interface.
   @sa PSI_v1::get_thread_id.
 */
 PSI_thread*
@@ -2283,9 +2340,11 @@ void pfs_set_thread_user_v1(const char *user, int user_len)
   set_thread_account(pfs);
 
   bool enabled;
+  bool history;
   if (pfs->m_account != NULL)
   {
     enabled= pfs->m_account->m_enabled;
+    history= pfs->m_account->m_history;
   }
   else
   {
@@ -2294,16 +2353,17 @@ void pfs_set_thread_user_v1(const char *user, int user_len)
       lookup_setup_actor(pfs,
                          pfs->m_username, pfs->m_username_length,
                          pfs->m_hostname, pfs->m_hostname_length,
-                         &enabled);
+                         &enabled, &history);
     }
     else
     {
       /* There is no setting for background threads */
       enabled= true;
+      history= true;
     }
   }
-
   pfs->set_enabled(enabled);
+  pfs->set_history(history);
 
   pfs->m_session_lock.dirty_to_allocated(& dirty_state);
 }
@@ -2343,9 +2403,11 @@ void pfs_set_thread_account_v1(const char *user, int user_len,
   set_thread_account(pfs);
 
   bool enabled;
+  bool history;
   if (pfs->m_account != NULL)
   {
     enabled= pfs->m_account->m_enabled;
+    history= pfs->m_account->m_history;
   }
   else
   {
@@ -2354,15 +2416,17 @@ void pfs_set_thread_account_v1(const char *user, int user_len,
       lookup_setup_actor(pfs,
                          pfs->m_username, pfs->m_username_length,
                          pfs->m_hostname, pfs->m_hostname_length,
-                         &enabled);
+                         &enabled, &history);
     }
     else
     {
       /* There is no setting for background threads */
       enabled= true;
+      history= true;
     }
   }
   pfs->set_enabled(enabled);
+  pfs->set_history(history);
 
   pfs->m_session_lock.dirty_to_allocated(& dirty_state);
 }
@@ -2406,6 +2470,24 @@ void pfs_set_thread_command_v1(int command)
     pfs->m_command= command;
   }
 }
+
+/**
+Implementation of the thread instrumentation interface.
+@sa PSI_v1::set_thread_connection_type.
+*/
+void pfs_set_connection_type_v1(opaque_vio_type conn_type)
+{
+  PFS_thread *pfs= my_thread_get_THR_PFS();
+
+  DBUG_ASSERT(conn_type >= FIRST_VIO_TYPE);
+  DBUG_ASSERT(conn_type <= LAST_VIO_TYPE);
+
+  if (likely(pfs != NULL))
+  {
+    pfs->m_connection_type= static_cast<enum_vio_type> (conn_type);
+  }
+}
+
 
 /**
   Implementation of the thread instrumentation interface.
@@ -3799,9 +3881,9 @@ void pfs_end_idle_wait_v1(PSI_idle_locker* locker)
 
       wait->m_timer_end= timer_end;
       wait->m_end_event_id= thread->m_event_id;
-      if (flag_events_waits_history)
+      if (thread->m_flag_events_waits_history)
         insert_events_waits_history(thread, wait);
-      if (flag_events_waits_history_long)
+      if (thread->m_flag_events_waits_history_long)
         insert_events_waits_history_long(wait);
       thread->m_events_waits_current--;
     }
@@ -3883,9 +3965,9 @@ void pfs_end_mutex_wait_v1(PSI_mutex_locker* locker, int rc)
 
       wait->m_timer_end= timer_end;
       wait->m_end_event_id= thread->m_event_id;
-      if (flag_events_waits_history)
+      if (thread->m_flag_events_waits_history)
         insert_events_waits_history(thread, wait);
-      if (flag_events_waits_history_long)
+      if (thread->m_flag_events_waits_history_long)
         insert_events_waits_history_long(wait);
       thread->m_events_waits_current--;
     }
@@ -3962,9 +4044,9 @@ void pfs_end_rwlock_rdwait_v1(PSI_rwlock_locker* locker, int rc)
 
       wait->m_timer_end= timer_end;
       wait->m_end_event_id= thread->m_event_id;
-      if (flag_events_waits_history)
+      if (thread->m_flag_events_waits_history)
         insert_events_waits_history(thread, wait);
-      if (flag_events_waits_history_long)
+      if (thread->m_flag_events_waits_history_long)
         insert_events_waits_history_long(wait);
       thread->m_events_waits_current--;
     }
@@ -4039,9 +4121,9 @@ void pfs_end_rwlock_wrwait_v1(PSI_rwlock_locker* locker, int rc)
 
       wait->m_timer_end= timer_end;
       wait->m_end_event_id= thread->m_event_id;
-      if (flag_events_waits_history)
+      if (thread->m_flag_events_waits_history)
         insert_events_waits_history(thread, wait);
-      if (flag_events_waits_history_long)
+      if (thread->m_flag_events_waits_history_long)
         insert_events_waits_history_long(wait);
       thread->m_events_waits_current--;
     }
@@ -4103,9 +4185,9 @@ void pfs_end_cond_wait_v1(PSI_cond_locker* locker, int rc)
 
       wait->m_timer_end= timer_end;
       wait->m_end_event_id= thread->m_event_id;
-      if (flag_events_waits_history)
+      if (thread->m_flag_events_waits_history)
         insert_events_waits_history(thread, wait);
-      if (flag_events_waits_history_long)
+      if (thread->m_flag_events_waits_history_long)
         insert_events_waits_history_long(wait);
       thread->m_events_waits_current--;
     }
@@ -4198,9 +4280,9 @@ void pfs_end_table_io_wait_v1(PSI_table_locker* locker, ulonglong numrows)
       wait->m_timer_end= timer_end;
       wait->m_end_event_id= thread->m_event_id;
       wait->m_number_of_bytes= static_cast<size_t>(numrows);
-      if (flag_events_waits_history)
+      if (thread->m_flag_events_waits_history)
         insert_events_waits_history(thread, wait);
-      if (flag_events_waits_history_long)
+      if (thread->m_flag_events_waits_history_long)
         insert_events_waits_history_long(wait);
       thread->m_events_waits_current--;
     }
@@ -4267,9 +4349,9 @@ void pfs_end_table_lock_wait_v1(PSI_table_locker* locker)
 
       wait->m_timer_end= timer_end;
       wait->m_end_event_id= thread->m_event_id;
-      if (flag_events_waits_history)
+      if (thread->m_flag_events_waits_history)
         insert_events_waits_history(thread, wait);
-      if (flag_events_waits_history_long)
+      if (thread->m_flag_events_waits_history_long)
         insert_events_waits_history_long(wait);
       thread->m_events_waits_current--;
     }
@@ -4373,6 +4455,27 @@ void pfs_end_file_open_wait_and_bind_to_descriptor_v1
     }
   }
 }
+
+/**
+  Implementation of the file instrumentation interface.
+  @sa PSI_v1::end_temp_file_open_wait_and_bind_to_descriptor.
+*/
+void pfs_end_temp_file_open_wait_and_bind_to_descriptor_v1
+  (PSI_file_locker *locker, File file, const char *filename)
+{
+  DBUG_ASSERT(filename != NULL);
+  PSI_file_locker_state *state= reinterpret_cast<PSI_file_locker_state*> (locker);
+  DBUG_ASSERT(state != NULL);
+
+  /* Set filename that was generated during creation of temporary file. */
+  state->m_name= filename;
+  pfs_end_file_open_wait_and_bind_to_descriptor_v1(locker, file);
+
+  PFS_file *pfs_file= reinterpret_cast<PFS_file *> (state->m_file);
+  DBUG_ASSERT(pfs_file != NULL);
+  pfs_file->m_temporary= true;
+}
+
 
 /**
   Implementation of the file instrumentation interface.
@@ -4516,9 +4619,9 @@ void pfs_end_file_wait_v1(PSI_file_locker *locker,
       wait->m_weak_file= file;
       wait->m_weak_version= (file ? file->get_version() : 0);
 
-      if (flag_events_waits_history)
+      if (thread->m_flag_events_waits_history)
         insert_events_waits_history(thread, wait);
-      if (flag_events_waits_history_long)
+      if (thread->m_flag_events_waits_history_long)
         insert_events_waits_history_long(wait);
       thread->m_events_waits_current--;
     }
@@ -4582,6 +4685,17 @@ void pfs_end_file_close_wait_v1(PSI_file_locker *locker, int rc)
     switch(state->m_operation)
     {
     case PSI_FILE_CLOSE:
+      if (file != NULL)
+      {
+        if (file->m_temporary)
+        {
+          DBUG_ASSERT(file->m_file_stat.m_open_count <= 1);
+          destroy_file(thread, file);
+        }
+        else
+          release_file(file);
+      }
+      break;
     case PSI_FILE_STREAM_CLOSE:
       if (file != NULL)
         release_file(file);
@@ -4648,9 +4762,9 @@ pfs_start_stage_v1(PSI_stage_key key, const char *src_file, int src_line)
     if (flag_events_stages_current)
     {
       pfs->m_end_event_id= pfs_thread->m_event_id;
-      if (flag_events_stages_history)
+      if (pfs_thread->m_flag_events_stages_history)
         insert_events_stages_history(pfs_thread, pfs);
-      if (flag_events_stages_history_long)
+      if (pfs_thread->m_flag_events_stages_history_long)
         insert_events_stages_history_long(pfs);
     }
 
@@ -4765,9 +4879,9 @@ void pfs_end_stage_v1()
     if (flag_events_stages_current)
     {
       pfs->m_end_event_id= pfs_thread->m_event_id;
-      if (flag_events_stages_history)
+      if (pfs_thread->m_flag_events_stages_history)
         insert_events_stages_history(pfs_thread, pfs);
-      if (flag_events_stages_history_long)
+      if (pfs_thread->m_flag_events_stages_history_long)
         insert_events_stages_history_long(pfs);
     }
 
@@ -4788,6 +4902,7 @@ pfs_get_thread_statement_locker_v1(PSI_statement_locker_state *state,
                                    const void *charset, PSI_sp_share *sp_share)
 {
   DBUG_ASSERT(state != NULL);
+  DBUG_ASSERT(charset != NULL);
   if (! flag_global_instrumentation)
     return NULL;
   PFS_statement_class *klass= find_statement_class(key);
@@ -4834,6 +4949,8 @@ pfs_get_thread_statement_locker_v1(PSI_statement_locker_state *state,
       pfs->m_lock_time= 0;
       pfs->m_current_schema_name_length= 0;
       pfs->m_sqltext_length= 0;
+      pfs->m_sqltext_truncated= false;
+      pfs->m_sqltext_cs_number= system_charset_info->number; /* default */
 
       pfs->m_message_text[0]= '\0';
       pfs->m_sql_errno= 0;
@@ -4959,6 +5076,7 @@ pfs_get_thread_statement_locker_v1(PSI_statement_locker_state *state,
   state->m_no_good_index_used= 0;
 
   state->m_digest= NULL;
+  state->m_cs_number= ((CHARSET_INFO *)charset)->number;
 
   state->m_schema_name_length= 0;
   state->m_parent_sp_share= sp_share;
@@ -5068,10 +5186,14 @@ void pfs_set_statement_text_v1(PSI_statement_locker *locker,
     PFS_events_statements *pfs= reinterpret_cast<PFS_events_statements*> (state->m_statement);
     DBUG_ASSERT(pfs != NULL);
     if (text_len > pfs_max_sqltext)
-      text_len= pfs_max_sqltext;
+    {
+      text_len= (uint)pfs_max_sqltext;
+      pfs->m_sqltext_truncated= true;
+    }
     if (text_len)
       memcpy(pfs->m_sqltext, text, text_len);
     pfs->m_sqltext_length= text_len;
+    pfs->m_sqltext_cs_number= state->m_cs_number;
   }
 
   return;
@@ -5290,6 +5412,7 @@ void pfs_end_statement_v1(PSI_statement_locker *locker, void *stmt_da)
           pfs->m_message_text[MYSQL_ERRMSG_SIZE]= 0;
           pfs->m_sql_errno= da->mysql_errno();
           memcpy(pfs->m_sqlstate, da->returned_sqlstate(), SQLSTATE_LENGTH);
+          pfs->m_error_count++;
           break;
         case Diagnostics_area::DA_DISABLED:
           break;
@@ -5312,9 +5435,9 @@ void pfs_end_statement_v1(PSI_statement_locker *locker, void *stmt_da)
       pfs_program= reinterpret_cast<PFS_program*>(state->m_parent_sp_share);
       pfs_prepared_stmt= reinterpret_cast<PFS_prepared_stmt*>(state->m_parent_prepared_stmt);
 
-      if (flag_events_statements_history)
+      if (thread->m_flag_events_statements_history)
         insert_events_statements_history(thread, pfs);
-      if (flag_events_statements_history_long)
+      if (thread->m_flag_events_statements_history_long)
         insert_events_statements_history_long(pfs);
 
       DBUG_ASSERT(thread->m_events_statements_count > 0);
@@ -5977,9 +6100,9 @@ void pfs_end_transaction_v1(PSI_transaction_locker *locker, my_bool commit)
       if (pfs->m_xa)
           pfs->m_xa_state= (commit ? TRANS_STATE_XA_COMMITTED : TRANS_STATE_XA_ROLLBACK_ONLY);
 
-      if (flag_events_transactions_history)
+      if (pfs_thread->m_flag_events_transactions_history)
         insert_events_transactions_history(pfs_thread, pfs);
-      if (flag_events_transactions_history_long)
+      if (pfs_thread->m_flag_events_transactions_history_long)
         insert_events_transactions_history_long(pfs);
     }
   }
@@ -6089,9 +6212,9 @@ void pfs_end_socket_wait_v1(PSI_socket_locker *locker, size_t byte_count)
     wait->m_end_event_id= thread->m_event_id;
     wait->m_number_of_bytes= bytes;
 
-    if (flag_events_waits_history)
+    if (thread->m_flag_events_waits_history)
       insert_events_waits_history(thread, wait);
-    if (flag_events_waits_history_long)
+    if (thread->m_flag_events_waits_history_long)
       insert_events_waits_history_long(wait);
     thread->m_events_waits_current--;
   }
@@ -6279,17 +6402,29 @@ void pfs_register_memory_v1(const char *category,
                    register_memory_class)
 }
 
-static PSI_memory_key pfs_memory_alloc_v1(PSI_memory_key key, size_t size)
+PSI_memory_key pfs_memory_alloc_v1(PSI_memory_key key, size_t size, PSI_thread **owner)
 {
+  PFS_thread ** owner_thread= reinterpret_cast<PFS_thread**>(owner);
+  DBUG_ASSERT(owner_thread != NULL);
+
   if (! flag_global_instrumentation)
+  {
+    *owner_thread= NULL;
     return PSI_NOT_INSTRUMENTED;
+  }
 
   PFS_memory_class *klass= find_memory_class(key);
   if (klass == NULL)
+  {
+    *owner_thread= NULL;
     return PSI_NOT_INSTRUMENTED;
+  }
 
   if (! klass->m_enabled)
+  {
+    *owner_thread= NULL;
     return PSI_NOT_INSTRUMENTED;
+  }
 
   PFS_memory_stat *event_name_array;
   PFS_memory_stat *stat;
@@ -6297,13 +6432,19 @@ static PSI_memory_key pfs_memory_alloc_v1(PSI_memory_key key, size_t size)
   PFS_memory_stat_delta delta_buffer;
   PFS_memory_stat_delta *delta;
 
-  if (flag_thread_instrumentation)
+  if (flag_thread_instrumentation && ! klass->is_global())
   {
     PFS_thread *pfs_thread= my_thread_get_THR_PFS();
     if (unlikely(pfs_thread == NULL))
+    {
+      *owner_thread= NULL;
       return PSI_NOT_INSTRUMENTED;
+    }
     if (! pfs_thread->m_enabled)
+    {
+      *owner_thread= NULL;
       return PSI_NOT_INSTRUMENTED;
+    }
 
     /* Aggregate to MEMORY_SUMMARY_BY_THREAD_BY_EVENT_NAME */
     event_name_array= pfs_thread->write_instr_class_memory_stats();
@@ -6314,6 +6455,9 @@ static PSI_memory_key pfs_memory_alloc_v1(PSI_memory_key key, size_t size)
     {
       pfs_thread->carry_memory_stat_delta(delta, index);
     }
+
+    /* Flag this memory as owned by the current thread. */
+    *owner_thread= pfs_thread;
   }
   else
   {
@@ -6321,16 +6465,24 @@ static PSI_memory_key pfs_memory_alloc_v1(PSI_memory_key key, size_t size)
     event_name_array= global_instr_class_memory_array;
     stat= & event_name_array[index];
     (void) stat->count_alloc(size, &delta_buffer);
+
+    *owner_thread= NULL;
   }
 
   return key;
 }
 
-static PSI_memory_key pfs_memory_realloc_v1(PSI_memory_key key, size_t old_size, size_t new_size)
+PSI_memory_key pfs_memory_realloc_v1(PSI_memory_key key, size_t old_size, size_t new_size, PSI_thread **owner)
 {
+  PFS_thread ** owner_thread_hdl= reinterpret_cast<PFS_thread**>(owner);
+  DBUG_ASSERT(owner != NULL);
+
   PFS_memory_class *klass= find_memory_class(key);
   if (klass == NULL)
+  {
+    *owner_thread_hdl= NULL;
     return PSI_NOT_INSTRUMENTED;
+  }
 
   PFS_memory_stat *event_name_array;
   PFS_memory_stat *stat;
@@ -6338,11 +6490,24 @@ static PSI_memory_key pfs_memory_realloc_v1(PSI_memory_key key, size_t old_size,
   PFS_memory_stat_delta delta_buffer;
   PFS_memory_stat_delta *delta;
 
-  if (flag_thread_instrumentation)
+  if (flag_thread_instrumentation && ! klass->is_global())
   {
     PFS_thread *pfs_thread= my_thread_get_THR_PFS();
     if (likely(pfs_thread != NULL))
     {
+#ifdef PFS_PARANOID
+      PFS_thread *owner_thread= *owner_thread_hdl;
+      if (owner_thread != pfs_thread)
+      {
+        owner_thread= sanitize_thread(owner_thread);
+        if (owner_thread != NULL)
+        {
+          report_memory_accounting_error("pfs_memory_realloc_v1",
+            pfs_thread, old_size, klass, owner_thread);
+        }
+      }
+#endif /* PFS_PARANOID */
+
       /* Aggregate to MEMORY_SUMMARY_BY_THREAD_BY_EVENT_NAME */
       event_name_array= pfs_thread->write_instr_class_memory_stats();
       stat= & event_name_array[index];
@@ -6350,10 +6515,12 @@ static PSI_memory_key pfs_memory_realloc_v1(PSI_memory_key key, size_t old_size,
       if (flag_global_instrumentation && klass->m_enabled)
       {
         delta= stat->count_realloc(old_size, new_size, &delta_buffer);
+        *owner_thread_hdl= pfs_thread;
       }
       else
       {
         delta= stat->count_free(old_size, &delta_buffer);
+        *owner_thread_hdl= NULL;
         key= PSI_NOT_INSTRUMENTED;
       }
 
@@ -6379,10 +6546,76 @@ static PSI_memory_key pfs_memory_realloc_v1(PSI_memory_key key, size_t old_size,
     key= PSI_NOT_INSTRUMENTED;
   }
 
+  *owner_thread_hdl= NULL;
   return key;
 }
 
-static void pfs_memory_free_v1(PSI_memory_key key, size_t size)
+PSI_memory_key pfs_memory_claim_v1(PSI_memory_key key, size_t size, PSI_thread **owner)
+{
+  PFS_thread ** owner_thread= reinterpret_cast<PFS_thread**>(owner);
+  DBUG_ASSERT(owner_thread != NULL);
+
+  PFS_memory_class *klass= find_memory_class(key);
+  if (klass == NULL)
+  {
+    *owner_thread= NULL;
+    return PSI_NOT_INSTRUMENTED;
+  }
+
+  /*
+    Do not check klass->m_enabled.
+    Do not check flag_global_instrumentation.
+    If a memory alloc was instrumented,
+    the corresponding free must be instrumented.
+  */
+
+  PFS_memory_stat *event_name_array;
+  PFS_memory_stat *stat;
+  uint index= klass->m_event_name_index;
+  PFS_memory_stat_delta delta_buffer;
+  PFS_memory_stat_delta *delta;
+
+  if (flag_thread_instrumentation)
+  {
+    PFS_thread *old_thread= sanitize_thread(*owner_thread);
+    PFS_thread *new_thread= my_thread_get_THR_PFS();
+    if (old_thread != new_thread)
+    {
+      if (old_thread != NULL)
+      {
+        event_name_array= old_thread->write_instr_class_memory_stats();
+        stat= & event_name_array[index];
+        delta= stat->count_free(size, &delta_buffer);
+
+        if (delta != NULL)
+        {
+          old_thread->carry_memory_stat_delta(delta, index);
+        }
+      }
+
+      if (new_thread != NULL)
+      {
+        event_name_array= new_thread->write_instr_class_memory_stats();
+        stat= & event_name_array[index];
+        delta= stat->count_alloc(size, &delta_buffer);
+
+        if (delta != NULL)
+        {
+          new_thread->carry_memory_stat_delta(delta, index);
+        }
+      }
+
+      *owner_thread= new_thread;
+    }
+
+    return key;
+  }
+
+  *owner_thread= NULL;
+  return key;
+}
+
+void pfs_memory_free_v1(PSI_memory_key key, size_t size, PSI_thread *owner)
 {
   PFS_memory_class *klass= find_memory_class(key);
   if (klass == NULL)
@@ -6401,11 +6634,25 @@ static void pfs_memory_free_v1(PSI_memory_key key, size_t size)
   PFS_memory_stat_delta delta_buffer;
   PFS_memory_stat_delta *delta;
 
-  if (flag_thread_instrumentation)
+  if (flag_thread_instrumentation && ! klass->is_global())
   {
     PFS_thread *pfs_thread= my_thread_get_THR_PFS();
     if (likely(pfs_thread != NULL))
     {
+#ifdef PFS_PARANOID
+      PFS_thread *owner_thread= reinterpret_cast<PFS_thread*>(owner);
+
+      if (owner_thread != pfs_thread)
+      {
+        owner_thread= sanitize_thread(owner_thread);
+        if (owner_thread != NULL)
+        {
+          report_memory_accounting_error("pfs_memory_free_v1",
+            pfs_thread, size, klass, owner_thread);
+        }
+      }
+#endif /* PFS_PARANOID */
+
       /*
         Do not check pfs_thread->m_enabled.
         If a memory alloc was instrumented,
@@ -6629,9 +6876,9 @@ pfs_end_metadata_wait_v1(PSI_metadata_locker *locker,
 
       wait->m_timer_end= timer_end;
       wait->m_end_event_id= thread->m_event_id;
-      if (flag_events_waits_history)
+      if (thread->m_flag_events_waits_history)
         insert_events_waits_history(thread, wait);
-      if (flag_events_waits_history_long)
+      if (thread->m_flag_events_waits_history_long)
         insert_events_waits_history_long(wait);
       thread->m_events_waits_current--;
     }
@@ -6685,11 +6932,13 @@ PSI_v1 PFS_v1=
   pfs_new_thread_v1,
   pfs_set_thread_id_v1,
   pfs_set_thread_THD_v1,
+  pfs_set_thread_os_id_v1,
   pfs_get_thread_v1,
   pfs_set_thread_user_v1,
   pfs_set_thread_account_v1,
   pfs_set_thread_db_v1,
   pfs_set_thread_command_v1,
+  pfs_set_connection_type_v1,
   pfs_set_thread_start_time_v1,
   pfs_set_thread_state_v1,
   pfs_set_thread_info_v1,
@@ -6720,6 +6969,7 @@ PSI_v1 PFS_v1=
   pfs_start_file_open_wait_v1,
   pfs_end_file_open_wait_v1,
   pfs_end_file_open_wait_and_bind_to_descriptor_v1,
+  pfs_end_temp_file_open_wait_and_bind_to_descriptor_v1,
   pfs_start_file_wait_v1,
   pfs_end_file_wait_v1,
   pfs_start_file_close_wait_v1,
@@ -6778,6 +7028,7 @@ PSI_v1 PFS_v1=
   pfs_register_memory_v1,
   pfs_memory_alloc_v1,
   pfs_memory_realloc_v1,
+  pfs_memory_claim_v1,
   pfs_memory_free_v1,
   pfs_unlock_table_v1,
   pfs_create_metadata_lock_v1,

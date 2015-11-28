@@ -180,7 +180,7 @@ datadir_iter_new(const char *path, bool skip_first_level = true)
 	it = static_cast<datadir_iter_t *>
 				(ut_zalloc_nokey(sizeof(datadir_iter_t)));
 
-	mutex_create("datadir_iter_t::mutex", &it->mutex);
+	mutex_create(LATCH_ID_XTRA_DATADIR_ITER_T_MUTEX, &it->mutex);
 	it->datadir_path = strdup(path);
 
 	it->dir = os_file_opendir(it->datadir_path, TRUE);
@@ -526,6 +526,7 @@ datafile_read(datafile_cur_t *cursor)
 {
 	ulint		success;
 	ulint		to_read;
+	IORequest	read_request(IORequest::READ);
 
 	xtrabackup_io_throttling();
 
@@ -536,8 +537,8 @@ datafile_read(datafile_cur_t *cursor)
 		return(XB_FIL_CUR_EOF);
 	}
 
-	success = os_file_read(cursor->file, cursor->buf, cursor->buf_offset,
-			       to_read);
+	success = os_file_read(read_request, cursor->file, cursor->buf,
+			       cursor->buf_offset, to_read);
 	if (!success) {
 		return(XB_FIL_CUR_ERROR);
 	}
@@ -673,7 +674,7 @@ directory_exists(const char *dir, bool create)
 		if (mkdirp(dir, 0777, MYF(0)) < 0) {
 
 			msg("Can not create directory %s: %s\n", dir,
-				my_strerror(errbuf, sizeof(errbuf), my_errno));
+			    my_strerror(errbuf, sizeof(errbuf), my_errno()));
 
 			return(false);
 
@@ -686,7 +687,7 @@ directory_exists(const char *dir, bool create)
 	if (os_dir == NULL) {
 
 		msg("Can not open directory %s: %s\n", dir,
-			my_strerror(errbuf, sizeof(errbuf), my_errno));
+		    my_strerror(errbuf, sizeof(errbuf), my_errno()));
 
 		return(false);
 	}
@@ -898,7 +899,7 @@ run_data_threads(datadir_iter_t *it, os_thread_func_t func, uint n)
 	data_threads = (datadir_thread_ctxt_t*)
 			(ut_malloc_nokey(sizeof(datadir_thread_ctxt_t) * n));
 
-	mutex_create("count_mutex", &count_mutex);
+	mutex_create(LATCH_ID_XTRA_COUNT_MUTEX, &count_mutex);
 	count = n;
 
 	for (i = 0; i < n; i++) {
@@ -1028,7 +1029,7 @@ move_file(const char *src_file_path, const char *dst_file_path, uint thread_n)
 		thread_n, src_file_path, dst_file_path_abs);
 
 	if (my_rename(src_file_path, dst_file_path_abs, MYF(0)) != 0) {
-		if (my_errno == EXDEV) {
+		if (my_errno() == EXDEV) {
 			bool ret;
 			ret = copy_file(src_file_path,
 					dst_file_path, thread_n);
@@ -1044,7 +1045,7 @@ move_file(const char *src_file_path, const char *dst_file_path, uint thread_n)
 		}
 		msg("Can not move file %s to %s: %s\n",
 			src_file_path, dst_file_path_abs,
-			my_strerror(errbuf, sizeof(errbuf), my_errno));
+			my_strerror(errbuf, sizeof(errbuf), my_errno()));
 		return(false);
 	}
 
@@ -1524,7 +1525,7 @@ copy_back()
 	srv_page_size = (1 << srv_page_size_shift);
 	srv_max_n_threads = 1000;
 	sync_check_init();
-	os_io_init_simple();
+	// os_io_init_simple();
 	ut_crc32_init();
 
 	/* copy undo tablespaces */
@@ -1621,7 +1622,7 @@ copy_back()
 
 				msg("Can not create directory %s: %s\n",
 					path, my_strerror(errbuf,
-						sizeof(errbuf), my_errno));
+						sizeof(errbuf), my_errno()));
 				ret = false;
 
 				goto cleanup;

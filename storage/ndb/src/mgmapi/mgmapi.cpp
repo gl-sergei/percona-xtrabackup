@@ -1,5 +1,5 @@
 /*
-   Copyright (c) 2003, 2013, Oracle and/or its affiliates. All rights reserved.
+   Copyright (c) 2003, 2015, Oracle and/or its affiliates. All rights reserved.
 
    This program is free software; you can redistribute it and/or modify
    it under the terms of the GNU General Public License as published by
@@ -420,12 +420,18 @@ extern "C"
 int
 ndb_mgm_get_latest_error(const NdbMgmHandle h)
 {
+  if (!h)
+    return NDB_MGM_ILLEGAL_SERVER_HANDLE;
+
   return h->last_error;
 }
 
 extern "C"
 const char *
-ndb_mgm_get_latest_error_desc(const NdbMgmHandle h){
+ndb_mgm_get_latest_error_desc(const NdbMgmHandle h)
+{
+  if (!h)
+    return "";
   return h->last_error_desc;
 }
 
@@ -433,6 +439,8 @@ extern "C"
 int
 ndb_mgm_get_latest_error_line(const NdbMgmHandle h)
 {
+  if (!h)
+    return 0;
   return h->last_error_line;
 }
 
@@ -440,8 +448,10 @@ extern "C"
 const char *
 ndb_mgm_get_latest_error_msg(const NdbMgmHandle h)
 {
+  const int last_err = ndb_mgm_get_latest_error(h);
+
   for (int i=0; i<ndb_mgm_noOfErrorMsgs; i++) {
-    if (ndb_mgm_error_msgs[i].code == h->last_error)
+    if (ndb_mgm_error_msgs[i].code == last_err)
       return ndb_mgm_error_msgs[i].msg;
   }
 
@@ -730,7 +740,7 @@ ndb_mgm_connect(NdbMgmHandle handle, int no_retries,
       if (cfg.ids[i].type != MgmId_TCP)
 	continue;
 
-      SocketClient s(0, 0);
+      SocketClient s;
       const char *bind_address= NULL;
       unsigned short bind_address_port= 0;
       s.set_connect_timeout(handle->timeout);
@@ -1980,7 +1990,7 @@ ndb_mgm_listen_event_internal(NdbMgmHandle handle, const int filter[],
   const char *hostname= ndb_mgm_get_connected_host(handle);
   int port= ndb_mgm_get_connected_port(handle);
   const char *bind_address= ndb_mgm_get_connected_bind_address(handle);
-  SocketClient s(0, 0);
+  SocketClient s;
   s.set_connect_timeout(handle->timeout);
   if (!s.init())
   {
@@ -2547,9 +2557,9 @@ ndb_mgm_get_configuration2(NdbMgmHandle handle, unsigned int version,
 {
   DBUG_ENTER("ndb_mgm_get_configuration2");
 
-  CHECK_HANDLE(handle, 0);
+  CHECK_HANDLE(handle, NULL);
   SET_ERROR(handle, NDB_MGM_NO_ERROR, "Executing: ndb_mgm_get_configuration");
-  CHECK_CONNECTED(handle, 0);
+  CHECK_CONNECTED(handle, NULL);
 
   if (!get_mgmd_version(handle))
     DBUG_RETURN(NULL);
@@ -2705,7 +2715,7 @@ int
 ndb_mgm_get_configuration_nodeid(NdbMgmHandle handle)
 {
   DBUG_ENTER("ndb_mgm_get_configuration_nodeid");
-  CHECK_HANDLE(handle, 0);
+  CHECK_HANDLE(handle, 0); // Zero is an invalid nodeid
   DBUG_RETURN(handle->cfg._ownNodeId);
 }
 
@@ -2752,9 +2762,9 @@ ndb_mgm_alloc_nodeid(NdbMgmHandle handle, unsigned int version, int nodetype,
                      int log_event)
 {
   DBUG_ENTER("ndb_mgm_alloc_nodeid");
-  CHECK_HANDLE(handle, 0);
+  CHECK_HANDLE(handle, -1);
   SET_ERROR(handle, NDB_MGM_NO_ERROR, "Executing: ndb_mgm_alloc_nodeid");
-  CHECK_CONNECTED(handle, 0);
+  CHECK_CONNECTED(handle, -1);
   union { long l; char c[sizeof(long)]; } endian_check;
 
   endian_check.l = 1;
@@ -2820,8 +2830,8 @@ ndb_mgm_set_int_parameter(NdbMgmHandle handle,
 			  unsigned value,
 			  struct ndb_mgm_reply*){
   DBUG_ENTER("ndb_mgm_set_int_parameter");
-  CHECK_HANDLE(handle, 0);
-  CHECK_CONNECTED(handle, 0);
+  CHECK_HANDLE(handle, -1);
+  CHECK_CONNECTED(handle, -1);
   
   Properties args;
   args.put("node", node);
@@ -2860,8 +2870,8 @@ ndb_mgm_set_int64_parameter(NdbMgmHandle handle,
 			    unsigned long long value,
 			    struct ndb_mgm_reply*){
   DBUG_ENTER("ndb_mgm_set_int64_parameter");
-  CHECK_HANDLE(handle, 0);
-  CHECK_CONNECTED(handle, 0);
+  CHECK_HANDLE(handle, -1);
+  CHECK_CONNECTED(handle, -1);
   
   Properties args;
   args.put("node", node);
@@ -2905,8 +2915,8 @@ ndb_mgm_set_string_parameter(NdbMgmHandle handle,
 			     const char * value,
 			     struct ndb_mgm_reply*){
   DBUG_ENTER("ndb_mgm_set_string_parameter");
-  CHECK_HANDLE(handle, 0);
-  CHECK_CONNECTED(handle, 0);
+  CHECK_HANDLE(handle, -1);
+  CHECK_CONNECTED(handle, -1);
   
   Properties args;
   args.put("node", node);
@@ -2947,8 +2957,8 @@ int
 ndb_mgm_purge_stale_sessions(NdbMgmHandle handle, char **purged)
 {
   DBUG_ENTER("ndb_mgm_purge_stale_sessions");
-  CHECK_HANDLE(handle, 0);
-  CHECK_CONNECTED(handle, 0);
+  CHECK_HANDLE(handle, -1);
+  CHECK_CONNECTED(handle, -1);
   
   Properties args;
   
@@ -2992,8 +3002,8 @@ int
 ndb_mgm_check_connection(NdbMgmHandle handle)
 {
   DBUG_ENTER("ndb_mgm_check_connection");
-  CHECK_HANDLE(handle, 0);
-  CHECK_CONNECTED(handle, 0);
+  CHECK_HANDLE(handle, -1);
+  CHECK_CONNECTED(handle, -1);
   SocketOutputStream out(handle->socket, handle->timeout);
   SocketInputStream in(handle->socket, handle->timeout);
   char buf[32];
@@ -3031,8 +3041,8 @@ ndb_mgm_set_connection_int_parameter(NdbMgmHandle handle,
 				     int value,
 				     struct ndb_mgm_reply* mgmreply){
   DBUG_ENTER("ndb_mgm_set_connection_int_parameter");
-  CHECK_HANDLE(handle, 0);
-  CHECK_CONNECTED(handle, 0);
+  CHECK_HANDLE(handle, -1);
+  CHECK_CONNECTED(handle, -1);
   
   Properties args;
   args.put("node1", node1);
@@ -3075,7 +3085,7 @@ ndb_mgm_get_connection_int_parameter(NdbMgmHandle handle,
 				     struct ndb_mgm_reply* mgmreply){
   DBUG_ENTER("ndb_mgm_get_connection_int_parameter");
   CHECK_HANDLE(handle, -1);
-  CHECK_CONNECTED(handle, -2);
+  CHECK_CONNECTED(handle, -1);
   
   Properties args;
   args.put("node1", node1);
@@ -3152,8 +3162,8 @@ ndb_mgm_get_mgmd_nodeid(NdbMgmHandle handle)
   DBUG_ENTER("ndb_mgm_get_mgmd_nodeid");
   Uint32 nodeid=0;
 
-  CHECK_HANDLE(handle, 0);
-  CHECK_CONNECTED(handle, 0);
+  CHECK_HANDLE(handle, 0); // Zero is an invalid nodeid
+  CHECK_CONNECTED(handle, 0); // Zero is an invalid nodeid
   
   Properties args;
 
@@ -3180,8 +3190,8 @@ extern "C"
 int ndb_mgm_report_event(NdbMgmHandle handle, Uint32 *data, Uint32 length)
 {
   DBUG_ENTER("ndb_mgm_report_event");
-  CHECK_HANDLE(handle, 0);
-  CHECK_CONNECTED(handle, 0);
+  CHECK_HANDLE(handle, -1);
+  CHECK_CONNECTED(handle, -1);
 
   Properties args;
   args.put("length", length);
@@ -3210,8 +3220,8 @@ extern "C"
 int ndb_mgm_end_session(NdbMgmHandle handle)
 {
   DBUG_ENTER("ndb_mgm_end_session");
-  CHECK_HANDLE(handle, 0);
-  CHECK_CONNECTED(handle, 0);
+  CHECK_HANDLE(handle, -1);
+  CHECK_CONNECTED(handle, -1);
 
   SocketOutputStream s_output(handle->socket, handle->timeout);
   s_output.println("end session");
@@ -3230,8 +3240,8 @@ int ndb_mgm_get_version(NdbMgmHandle handle,
                         int *major, int *minor, int *build, int len, char* str)
 {
   DBUG_ENTER("ndb_mgm_get_version");
-  CHECK_HANDLE(handle, 0);
-  CHECK_CONNECTED(handle, 0);
+  CHECK_HANDLE(handle, -1);
+  CHECK_CONNECTED(handle, -1);
 
   Properties args;
 
@@ -3323,8 +3333,8 @@ ndb_mgm_get_session(NdbMgmHandle handle, Uint64 id,
 {
   int retval= 0;
   DBUG_ENTER("ndb_mgm_get_session");
-  CHECK_HANDLE(handle, 0);
-  CHECK_CONNECTED(handle, 0);
+  CHECK_HANDLE(handle, -1);
+  CHECK_CONNECTED(handle, -1);
 
   Properties args;
   args.put("id", (Uint32)id);
@@ -3390,9 +3400,9 @@ int
 ndb_mgm_set_configuration(NdbMgmHandle h, ndb_mgm_configuration *c)
 {
   DBUG_ENTER("ndb_mgm_set_configuration");
-  CHECK_HANDLE(h, 0);
+  CHECK_HANDLE(h, -1);
   SET_ERROR(h, NDB_MGM_NO_ERROR, "Executing: ndb_mgm_set_configuration");
-  CHECK_CONNECTED(h, 0);
+  CHECK_CONNECTED(h, -1);
 
   const ConfigValues * cfg = (ConfigValues*)c;
 
@@ -3404,7 +3414,11 @@ ndb_mgm_set_configuration(NdbMgmHandle h, ndb_mgm_configuration *c)
   }
 
   BaseString encoded;
-  encoded.assfmt("%*s", base64_needed_encoded_length(buf.length()), "Z");
+  /*
+    The base64 encoded data of BaseString can be of max length (1024*1024)/3*4
+    hence using int to store the length.
+  */
+  encoded.assfmt("%*s", (int)base64_needed_encoded_length(buf.length()), "Z");
   (void) base64_encode(buf.get_data(), buf.length(), (char*)encoded.c_str());
 
   Properties args;
@@ -3446,7 +3460,7 @@ int ndb_mgm_create_nodegroup(NdbMgmHandle handle,
   DBUG_ENTER("ndb_mgm_create_nodegroup");
   CHECK_HANDLE(handle, -1);
   SET_ERROR(handle, NDB_MGM_NO_ERROR, "Executing: ndb_mgm_create_nodegroup");
-  CHECK_CONNECTED(handle, -2);
+  CHECK_CONNECTED(handle, -1);
 
   BaseString nodestr;
   for (int i = 0; nodes[i] != 0; i++)
@@ -3487,6 +3501,7 @@ int ndb_mgm_create_nodegroup(NdbMgmHandle handle,
   DBUG_RETURN(res);
 }
 
+extern "C"
 int ndb_mgm_drop_nodegroup(NdbMgmHandle handle,
                            int ng,
                            struct ndb_mgm_reply* mgmreply)
@@ -3494,7 +3509,7 @@ int ndb_mgm_drop_nodegroup(NdbMgmHandle handle,
   DBUG_ENTER("ndb_mgm_drop_nodegroup");
   CHECK_HANDLE(handle, -1);
   SET_ERROR(handle, NDB_MGM_NO_ERROR, "Executing: ndb_mgm_create_nodegroup");
-  CHECK_CONNECTED(handle, -2);
+  CHECK_CONNECTED(handle, -1);
 
   Properties args;
   args.put("ng", ng);

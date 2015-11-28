@@ -332,6 +332,7 @@ test.t11	analyze	status	OK
 test.t12	analyze	status	OK
 test.t13	analyze	status	OK
 test.t14	analyze	status	OK
+# restart: --big-tables=1
 SET @optimizer_switch_saved= @@optimizer_switch;
 SET @@optimizer_switch="derived_merge=off";
 explain format = json select sql_buffer_result * from t1;
@@ -464,7 +465,7 @@ EXPLAIN
               "a",
               "b"
             ],
-            "attached_condition": "<if>(is_not_null_compl(t2), (`test`.`t1`.`b` = `test`.`t2`.`b`), true)"
+            "attached_condition": "<if>(is_not_null_compl(t2), (`test`.`t2`.`b` = `test`.`t1`.`b`), true)"
           }
         }
       ]
@@ -472,7 +473,7 @@ EXPLAIN
   }
 }
 Warnings:
-Note	1003	/* select#1 */ select `test`.`t1`.`a` AS `a`,`test`.`t1`.`b` AS `b`,`test`.`t2`.`a` AS `a`,`test`.`t2`.`b` AS `b` from `test`.`t1` left join `test`.`t2` on((`test`.`t1`.`b` = `test`.`t2`.`b`)) where 1 order by `test`.`t1`.`a`
+Note	1003	/* select#1 */ select `test`.`t1`.`a` AS `a`,`test`.`t1`.`b` AS `b`,`test`.`t2`.`a` AS `a`,`test`.`t2`.`b` AS `b` from `test`.`t1` left join `test`.`t2` on((`test`.`t2`.`b` = `test`.`t1`.`b`)) where 1 order by `test`.`t1`.`a`
 select * from t1 left join t2 on t1.b = t2.b order by t1.a;
 a	b	a	b
 1	a	NULL	NULL
@@ -1390,7 +1391,6 @@ Note	1003	/* select#1 */ select distinct `test`.`t4`.`a` AS `a`,`test`.`t4`.`e` 
 select distinct t4.a,e from t4, t1 order by t4.b;
 a	e
 1	5
-set big_tables = 1;
 explain format = json select * from t1 union all select * from t2;
 EXPLAIN
 {
@@ -2219,7 +2219,7 @@ b	1	2	2.0000	0	2	2	2	2
 c	3	10	3.3333	0.4714045207910316	3	4	0	7
 select sql_big_result * from information_schema.global_variables where variable_name like 'internal_tmp_disk_storage_engine';
 VARIABLE_NAME	VARIABLE_VALUE
-INTERNAL_TMP_DISK_STORAGE_ENGINE	TMP_TABLE_ENGINE
+INTERNAL_TMP_DISK_STORAGE_ENGINE	InnoDB
 select 1 union distinct select 1 union all select 1;
 1
 1
@@ -2400,7 +2400,7 @@ EXPLAIN
               "a",
               "b"
             ],
-            "attached_condition": "<if>(is_not_null_compl(t2), (`test`.`t1`.`b` = `test`.`t2`.`b`), true)"
+            "attached_condition": "<if>(is_not_null_compl(t2), (`test`.`t2`.`b` = `test`.`t1`.`b`), true)"
           }
         }
       ]
@@ -2408,7 +2408,7 @@ EXPLAIN
   }
 }
 Warnings:
-Note	1003	/* select#1 */ select `test`.`t1`.`a` AS `a`,`test`.`t1`.`b` AS `b`,`test`.`t2`.`a` AS `a`,`test`.`t2`.`b` AS `b` from `test`.`t1` left join `test`.`t2` on((`test`.`t1`.`b` = `test`.`t2`.`b`)) where 1 order by `test`.`t1`.`a`
+Note	1003	/* select#1 */ select `test`.`t1`.`a` AS `a`,`test`.`t1`.`b` AS `b`,`test`.`t2`.`a` AS `a`,`test`.`t2`.`b` AS `b` from `test`.`t1` left join `test`.`t2` on((`test`.`t2`.`b` = `test`.`t1`.`b`)) where 1 order by `test`.`t1`.`a`
 select * from t1 left join t2 on t1.b = t2.b order by t1.a;
 a	b	a	b
 2	b	NULL	NULL
@@ -3306,7 +3306,6 @@ Note	1003	/* select#1 */ select distinct `test`.`t4`.`a` AS `a`,`test`.`t4`.`e` 
 select distinct t4.a,e from t4, t1 order by t4.b;
 a	e
 1	5
-set big_tables = 1;
 explain format = json select * from t1 union all select * from t2;
 EXPLAIN
 {
@@ -4073,7 +4072,7 @@ b	1	2	2.0000	0	2	2	2	2
 c	3	10	3.3333	0.4714045207910316	3	4	0	7
 select sql_big_result * from information_schema.global_variables where variable_name like 'internal_tmp_disk_storage_engine';
 VARIABLE_NAME	VARIABLE_VALUE
-INTERNAL_TMP_DISK_STORAGE_ENGINE	TMP_TABLE_ENGINE
+INTERNAL_TMP_DISK_STORAGE_ENGINE	InnoDB
 select 1 union distinct select 1 union all select 1;
 1
 1
@@ -4122,5 +4121,84 @@ x
 102
 SET @@optimizer_switch=@optimizer_switch_saved;
 # restart
+select @@big_tables;
+@@big_tables
+1
+create table t0 (m int, n int, key(m)) engine=innodb;
+begin;
+select count(*) from t0;
+count(*)
+0
+set @@session.sql_mode = MAXDB;
+set @@session.tmp_table_size = 0;
+Warnings:
+Warning	1292	Truncated incorrect tmp_table_size value: '0'
+set @@session.big_tables = 1;
+select @@big_tables;
+@@big_tables
+1
+select event_name, e.min_timer_wait, min(t.min_timer_wait) from
+performance_schema.events_waits_summary_global_by_event_name as e JOIN
+performance_schema.events_waits_summary_by_thread_by_event_name as t USING
+(event_name) group by event_name;
+select * from t0;
+m	n
+commit;
+drop table t0;
+set session big_tables = 1;
+select @@big_tables;
+@@big_tables
+1
 drop function func1;
 drop table t1, t2, t3, t4, t5, t6, t7, t8, t9, t10, t11, t12, t13, t14;
+#
+# BUG#20762059 - innodb_thread_concurrency=1 and queries using intrinsic
+#		temp tables, causes hang
+#
+# Scenario 1: Without timezone tables
+#
+CREATE TABLE t1(a INT);
+INSERT INTO t1 VALUES(1);
+# On default connection
+SET @@session.max_heap_table_size=0;
+Warnings:
+Warning	1292	Truncated incorrect max_heap_table_size value: '0'
+SET @@global.innodb_thread_concurrency=1;
+# Executing I_S query which will create and do index read on
+# intrinsic temporary tables
+# Switch to connection con1
+SELECT * FROM t1;
+a
+1
+# Switch to connection default
+DROP TABLE t1;
+SET @@session.max_heap_table_size = default;
+SET @@global.innodb_thread_concurrency = default;
+SET @@global.innodb_thread_sleep_delay = default;
+#
+# Scenario 2: with I_S query and timezone table(uses attachable
+# transaction)
+#
+SET @@session.max_heap_table_size=0;
+Warnings:
+Warning	1292	Truncated incorrect max_heap_table_size value: '0'
+SET @@global.innodb_thread_concurrency=1;
+# Executing I_S query which will create and do index read on
+# intrinsic temporary tables
+select convert_tz(0,'a','a');
+convert_tz(0,'a','a')
+NULL
+SET @@session.max_heap_table_size = default;
+SET @@global.innodb_thread_concurrency = default;
+SET @@global.innodb_thread_sleep_delay = default;
+#
+# Scenario 3: with I_S query and help table(uses attachable
+# transaction)
+#
+SET @@global.innodb_thread_concurrency=1;
+# Executing I_S query which will create and do index read on
+# intrinsic temporary tables
+HELP '%function_2';
+name	is_it_category
+SET @@global.innodb_thread_concurrency = default;
+SET @@global.innodb_thread_sleep_delay = default;

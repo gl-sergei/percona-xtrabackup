@@ -49,15 +49,17 @@ class PageBulk
 {
 public:
 	/** Constructor
-	@param[in]	index	B-tree index
-	@param[in]	page_no	page number
-	@param[in]	level	page level
-	@param[in]	trx_id	transaction id */
+	@param[in]	index		B-tree index
+	@param[in]	page_no		page number
+	@param[in]	level		page level
+	@param[in]	trx_id		transaction id
+	@param[in]	observer	flush observer */
 	PageBulk(
-		dict_index_t* index,
-		trx_id_t trx_id,
-		ulint page_no,
-		ulint level)
+		dict_index_t*	index,
+		trx_id_t	trx_id,
+		ulint		page_no,
+		ulint		level,
+		FlushObserver*	observer)
 		:
 		m_heap(NULL),
 		m_index(index),
@@ -77,7 +79,8 @@ public:
 #ifdef UNIV_DEBUG
 		m_total_data(0),
 #endif /* UNIV_DEBUG */
-		m_modify_clock(0)
+		m_modify_clock(0),
+		m_flush_observer(observer)
 	{
 		ut_ad(!dict_index_is_spatial(m_index));
 	}
@@ -246,6 +249,9 @@ private:
 	/** The modify clock value of the buffer block
 	when the block is re-pinned */
 	ib_uint64_t     m_modify_clock;
+
+	/** Flush observer */
+	FlushObserver*	m_flush_observer;
 };
 
 typedef std::vector<PageBulk*, ut_allocator<PageBulk*> >
@@ -255,17 +261,20 @@ class BtrBulk
 {
 public:
 	/** Constructor
-	@param[in]	index	B-tree index
-	@param[in]	trx_id	transaction id */
+	@param[in]	index		B-tree index
+	@param[in]	trx_id		transaction id
+	@param[in]	observer	flush observer */
 	BtrBulk(
-		dict_index_t* index,
-		trx_id_t trx_id)
+		dict_index_t*	index,
+		trx_id_t	trx_id,
+		FlushObserver*	observer)
 		:
 		m_heap(NULL),
 		m_index(index),
 		m_trx_id(trx_id),
-		m_root_level(0)
+		m_flush_observer(observer)
 	{
+		ut_ad(m_flush_observer != NULL);
 #ifdef UNIV_DEBUG
 		fil_space_inc_redo_skipped_count(m_index->space);
 #endif /* UNIV_DEBUG */
@@ -300,10 +309,11 @@ public:
 		return(insert(tuple, 0));
 	}
 
-	/** Finish bulk load. We commit last page in each level and copy last
-	page in top level to root page of the index if no error occurs.
-	@param[in]	err	error code of insert.
-	@return	error code */
+	/** Btree bulk load finish. We commit the last page in each level
+	and copy the last page in top level to the root page of the index
+	if no error occurs.
+	@param[in]	err	whether bulk load was successful until now
+	@return error code  */
 	dberr_t finish(dberr_t	err);
 
 	/** Release all latches */
@@ -362,6 +372,9 @@ private:
 
 	/** Root page level */
 	ulint			m_root_level;
+
+	/** Flush observer */
+	FlushObserver*		m_flush_observer;
 
 	/** Page cursor vector for all level */
 	page_bulk_vector*	m_page_bulks;

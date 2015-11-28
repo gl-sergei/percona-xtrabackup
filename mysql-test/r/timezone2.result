@@ -2,7 +2,7 @@ drop table if exists t1, t2;
 drop function if exists f1;
 SET sql_mode = 'NO_ENGINE_SUBSTITUTION';
 Warnings:
-Warning	3129	Unsetting sql mode 'NO_AUTO_CREATE_USER' is deprecated. It will be made read-only in a future release.
+Warning	3090	Changing sql mode 'NO_AUTO_CREATE_USER' is deprecated. It will be removed in a future release.
 create table t1 (ts timestamp);
 set time_zone='+00:00';
 select unix_timestamp(utc_timestamp())-unix_timestamp(current_timestamp());
@@ -342,4 +342,17 @@ SET time_zone=DEFAULT;
 SET sql_mode = default;
 #
 # End of 5.6 tests
+#
+#
+# Bug #21459795 "ASSERTION FAILURE WHEN PREVIOUSLY UNUSED TIME
+#                ZONE IS USED IN FUNCTION/TRIGGER".
+#
+CREATE FUNCTION f1() RETURNS DATETIME RETURN CONVERT_TZ('2015-01-01 00:00:00', 'UTC', 'No-such-time-zone');
+# Below statement caused assertion failure.
+SELECT f1();
+f1()
+NULL
+DROP FUNCTION f1;
+#
+# End of 5.7 tests
 #

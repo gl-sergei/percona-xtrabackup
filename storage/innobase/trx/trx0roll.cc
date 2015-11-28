@@ -1,6 +1,6 @@
 /*****************************************************************************
 
-Copyright (c) 1996, 2014, Oracle and/or its affiliates. All Rights Reserved.
+Copyright (c) 1996, 2015, Oracle and/or its affiliates. All Rights Reserved.
 
 This program is free software; you can redistribute it and/or modify it under
 the terms of the GNU General Public License as published by the Free Software
@@ -186,22 +186,14 @@ trx_rollback_for_mysql_low(
 	return(trx->error_state);
 }
 
-/*******************************************************************//**
-Rollback a transaction used in MySQL.
+/** Rollback a transaction used in MySQL
+@param[in, out]	trx	transaction
 @return error code or DB_SUCCESS */
+static
 dberr_t
-trx_rollback_for_mysql(
-/*===================*/
-	trx_t*	trx)	/*!< in/out: transaction */
+trx_rollback_low(
+	trx_t*	trx)
 {
-	TrxInInnoDB	trx_in_innodb(trx, true);
-
-	if (trx_in_innodb.is_aborted()
-	    && trx->killed_by != os_thread_get_curr_id()) {
-
-		return(DB_FORCED_ABORT);
-	}
-
 	/* We are reading trx->state without holding trx_sys->mutex
 	here, because the rollback should be invoked for a running
 	active MySQL transaction (or recovered prepared transaction)
@@ -222,6 +214,50 @@ trx_rollback_for_mysql(
 
 	case TRX_STATE_PREPARED:
 		ut_ad(!trx_is_autocommit_non_locking(trx));
+		if (trx->rsegs.m_redo.rseg != NULL
+		    && trx_is_redo_rseg_updated(trx)) {
+			/* Change the undo log state back from
+			TRX_UNDO_PREPARED to TRX_UNDO_ACTIVE
+			so that if the system gets killed,
+			recovery will perform the rollback. */
+			trx_undo_ptr_t*	undo_ptr = &trx->rsegs.m_redo;
+			mtr_t		mtr;
+			mtr.start();
+			mutex_enter(&trx->rsegs.m_redo.rseg->mutex);
+			if (undo_ptr->insert_undo != NULL) {
+				trx_undo_set_state_at_prepare(
+					trx, undo_ptr->insert_undo,
+					true, &mtr);
+			}
+			if (undo_ptr->update_undo != NULL) {
+				trx_undo_set_state_at_prepare(
+					trx, undo_ptr->update_undo,
+					true, &mtr);
+			}
+			mutex_exit(&trx->rsegs.m_redo.rseg->mutex);
+			/* Persist the XA ROLLBACK, so that crash
+			recovery will replay the rollback in case
+			the redo log gets applied past this point. */
+			mtr.commit();
+			ut_ad(mtr.commit_lsn() > 0);
+		}
+#ifdef ENABLED_DEBUG_SYNC
+		if (trx->mysql_thd == NULL) {
+			/* We could be executing XA ROLLBACK after
+			XA PREPARE and a server restart. */
+		} else if (!trx_is_redo_rseg_updated(trx)) {
+			/* innobase_close_connection() may roll back a
+			transaction that did not generate any
+			persistent undo log. The DEBUG_SYNC
+			would cause an assertion failure for a
+			disconnected thread.
+
+			NOTE: InnoDB will not know about the XID
+			if no persistent undo log was generated. */
+		} else {
+			DEBUG_SYNC_C("trx_xa_rollback");
+		}
+#endif /* ENABLED_DEBUG_SYNC */
 		return(trx_rollback_for_mysql_low(trx));
 
 	case TRX_STATE_COMMITTED_IN_MEMORY:
@@ -231,6 +267,33 @@ trx_rollback_for_mysql(
 
 	ut_error;
 	return(DB_CORRUPTION);
+}
+
+/*******************************************************************//**
+Rollback a transaction used in MySQL.
+@return error code or DB_SUCCESS */
+dberr_t
+trx_rollback_for_mysql(
+/*===================*/
+	trx_t*	trx)	/*!< in/out: transaction */
+{
+	/* Avoid the tracking of async rollback killer
+	thread to enter into InnoDB. */
+	if (TrxInInnoDB::is_async_rollback(trx)) {
+
+		return(trx_rollback_low(trx));
+
+	} else {
+
+		TrxInInnoDB	trx_in_innodb(trx, true);
+
+		if (trx_in_innodb.is_aborted()) {
+
+			return(DB_FORCED_ABORT);
+		}
+
+		return(trx_rollback_low(trx));
+	}
 }
 
 /*******************************************************************//**

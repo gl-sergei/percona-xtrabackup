@@ -151,7 +151,8 @@ enum find_files_result {
 #define IS_FILES_EXTRA               37
 
 find_files_result find_files(THD *thd, List<LEX_STRING> *files, const char *db,
-                             const char *path, const char *wild, bool dir);
+                             const char *path, const char *wild, bool dir,
+                             MEM_ROOT *tmp_mem_root);
 
 int store_create_info(THD *thd, TABLE_LIST *table_list, String *packet,
                       HA_CREATE_INFO  *create_info_arg, bool show_database);
@@ -159,9 +160,13 @@ int view_store_create_info(THD *thd, TABLE_LIST *table, String *buff);
 
 int copy_event_to_schema_table(THD *thd, TABLE *sch_table, TABLE *event_table);
 
-void append_identifier(THD *thd, String *packet, const char *name, size_t length);
 void append_identifier(THD *thd, String *packet, const char *name, size_t length,
                        const CHARSET_INFO *from_cs, const CHARSET_INFO *to_cs);
+
+inline void append_identifier(THD *thd, String *packet, const char *name, size_t length)
+{
+  append_identifier(thd, packet, name, length, NULL, NULL);
+}
 inline void append_identifier(THD *thd, String *packet, Simple_cstring str)
 {
   append_identifier(thd, packet, str.ptr(), str.length());
@@ -210,6 +215,13 @@ const char* get_one_variable(THD *thd, const SHOW_VAR *variable,
                              system_status_var *status_var,
                              const CHARSET_INFO **charset, char *buff,
                              size_t *length);
+
+const char* get_one_variable_ext(THD *running_thd, THD *target_thd,
+                                 const SHOW_VAR *variable,
+                                 enum_var_type value_type, SHOW_TYPE show_type,
+                                 system_status_var *status_var,
+                                 const CHARSET_INFO **charset, char *buff,
+                                 size_t *length);
 
 /* These functions were under INNODB_COMPATIBILITY_HOOKS */
 int get_quote_char_for_identifier(THD *thd, const char *name, size_t length);

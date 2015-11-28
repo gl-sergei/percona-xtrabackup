@@ -412,7 +412,7 @@ datafiles_iter_new(fil_system_t *f_system)
 
 	it = static_cast<datafiles_iter_t *>
 		(ut_malloc_nokey(sizeof(datafiles_iter_t)));
-	mutex_create("datafiles_iter_mutex", &it->mutex);
+	mutex_create(LATCH_ID_XTRA_DATAFILES_ITER_MUTEX, &it->mutex);
 
 	it->system = f_system;
 	it->space = NULL;
@@ -1547,6 +1547,12 @@ innodb_init_param(void)
 
   	os_innodb_umask = (ulint)0664;
 
+	os_file_set_umask(my_umask);
+
+	/* Setup the memory alloc/free tracing mechanisms before calling
+	any functions that could possibly allocate memory. */
+	ut_new_boot();
+
 	/* First calculate the default path for innodb_data_home_dir etc.,
 	in case the user has not given any value.
 
@@ -1560,6 +1566,9 @@ innodb_init_param(void)
 	default_path = current_dir;
 
 	ut_a(default_path);
+
+	fil_path_to_mysql_datadir = default_path;
+	folder_mysql_datadir = fil_path_to_mysql_datadir;
 
 	/* Set InnoDB initialization parameters according to the values
 	read from MySQL .cnf file */
@@ -2226,11 +2235,12 @@ xb_get_zip_size(os_file_t file, bool *success)
 	page_size_t	page_size(0, 0, false);
 	ibool		ret;
 	ulint		space;
+	IORequest	read_request(IORequest::READ);
 
 	buf = static_cast<byte *>(ut_malloc_nokey(2 * UNIV_PAGE_SIZE_MAX));
 	page = static_cast<byte *>(ut_align(buf, UNIV_PAGE_SIZE_MAX));
 
-	ret = os_file_read(file, page, 0, UNIV_PAGE_SIZE_MIN);
+	ret = os_file_read(read_request, file, page, 0, UNIV_PAGE_SIZE_MIN);
 	if (!ret) {
 		*success = false;
 		goto end;
@@ -2456,7 +2466,7 @@ xtrabackup_copy_logfile(lsn_t from_lsn, my_bool is_last)
 
 		mutex_enter(&log_sys->mutex);
 
-retry_read:
+// retry_read:
 		log_group_read_log_seg(log_sys->buf,
 				       group, start_lsn, end_lsn);
 
@@ -2477,8 +2487,9 @@ retry_read:
 	while (log_block < log_sys->buf + RECV_SCAN_SIZE && !finished) {
 		ulint	no = log_block_get_hdr_no(log_block);
 		ulint	scanned_no = log_block_convert_lsn_to_no(scanned_lsn);
-		ibool	checksum_is_ok =
-			log_block_checksum_is_ok_or_old_format(log_block);
+		ibool	checksum_is_ok = true;
+			// TODO: handle checksums properly
+			// log_block_checksum_is_ok_or_old_format(log_block);
 
 		if (no != scanned_no && checksum_is_ok) {
 			ulint blocks_in_group;
@@ -2488,12 +2499,12 @@ retry_read:
 
 			/* Can be just wrong lsn_offset. Is it PS 5.5 with large
 			log files? */
-			if (!group->alt_offset_chosen &&
-			    group->lsn_offset != group->lsn_offset_alt) {
-				group->lsn_offset = group->lsn_offset_alt;
-				group->alt_offset_chosen = TRUE;
-				goto retry_read;
-			}
+			// if (!group->alt_offset_chosen &&
+			//     group->lsn_offset != group->lsn_offset_alt) {
+			// 	group->lsn_offset = group->lsn_offset_alt;
+			// 	group->alt_offset_chosen = TRUE;
+			// 	goto retry_read;
+			// }
 
 			if (no < scanned_no ||
 			    /* Log block numbers wrap around at 0x3FFFFFFF */
@@ -2935,8 +2946,7 @@ xb_fil_io_init(void)
 {
 	srv_n_file_io_threads = srv_n_read_io_threads;
 
-	os_aio_init(8 * SRV_N_PENDING_IOS_PER_THREAD,
-		    srv_n_read_io_threads,
+	os_aio_init(srv_n_read_io_threads,
 		    srv_n_write_io_threads,
 		    SRV_MAX_N_PENDING_SYNC_IOS);
 
@@ -2956,7 +2966,7 @@ Datafile *xb_new_datafile(
 	} else {
 		Datafile *file = new Datafile();
 		file->set_name(name);
-		file->make_filepath(".");
+		file->make_filepath(".", name, IBD);
 		return(file);
 	}
 }
@@ -3001,7 +3011,8 @@ xb_load_single_table_tablespace(
 
 		ut_a(space != NULL);
 
-		if (!fil_node_create(file->filepath(), n_pages, space, false)) {
+		if (!fil_node_create(file->filepath(), n_pages, space,
+				     false, false)) {
 			ut_error;
 		}
 
@@ -3186,7 +3197,8 @@ xb_load_tablespaces(void)
 		return(DB_ERROR);
 	}
 
-	err = srv_sys_space.open_or_create(false, &sum_of_new_sizes, &flush_lsn);
+	err = srv_sys_space.open_or_create(false, false, &sum_of_new_sizes,
+					   &flush_lsn);
 
 	if (err != DB_SUCCESS) {
 		msg("xtrabackup: Could not open or create data files.\n"
@@ -3672,9 +3684,8 @@ open_or_create_log_file(
 	ut_a(*log_space != NULL);
 	ut_a(fil_validate());
 
-	ut_a(fil_node_create(name, srv_log_file_size,
-			     *log_space,
-			     false) != NULL);
+	ut_a(fil_node_create(name, srv_log_file_size, *log_space,
+			     false, false) != NULL);
 	if (i == 0) {
 		ut_a(log_group_init(k, srv_n_log_files,
 				    srv_log_file_size * UNIV_PAGE_SIZE,
@@ -3925,7 +3936,7 @@ xtrabackup_backup_func(void)
 		&&!my_stat(xtrabackup_extra_lsndir,&stat_info,MYF(0))
 		&& (my_mkdir(xtrabackup_extra_lsndir,0777,MYF(0)) < 0)){
 		msg("xtrabackup: Error: cannot mkdir %d: %s\n",
-		    my_errno, xtrabackup_extra_lsndir);
+		    my_errno(), xtrabackup_extra_lsndir);
 		exit(EXIT_FAILURE);
 	}
 
@@ -3933,7 +3944,7 @@ xtrabackup_backup_func(void)
 	if (!my_stat(xtrabackup_target_dir,&stat_info,MYF(0))
 		&& (my_mkdir(xtrabackup_target_dir,0777,MYF(0)) < 0)){
 		msg("xtrabackup: Error: cannot mkdir %d: %s\n",
-		    my_errno, xtrabackup_target_dir);
+		    my_errno(), xtrabackup_target_dir);
 		exit(EXIT_FAILURE);
 	}
 
@@ -3970,7 +3981,7 @@ xtrabackup_backup_func(void)
 		exit(EXIT_FAILURE);
 	}
 
-	log_group_read_checkpoint_info(max_cp_group, max_cp_field);
+	log_group_header_read(max_cp_group, max_cp_field);
 	buf = log_sys->checkpoint_buf;
 
 	checkpoint_lsn_start = mach_read_from_8(buf + LOG_CHECKPOINT_LSN);
@@ -3979,7 +3990,7 @@ xtrabackup_backup_func(void)
 	mutex_exit(&log_sys->mutex);
 
 reread_log_header:
-	fil_io(OS_FILE_READ | OS_FILE_LOG, true,
+	fil_io(IORequest(IORequest::READ), true,
 	       page_id_t(max_cp_group->space_id, 0),
 	       univ_page_size,
 	       0, LOG_FILE_HDR_SIZE,
@@ -3996,7 +4007,7 @@ reread_log_header:
                 exit(EXIT_FAILURE);
         }
 
-        log_group_read_checkpoint_info(max_cp_group, max_cp_field);
+        log_group_header_read(max_cp_group, max_cp_field);
         buf = log_sys->checkpoint_buf;
 
 	if(checkpoint_no_start != mach_read_from_8(buf + LOG_CHECKPOINT_NO)) {
@@ -4026,11 +4037,11 @@ reread_log_header:
 	}
 
 	/* label it */
-	strcpy((char*) log_hdr_buf + LOG_FILE_WAS_CREATED_BY_HOT_BACKUP,
-		"xtrabkup ");
-	ut_sprintf_timestamp(
-		(char*) log_hdr_buf + (LOG_FILE_WAS_CREATED_BY_HOT_BACKUP
-				+ (sizeof "xtrabkup ") - 1));
+	// strcpy((char*) log_hdr_buf + LOG_FILE_WAS_CREATED_BY_HOT_BACKUP,
+	// 	"xtrabkup ");
+	// ut_sprintf_timestamp(
+	// 	(char*) log_hdr_buf + (LOG_FILE_WAS_CREATED_BY_HOT_BACKUP
+	// 			+ (sizeof "xtrabkup ") - 1));
 
 	if (ds_write(dst_log_file, log_hdr_buf, LOG_FILE_HDR_SIZE)) {
 		msg("xtrabackup: error: write to logfile failed\n");
@@ -4108,7 +4119,7 @@ reread_log_header:
 		ut_malloc_nokey(sizeof(data_thread_ctxt_t) *
                                 xtrabackup_parallel);
 	count = xtrabackup_parallel;
-	mutex_create("count_mutex", &count_mutex);
+	mutex_create(LATCH_ID_XTRA_COUNT_MUTEX, &count_mutex);
 
 	for (i = 0; i < (uint) xtrabackup_parallel; i++) {
 		data_threads[i].it = it;
@@ -4160,7 +4171,7 @@ reread_log_header:
 			goto skip_last_cp;
 		}
 
-		log_group_read_checkpoint_info(max_cp_group, max_cp_field);
+		log_group_header_read(max_cp_group, max_cp_field);
 
 		latest_cp = mach_read_from_8(log_sys->checkpoint_buf +
 					     LOG_CHECKPOINT_LSN);
@@ -4673,6 +4684,9 @@ xtrabackup_init_temp_log(void)
 
 	bool		checkpoint_found;
 
+	IORequest	read_request(IORequest::READ);
+	IORequest	write_request(IORequest::WRITE);
+
 	max_no = 0;
 
 	log_buf = static_cast<byte*>(ut_malloc_nokey(UNIV_PAGE_SIZE_MAX * 128));
@@ -4723,28 +4737,28 @@ retry:
 			goto error;
 		}
 
-		success = os_file_read(src_file, log_buf, 0,
-					  LOG_FILE_HDR_SIZE);
+		success = os_file_read(read_request, src_file, log_buf, 0,
+				       LOG_FILE_HDR_SIZE);
 		if (!success) {
 			goto error;
 		}
 
-		if ( ut_memcmp(log_buf + LOG_FILE_WAS_CREATED_BY_HOT_BACKUP,
-				(byte*)"xtrabkup", (sizeof "xtrabkup") - 1) == 0) {
-			msg("  xtrabackup: 'ib_logfile0' seems to be "
-			    "'xtrabackup_logfile'. will retry.\n");
+		// if ( ut_memcmp(log_buf + LOG_FILE_WAS_CREATED_BY_HOT_BACKUP,
+		// 		(byte*)"xtrabkup", (sizeof "xtrabkup") - 1) == 0) {
+		// 	msg("  xtrabackup: 'ib_logfile0' seems to be "
+		// 	    "'xtrabackup_logfile'. will retry.\n");
 
-			os_file_close(src_file);
-			src_file = XB_FILE_UNDEFINED;
+		// 	os_file_close(src_file);
+		// 	src_file = XB_FILE_UNDEFINED;
 
-			/* rename and try again */
-			success = os_file_rename(0, dst_path, src_path);
-			if (!success) {
-				goto error;
-			}
+		// 	/* rename and try again */
+		// 	success = os_file_rename(0, dst_path, src_path);
+		// 	if (!success) {
+		// 		goto error;
+		// 	}
 
-			goto retry;
-		}
+		// 	goto retry;
+		// }
 
 		msg("  xtrabackup: Fatal error: cannot find %s.\n",
 		src_path);
@@ -4761,30 +4775,35 @@ retry:
 	/* TODO: We should skip the following modifies, if it is not the first time. */
 
 	/* read log file header */
-	success = os_file_read(src_file, log_buf, 0, LOG_FILE_HDR_SIZE);
+	success = os_file_read(read_request, src_file, log_buf, 0,
+			       LOG_FILE_HDR_SIZE);
 	if (!success) {
 		goto error;
 	}
 
-	if ( ut_memcmp(log_buf + LOG_FILE_WAS_CREATED_BY_HOT_BACKUP,
-			(byte*)"xtrabkup", (sizeof "xtrabkup") - 1) != 0 ) {
-		msg("xtrabackup: notice: xtrabackup_logfile was already used "
-		    "to '--prepare'.\n");
-		goto skip_modify;
-	} else {
-		/* clear it later */
-		//memset(log_buf + LOG_FILE_WAS_CREATED_BY_HOT_BACKUP,
-		//		' ', 4);
-	}
+	// if ( ut_memcmp(log_buf + LOG_FILE_WAS_CREATED_BY_HOT_BACKUP,
+	// 		(byte*)"xtrabkup", (sizeof "xtrabkup") - 1) != 0 ) {
+	// 	msg("xtrabackup: notice: xtrabackup_logfile was already used "
+	// 	    "to '--prepare'.\n");
+	// 	goto skip_modify;
+	// } else {
+	// 	/* clear it later */
+	// 	//memset(log_buf + LOG_FILE_WAS_CREATED_BY_HOT_BACKUP,
+	// 	//		' ', 4);
+	// }
 
 	checkpoint_found = false;
 
 	/* read last checkpoint lsn */
 	for (field = LOG_CHECKPOINT_1; field <= LOG_CHECKPOINT_2;
 			field += LOG_CHECKPOINT_2 - LOG_CHECKPOINT_1) {
-		if (!recv_check_cp_is_consistent(const_cast<const byte *>
-						 (log_buf + field)))
-			goto not_consistent;
+
+		// TODO: here we must verify checkpoint consistency
+		// and log version
+
+		// if (!recv_check_cp_is_consistent(const_cast<const byte *>
+		// 				 (log_buf + field)))
+		// 	goto not_consistent;
 
 		checkpoint_no = mach_read_from_8(log_buf + field +
 						 LOG_CHECKPOINT_NO);
@@ -4807,42 +4826,42 @@ not_consistent:
 
 
 	/* It seems to be needed to overwrite the both checkpoint area. */
-	mach_write_to_8(log_buf + LOG_CHECKPOINT_1 + LOG_CHECKPOINT_LSN,
-			max_lsn);
-	mach_write_to_4(log_buf + LOG_CHECKPOINT_1
-			+ LOG_CHECKPOINT_OFFSET_LOW32,
-			LOG_FILE_HDR_SIZE +
-			(max_lsn -
-			 ut_uint64_align_down(max_lsn,
-					      OS_FILE_LOG_BLOCK_SIZE)));
-	mach_write_to_4(log_buf + LOG_CHECKPOINT_1
-			+ LOG_CHECKPOINT_OFFSET_HIGH32, 0);
-	fold = ut_fold_binary(log_buf + LOG_CHECKPOINT_1, LOG_CHECKPOINT_CHECKSUM_1);
-	mach_write_to_4(log_buf + LOG_CHECKPOINT_1 + LOG_CHECKPOINT_CHECKSUM_1, fold);
+	// mach_write_to_8(log_buf + LOG_CHECKPOINT_1 + LOG_CHECKPOINT_LSN,
+	// 		max_lsn);
+	// mach_write_to_4(log_buf + LOG_CHECKPOINT_1
+	// 		+ LOG_CHECKPOINT_OFFSET_LOW32,
+	// 		LOG_FILE_HDR_SIZE +
+	// 		(max_lsn -
+	// 		 ut_uint64_align_down(max_lsn,
+	// 				      OS_FILE_LOG_BLOCK_SIZE)));
+	// mach_write_to_4(log_buf + LOG_CHECKPOINT_1
+	// 		+ LOG_CHECKPOINT_OFFSET_HIGH32, 0);
+	// fold = ut_fold_binary(log_buf + LOG_CHECKPOINT_1, LOG_CHECKPOINT_CHECKSUM_1);
+	// mach_write_to_4(log_buf + LOG_CHECKPOINT_1 + LOG_CHECKPOINT_CHECKSUM_1, fold);
 
-	fold = ut_fold_binary(log_buf + LOG_CHECKPOINT_1 + LOG_CHECKPOINT_LSN,
-		LOG_CHECKPOINT_CHECKSUM_2 - LOG_CHECKPOINT_LSN);
-	mach_write_to_4(log_buf + LOG_CHECKPOINT_1 + LOG_CHECKPOINT_CHECKSUM_2, fold);
+	// fold = ut_fold_binary(log_buf + LOG_CHECKPOINT_1 + LOG_CHECKPOINT_LSN,
+	// 	LOG_CHECKPOINT_CHECKSUM_2 - LOG_CHECKPOINT_LSN);
+	// mach_write_to_4(log_buf + LOG_CHECKPOINT_1 + LOG_CHECKPOINT_CHECKSUM_2, fold);
 
-	mach_write_to_8(log_buf + LOG_CHECKPOINT_2 + LOG_CHECKPOINT_LSN,
-			max_lsn);
-	mach_write_to_4(log_buf + LOG_CHECKPOINT_2
-			+ LOG_CHECKPOINT_OFFSET_LOW32,
-			LOG_FILE_HDR_SIZE +
-			(max_lsn -
-			 ut_uint64_align_down(max_lsn,
-					      OS_FILE_LOG_BLOCK_SIZE)));
-	mach_write_to_4(log_buf + LOG_CHECKPOINT_2
-			+ LOG_CHECKPOINT_OFFSET_HIGH32, 0);
-        fold = ut_fold_binary(log_buf + LOG_CHECKPOINT_2, LOG_CHECKPOINT_CHECKSUM_1);
-        mach_write_to_4(log_buf + LOG_CHECKPOINT_2 + LOG_CHECKPOINT_CHECKSUM_1, fold);
+	// mach_write_to_8(log_buf + LOG_CHECKPOINT_2 + LOG_CHECKPOINT_LSN,
+	// 		max_lsn);
+	// mach_write_to_4(log_buf + LOG_CHECKPOINT_2
+	// 		+ LOG_CHECKPOINT_OFFSET_LOW32,
+	// 		LOG_FILE_HDR_SIZE +
+	// 		(max_lsn -
+	// 		 ut_uint64_align_down(max_lsn,
+	// 				      OS_FILE_LOG_BLOCK_SIZE)));
+	// mach_write_to_4(log_buf + LOG_CHECKPOINT_2
+	// 		+ LOG_CHECKPOINT_OFFSET_HIGH32, 0);
+ //        fold = ut_fold_binary(log_buf + LOG_CHECKPOINT_2, LOG_CHECKPOINT_CHECKSUM_1);
+ //        mach_write_to_4(log_buf + LOG_CHECKPOINT_2 + LOG_CHECKPOINT_CHECKSUM_1, fold);
 
-        fold = ut_fold_binary(log_buf + LOG_CHECKPOINT_2 + LOG_CHECKPOINT_LSN,
-                LOG_CHECKPOINT_CHECKSUM_2 - LOG_CHECKPOINT_LSN);
-        mach_write_to_4(log_buf + LOG_CHECKPOINT_2 + LOG_CHECKPOINT_CHECKSUM_2, fold);
+ //        fold = ut_fold_binary(log_buf + LOG_CHECKPOINT_2 + LOG_CHECKPOINT_LSN,
+ //                LOG_CHECKPOINT_CHECKSUM_2 - LOG_CHECKPOINT_LSN);
+ //        mach_write_to_4(log_buf + LOG_CHECKPOINT_2 + LOG_CHECKPOINT_CHECKSUM_2, fold);
 
 
-	success = os_file_write(src_path, src_file, log_buf, 0,
+	success = os_file_write(write_request, src_path, src_file, log_buf, 0,
 				LOG_FILE_HDR_SIZE);
 	if (!success) {
 		goto error;
@@ -4851,12 +4870,11 @@ not_consistent:
 	/* expand file size (9/8) and align to UNIV_PAGE_SIZE_MAX */
 
 	if (file_size % UNIV_PAGE_SIZE_MAX) {
+		ulint n = UNIV_PAGE_SIZE_MAX -
+				(ulint) (file_size % UNIV_PAGE_SIZE_MAX);
 		memset(log_buf, 0, UNIV_PAGE_SIZE_MAX);
-		success = os_file_write(src_path, src_file, log_buf,
-					    file_size,
-					    UNIV_PAGE_SIZE_MAX
-					    - (ulint) (file_size
-						       % UNIV_PAGE_SIZE_MAX));
+		success = os_file_write(write_request, src_path, src_file,
+					log_buf, file_size, n);
 		if (!success) {
 			goto error;
 		}
@@ -4872,7 +4890,8 @@ not_consistent:
 		expand = (ulint) (file_size / UNIV_PAGE_SIZE_MAX / 8);
 
 		for (; expand > 128; expand -= 128) {
-			success = os_file_write(src_path, src_file, log_buf,
+			success = os_file_write(write_request, src_path,
+						src_file, log_buf,
 						file_size,
 						UNIV_PAGE_SIZE_MAX * 128);
 			if (!success) {
@@ -4882,7 +4901,8 @@ not_consistent:
 		}
 
 		if (expand) {
-			success = os_file_write(src_path, src_file, log_buf,
+			success = os_file_write(write_request, src_path,
+						src_file, log_buf,
 						file_size,
 						expand * UNIV_PAGE_SIZE_MAX);
 			if (!success) {
@@ -4896,7 +4916,8 @@ not_consistent:
 	if (file_size < 2*1024*1024L) {
 		memset(log_buf, 0, UNIV_PAGE_SIZE_MAX);
 		while (file_size < 2*1024*1024L) {
-			success = os_file_write(src_path, src_file, log_buf,
+			success = os_file_write(write_request, src_path,
+						src_file, log_buf,
 						file_size,
 						UNIV_PAGE_SIZE_MAX);
 			if (!success) {
@@ -5000,6 +5021,8 @@ xb_space_create_file(
 	byte*		buf2;
 	byte*		page;
 	bool		success;
+
+	IORequest	write_request(IORequest::WRITE);
 
 	ut_ad(!is_system_tablespace(space_id));
 	ut_ad(!srv_read_only_mode);
@@ -5122,7 +5145,7 @@ xb_space_create_file(
 		buf_flush_init_for_writing(
 			NULL, page, NULL, 0,
 			fsp_is_checksum_disabled(space_id));
-		success = os_file_write(path, *file, page, 0,
+		success = os_file_write(write_request, path, *file, page, 0,
 					page_size.physical());
 	} else {
 		page_zip_des_t	page_zip;
@@ -5138,7 +5161,8 @@ xb_space_create_file(
 		buf_flush_init_for_writing(
 			NULL, page, &page_zip, 0,
 			fsp_is_checksum_disabled(space_id));
-		success = os_file_write(path, *file, page_zip.data, 0,
+		success = os_file_write(write_request, path, *file,
+					page_zip.data, 0,
 					page_size.physical());
 	}
 
@@ -5392,6 +5416,9 @@ xtrabackup_apply_delta(
 
 	size_t		offset;
 
+	IORequest	read_request(IORequest::READ);
+	IORequest	write_request(IORequest::WRITE);
+
 	ut_a(xtrabackup_incremental);
 
 	if (dbname) {
@@ -5477,8 +5504,8 @@ xtrabackup_apply_delta(
 		/* first block of block cluster */
 		offset = ((incremental_buffers * (page_size / 4))
 			 << page_size_shift);
-		success = os_file_read(src_file, incremental_buffer,
-					  offset, page_size);
+		success = os_file_read(read_request, src_file,
+				       incremental_buffer, offset, page_size);
 		if (!success) {
 			goto error;
 		}
@@ -5506,8 +5533,9 @@ xtrabackup_apply_delta(
 		ut_a(last_buffer || page_in_buffer == page_size / 4);
 
 		/* read whole of the cluster */
-		success = os_file_read(src_file, incremental_buffer,
-					  offset, page_in_buffer * page_size);
+		success = os_file_read(read_request, src_file,
+				       incremental_buffer, offset,
+				       page_in_buffer * page_size);
 		if (!success) {
 			goto error;
 		}
@@ -5524,7 +5552,8 @@ xtrabackup_apply_delta(
 			if (offset_on_page == 0xFFFFFFFFUL)
 				break;
 
-			success = os_file_write(dst_path, dst_file,
+			success = os_file_write(write_request, dst_path,
+						dst_file,
 						incremental_buffer +
 						page_in_buffer * page_size,
 						(offset_on_page <<
@@ -5749,10 +5778,12 @@ static my_bool
 xtrabackup_close_temp_log(my_bool clear_flag)
 {
 	os_file_t	src_file = XB_FILE_UNDEFINED;
-	char	src_path[FN_REFLEN];
-	char	dst_path[FN_REFLEN];
-	bool	success;
-	byte	log_buf[UNIV_PAGE_SIZE_MAX];
+	char		src_path[FN_REFLEN];
+	char		dst_path[FN_REFLEN];
+	bool		success;
+	byte		log_buf[UNIV_PAGE_SIZE_MAX];
+	IORequest	read_request(IORequest::READ);
+	IORequest	write_request(IORequest::WRITE);
 
 	if (!xtrabackup_logfile_is_renamed)
 		return(FALSE);
@@ -5781,29 +5812,30 @@ xtrabackup_close_temp_log(my_bool clear_flag)
 		return(FALSE);
 
 	/* clear LOG_FILE_WAS_CREATED_BY_HOT_BACKUP field */
-	src_file = os_file_create_simple_no_error_handling(0, src_path,
-							   OS_FILE_OPEN,
-							   OS_FILE_READ_WRITE,
-							   srv_read_only_mode,
-							   &success);
-	if (!success) {
-		goto error;
-	}
+	// src_file = os_file_create_simple_no_error_handling(0, src_path,
+	// 						   OS_FILE_OPEN,
+	// 						   OS_FILE_READ_WRITE,
+	// 						   srv_read_only_mode,
+	// 						   &success);
+	// if (!success) {
+	// 	goto error;
+	// }
 
-	success = os_file_read(src_file, log_buf, 0, LOG_FILE_HDR_SIZE);
-	if (!success) {
-		goto error;
-	}
+	// success = os_file_read(read_request, src_file, log_buf, 0,
+	// 		       LOG_FILE_HDR_SIZE);
+	// if (!success) {
+	// 	goto error;
+	// }
 
-	memset(log_buf + LOG_FILE_WAS_CREATED_BY_HOT_BACKUP, ' ', 4);
+	// memset(log_buf + LOG_FILE_WAS_CREATED_BY_HOT_BACKUP, ' ', 4);
 
-	success = os_file_write(src_path, src_file, log_buf, 0,
-				LOG_FILE_HDR_SIZE);
-	if (!success) {
-		goto error;
-	}
+	// success = os_file_write(write_request, src_path, src_file, log_buf, 0,
+	// 			LOG_FILE_HDR_SIZE);
+	// if (!success) {
+	// 	goto error;
+	// }
 
-	os_file_close(src_file);
+	// os_file_close(src_file);
 	src_file = XB_FILE_UNDEFINED;
 
 	innobase_log_files_in_group = innobase_log_files_in_group_save;
@@ -6251,6 +6283,10 @@ xtrabackup_prepare_func(void)
 	fil_node_t		*node;
 	fil_space_t		*space;
 	char			 metadata_path[FN_REFLEN];
+	IORequest		write_request(IORequest::WRITE);
+
+	mysql_mutex_init(key_LOCK_global_system_variables,
+			 &LOCK_global_system_variables, MY_MUTEX_INIT_FAST);
 
 	/* cd to target-dir */
 
@@ -6315,8 +6351,9 @@ skip_check:
 	srv_page_size_shift = 14;
 	srv_page_size = (1 << srv_page_size_shift);
 	sync_check_init();
+	sync_check_enable();
 	os_thread_init();
-	os_io_init_simple();
+	// os_io_init_simple();
 	trx_pool_init();
 	ut_crc32_init();
 
@@ -6572,7 +6609,7 @@ skip_check:
 				os_file_get_last_error(TRUE);
 				goto next_node;
 			}
-			success = os_file_write(info_file_path,
+			success = os_file_write(write_request, info_file_path,
 						info_file, page,
 						0, UNIV_PAGE_SIZE);
 			if (!success) {
@@ -6656,11 +6693,12 @@ next_node:
 
 	/* re-init necessary components */
 	sync_check_init();
+	sync_check_enable();
 	/* Reset the system variables in the recovery module. */
 	os_thread_init();
 	trx_pool_init();
 	que_init();
-	os_io_init_simple();
+	// os_io_init_simple();
 
 	if(xtrabackup_close_temp_log(TRUE))
 		exit(EXIT_FAILURE);
@@ -6731,12 +6769,17 @@ next_node:
 
 	}
 
+	mysql_mutex_destroy(&LOCK_global_system_variables);
+
 	xb_filters_free();
 
 	return;
 
 error_cleanup:
 	xtrabackup_close_temp_log(FALSE);
+
+	mysql_mutex_destroy(&LOCK_global_system_variables);
+
 	xb_filters_free();
 
 error:

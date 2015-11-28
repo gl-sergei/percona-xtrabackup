@@ -1,5 +1,5 @@
 /*
-   Copyright (c) 2010, 2013, Oracle and/or its affiliates. All rights reserved.
+   Copyright (c) 2010, 2015, Oracle and/or its affiliates. All rights reserved.
 
    This program is free software; you can redistribute it and/or modify
    it under the terms of the GNU General Public License as published by
@@ -44,6 +44,7 @@ import com.mysql.clusterj.core.util.Logger;
 import com.mysql.clusterj.core.util.LoggerFactoryService;
 
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -62,6 +63,7 @@ public class SessionFactoryImpl implements SessionFactory, Constants {
     /** NdbCluster connect properties */
     String CLUSTER_CONNECTION_SERVICE;
     String CLUSTER_CONNECT_STRING;
+    int CLUSTER_CONNECT_TIMEOUT_MGM;
     int CLUSTER_CONNECT_RETRIES;
     int CLUSTER_CONNECT_DELAY;
     int CLUSTER_CONNECT_VERBOSE;
@@ -69,6 +71,11 @@ public class SessionFactoryImpl implements SessionFactory, Constants {
     int CLUSTER_CONNECT_TIMEOUT_AFTER;
     String CLUSTER_DATABASE;
     int CLUSTER_MAX_TRANSACTIONS;
+    int CLUSTER_CONNECT_AUTO_INCREMENT_BATCH_SIZE;
+    long CLUSTER_CONNECT_AUTO_INCREMENT_STEP;
+    long CLUSTER_CONNECT_AUTO_INCREMENT_START;
+    int[] CLUSTER_BYTE_BUFFER_POOL_SIZES;
+
 
     /** Node ids obtained from the property PROPERTY_CONNECTION_POOL_NODEIDS */
     List<Integer> nodeIds = new ArrayList<Integer>();
@@ -158,6 +165,8 @@ public class SessionFactoryImpl implements SessionFactory, Constants {
         CLUSTER_CONNECT_STRING = getRequiredStringProperty(props, PROPERTY_CLUSTER_CONNECTSTRING);
         CLUSTER_CONNECT_RETRIES = getIntProperty(props, PROPERTY_CLUSTER_CONNECT_RETRIES,
                 Constants.DEFAULT_PROPERTY_CLUSTER_CONNECT_RETRIES);
+        CLUSTER_CONNECT_TIMEOUT_MGM = getIntProperty(props, PROPERTY_CLUSTER_CONNECT_TIMEOUT_MGM,
+                Constants.DEFAULT_PROPERTY_CLUSTER_CONNECT_TIMEOUT_MGM);
         CLUSTER_CONNECT_DELAY = getIntProperty(props, PROPERTY_CLUSTER_CONNECT_DELAY,
                 Constants.DEFAULT_PROPERTY_CLUSTER_CONNECT_DELAY);
         CLUSTER_CONNECT_VERBOSE = getIntProperty(props, PROPERTY_CLUSTER_CONNECT_VERBOSE,
@@ -170,7 +179,14 @@ public class SessionFactoryImpl implements SessionFactory, Constants {
                 Constants.DEFAULT_PROPERTY_CLUSTER_DATABASE);
         CLUSTER_MAX_TRANSACTIONS = getIntProperty(props, PROPERTY_CLUSTER_MAX_TRANSACTIONS,
                 Constants.DEFAULT_PROPERTY_CLUSTER_MAX_TRANSACTIONS);
+        CLUSTER_CONNECT_AUTO_INCREMENT_BATCH_SIZE = getIntProperty(props, PROPERTY_CLUSTER_CONNECT_AUTO_INCREMENT_BATCH_SIZE,
+                Constants.DEFAULT_PROPERTY_CLUSTER_CONNECT_AUTO_INCREMENT_BATCH_SIZE);
+        CLUSTER_CONNECT_AUTO_INCREMENT_STEP = getLongProperty(props, PROPERTY_CLUSTER_CONNECT_AUTO_INCREMENT_STEP,
+                Constants.DEFAULT_PROPERTY_CLUSTER_CONNECT_AUTO_INCREMENT_STEP);
+        CLUSTER_CONNECT_AUTO_INCREMENT_START = getLongProperty(props, PROPERTY_CLUSTER_CONNECT_AUTO_INCREMENT_START,
+                Constants.DEFAULT_PROPERTY_CLUSTER_CONNECT_AUTO_INCREMENT_START);
         CLUSTER_CONNECTION_SERVICE = getStringProperty(props, PROPERTY_CLUSTER_CONNECTION_SERVICE);
+        CLUSTER_BYTE_BUFFER_POOL_SIZES = getByteBufferPoolSizes(props);
         createClusterConnectionPool();
         // now get a Session and complete a transaction to make sure that the cluster is ready
         try {
@@ -238,9 +254,11 @@ public class SessionFactoryImpl implements SessionFactory, Constants {
 
     protected ClusterConnection createClusterConnection(
             ClusterConnectionService service, Map<?, ?> props, int nodeId) {
+        int[] byteBufferPoolSizes = getByteBufferPoolSizes(props);
         ClusterConnection result = null;
         try {
-            result = service.create(CLUSTER_CONNECT_STRING, nodeId);
+            result = service.create(CLUSTER_CONNECT_STRING, nodeId, CLUSTER_CONNECT_TIMEOUT_MGM);
+            result.setByteBufferPoolSizes(CLUSTER_BYTE_BUFFER_POOL_SIZES);
             result.connect(CLUSTER_CONNECT_RETRIES, CLUSTER_CONNECT_DELAY,true);
             result.waitUntilReady(CLUSTER_CONNECT_TIMEOUT_BEFORE,CLUSTER_CONNECT_TIMEOUT_AFTER);
         } catch (Exception ex) {
@@ -253,6 +271,31 @@ public class SessionFactoryImpl implements SessionFactory, Constants {
                     local.message("ERR_Connecting", props), ex);
         }
         this.pooledConnections.add(result);
+        result.initializeAutoIncrement(new long[] {
+                CLUSTER_CONNECT_AUTO_INCREMENT_BATCH_SIZE,
+                CLUSTER_CONNECT_AUTO_INCREMENT_STEP,
+                CLUSTER_CONNECT_AUTO_INCREMENT_START
+        });
+        return result;
+    }
+
+    /** Get the byteBufferPoolSizes from properties */
+    int[] getByteBufferPoolSizes(Map<?, ?> props) {
+        int[] result;
+        String byteBufferPoolSizesProperty = getStringProperty(props, PROPERTY_CLUSTER_BYTE_BUFFER_POOL_SIZES,
+                DEFAULT_PROPERTY_CLUSTER_BYTE_BUFFER_POOL_SIZES);
+        // separators are any combination of white space, commas, and semicolons
+        String[] byteBufferPoolSizesList = byteBufferPoolSizesProperty.split("[,; \t\n\r]+", 48);
+        int count = byteBufferPoolSizesList.length;
+        result = new int[count];
+        for (int i = 0; i < count; ++i) {
+            try {
+                result[i] = Integer.parseInt(byteBufferPoolSizesList[i]);
+            } catch (NumberFormatException ex) {
+                throw new ClusterJFatalUserException(local.message(
+                        "ERR_Byte_Buffer_Pool_Sizes_Format", byteBufferPoolSizesProperty), ex);
+            }
+        }
         return result;
     }
 
@@ -456,6 +499,33 @@ public class SessionFactoryImpl implements SessionFactory, Constants {
         if (property instanceof String) {
             try {
                 int result = Integer.parseInt((String)property);
+                return result;
+            } catch (NumberFormatException ex) {
+                throw new ClusterJFatalUserException(
+                        local.message("ERR_NumericFormat", propertyName, property));
+            }
+        }
+        throw new ClusterJUserException(local.message("ERR_NumericFormat", propertyName, property));
+    }
+
+    /** Get the property from the properties map as a long. If the user has not
+     * provided a value in the props, use the supplied default value.
+     * @param props the properties
+     * @param propertyName the name of the property
+     * @param defaultValue the value to return if there is no property by that name
+     * @return the value from the properties or the default value
+     */
+    protected static long getLongProperty(Map<?, ?> props, String propertyName, long defaultValue) {
+        Object property = props.get(propertyName);
+        if (property == null) {
+            return defaultValue;
+        }
+        if (Number.class.isAssignableFrom(property.getClass())) {
+            return ((Number)property).longValue();
+        }
+        if (property instanceof String) {
+            try {
+                long result = Long.parseLong((String)property);
                 return result;
             } catch (NumberFormatException ex) {
                 throw new ClusterJFatalUserException(

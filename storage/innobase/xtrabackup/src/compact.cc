@@ -829,7 +829,7 @@ xb_rebuild_indexes_for_table(
 
 	for (i = 0; i < n_indexes; i++) {
 		indexes[i] = row_merge_create_index(trx, table,
-						    &index_defs[i]);
+						    &index_defs[i], NULL);
 		add_key_nums[i] = index_defs[i].key_number;
 	}
 
@@ -846,7 +846,7 @@ xb_rebuild_indexes_for_table(
 	error = row_merge_build_indexes(trx, table, table, FALSE, indexes,
 					add_key_nums, n_indexes, &dummy_table,
 					NULL, NULL, ULINT_UNDEFINED, null_seq,
-					true, NULL);
+					true, NULL, NULL);
 	ut_a(error == DB_SUCCESS);
 
 	mem_heap_free(heap);

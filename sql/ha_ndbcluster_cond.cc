@@ -1,5 +1,5 @@
 /*
-   Copyright (c) 2000, 2013, Oracle and/or its affiliates. All rights reserved.
+   Copyright (c) 2000, 2015, Oracle and/or its affiliates. All rights reserved.
 
    This program is free software; you can redistribute it and/or modify
    it under the terms of the GNU General Public License as published by
@@ -287,6 +287,9 @@ ndb_serialize_cond(const Item *item, void *arg)
                   : TRUE)) &&
                 // Bit fields no yet supported in scan filter
                 type != MYSQL_TYPE_BIT &&
+                /* Char(0) field is treated as Bit fields inside NDB
+                   Hence not supported in scan filter */
+                (!(type == MYSQL_TYPE_STRING && field->pack_length() == 0)) &&
                 // No BLOB support in scan filter
                 type != MYSQL_TYPE_TINY_BLOB &&
                 type != MYSQL_TYPE_MEDIUM_BLOB &&
@@ -1118,7 +1121,7 @@ ha_ndbcluster_cond::cond_push(const Item *cond,
   Ndb_cond_stack *ndb_cond = new Ndb_cond_stack();
   if (ndb_cond == NULL)
   {
-    my_errno= HA_ERR_OUT_OF_MEM;
+    set_my_errno(HA_ERR_OUT_OF_MEM);
     DBUG_RETURN(cond);
   }
   if (m_cond_stack)

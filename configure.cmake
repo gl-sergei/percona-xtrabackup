@@ -501,9 +501,12 @@ CHECK_SYMBOL_EXISTS(TIOCGWINSZ "sys/ioctl.h" GWINSZ_IN_SYS_IOCTL)
 CHECK_SYMBOL_EXISTS(FIONREAD "sys/ioctl.h" FIONREAD_IN_SYS_IOCTL)
 CHECK_SYMBOL_EXISTS(FIONREAD "sys/filio.h" FIONREAD_IN_SYS_FILIO)
 CHECK_SYMBOL_EXISTS(SIGEV_THREAD_ID "signal.h;time.h" HAVE_SIGEV_THREAD_ID)
-CHECK_SYMBOL_EXISTS(SIGEV_PORT "signal.h;time.h" HAVE_SIGEV_PORT)
+CHECK_SYMBOL_EXISTS(SIGEV_PORT "signal.h;time.h;sys/siginfo.h" HAVE_SIGEV_PORT)
 
 CHECK_SYMBOL_EXISTS(log2  math.h HAVE_LOG2)
+
+# On Solaris, it is only visible in C99 mode
+CHECK_SYMBOL_EXISTS(isinf "math.h" HAVE_C_ISINF)
 
 # isinf() prototype not found on Solaris
 CHECK_CXX_SOURCE_COMPILES(
@@ -511,7 +514,14 @@ CHECK_CXX_SOURCE_COMPILES(
 int main() { 
   isinf(0.0); 
   return 0;
-}" HAVE_ISINF)
+}" HAVE_CXX_ISINF)
+
+IF (HAVE_C_ISINF AND HAVE_CXX_ISINF)
+  SET(HAVE_ISINF 1 CACHE INTERNAL "isinf visible in C and C++" FORCE)
+ELSE()
+  SET(HAVE_ISINF 0 CACHE INTERNAL "isinf visible in C and C++" FORCE)
+ENDIF()
+
 
 # The results of these four checks are only needed here, not in code.
 CHECK_FUNCTION_EXISTS (timer_create HAVE_TIMER_CREATE)
@@ -526,12 +536,8 @@ ELSEIF(HAVE_TIMER_CREATE AND HAVE_TIMER_SETTIME)
   ENDIF()
 ENDIF()
 
-IF(WIN32)
-  SET(HAVE_WINDOWS_TIMERS 1 CACHE INTERNAL "Have Windows timer-related functions")
-ENDIF()
-
-IF(HAVE_POSIX_TIMERS OR HAVE_KQUEUE_TIMERS OR HAVE_WINDOWS_TIMERS)
-  SET(HAVE_MY_TIMER 1 CACHE INTERNAL "Have mysys timer-related functions")
+IF(NOT HAVE_POSIX_TIMERS AND NOT HAVE_KQUEUE_TIMERS AND NOT WIN32)
+  MESSAGE(FATAL_ERROR "No mysys timer support detected!")
 ENDIF()
 
 #
@@ -549,7 +555,7 @@ set(CMAKE_REQUIRED_DEFINITIONS ${CMAKE_REQUIRED_DEFINITIONS}
         -D_LARGEFILE_SOURCE -D_LARGE_FILES -D_FILE_OFFSET_BITS=64
         -D__STDC_LIMIT_MACROS -D__STDC_CONSTANT_MACROS -D__STDC_FORMAT_MACROS)
 
-SET(CMAKE_EXTRA_INCLUDE_FILES stdint.h stdio.h sys/types.h)
+SET(CMAKE_EXTRA_INCLUDE_FILES stdint.h stdio.h sys/types.h time.h)
 
 CHECK_TYPE_SIZE("void *"    SIZEOF_VOIDP)
 CHECK_TYPE_SIZE("char *"    SIZEOF_CHARP)
@@ -559,6 +565,7 @@ CHECK_TYPE_SIZE("int"       SIZEOF_INT)
 CHECK_TYPE_SIZE("long long" SIZEOF_LONG_LONG)
 CHECK_TYPE_SIZE("off_t"     SIZEOF_OFF_T)
 CHECK_TYPE_SIZE("time_t"    SIZEOF_TIME_T)
+CHECK_TYPE_SIZE("struct timespec" STRUCT_TIMESPEC)
 
 # If finds the size of a type, set SIZEOF_<type> and HAVE_<type>
 FUNCTION(MY_CHECK_TYPE_SIZE type defbase)
@@ -790,7 +797,6 @@ CHECK_STRUCT_HAS_MEMBER("struct sockaddr_in" sin_len
 CHECK_STRUCT_HAS_MEMBER("struct sockaddr_in6" sin6_len
   "${CMAKE_EXTRA_INCLUDE_FILES}" HAVE_SOCKADDR_IN6_SIN6_LEN)
 
-
 CHECK_CXX_SOURCE_COMPILES(
   "
   #include <vector>
@@ -820,3 +826,21 @@ CHECK_CXX_SOURCE_COMPILES(
 SET(CMAKE_EXTRA_INCLUDE_FILES)
 
 CHECK_FUNCTION_EXISTS(chown HAVE_CHOWN)
+CHECK_INCLUDE_FILES (numaif.h HAVE_NUMAIF_H)
+OPTION(WITH_NUMA "Explicitly set NUMA memory allocation policy" ON)
+IF(HAVE_NUMAIF_H AND WITH_NUMA)
+    SET(SAVE_CMAKE_REQUIRED_LIBRARIES ${CMAKE_REQUIRED_LIBRARIES})
+    SET(CMAKE_REQUIRED_LIBRARIES ${CMAKE_REQUIRED_LIBRARIES} numa)
+    CHECK_C_SOURCE_COMPILES(
+    "
+    #include <numa.h>
+    #include <numaif.h>
+    int main()
+    {
+       struct bitmask *all_nodes= numa_all_nodes_ptr;
+       set_mempolicy(MPOL_DEFAULT, 0, 0);
+       return all_nodes != NULL;
+    }"
+    HAVE_LIBNUMA)
+    SET(CMAKE_REQUIRED_LIBRARIES ${SAVE_CMAKE_REQUIRED_LIBRARIES})
+ENDIF()

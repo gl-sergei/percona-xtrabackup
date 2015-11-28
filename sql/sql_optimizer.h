@@ -225,7 +225,7 @@ public:
   bool     sort_and_group; 
   bool     first_record;
   bool     grouped;          ///< If query contains GROUP BY clause
-  bool     do_send_rows;
+  bool     do_send_rows;     ///< If true, send produced rows using query_result
   table_map all_table_map;   ///< Set of tables contained in query
   table_map const_table_map; ///< Set of tables found to be const
   /**
@@ -592,7 +592,10 @@ public:
   void join_free();
   /** Cleanup this JOIN. Not a full cleanup. reusable? */
   void cleanup();
-  void clear();
+
+  __attribute__((warn_unused_result))
+  bool clear();
+
   bool save_join_tab();
   void restore_join_tab();
   bool init_save_join_tab();
@@ -707,20 +710,7 @@ private:
     Function sets FT hints, initializes FT handlers and
     checks if FT index can be used as covered.
   */
-  void optimize_fts_query();
-
-  /**
-     Replace all Item_field objects with the given field name with the
-     given item in all parts of the query.
-
-     @todo So far this function only handles SELECT list and WHERE clause,
-           For more general use, ON clause, ORDER BY list, GROUP BY list and
-	   HAVING clause also needs to be handled.
-
-     @param field_name Name of the field to search for
-     @param new_item Replacement item
-  */
-  void replace_item_field(const char* field_name, Item* new_item);
+  bool optimize_fts_query();
 
   bool prune_table_partitions();
 
@@ -802,6 +792,8 @@ private:
   bool setup_semijoin_materialized_table(JOIN_TAB *tab, uint tableno,
                                          const POSITION *inner_pos,
                                          POSITION *sjm_pos);
+
+  bool add_having_as_tmp_table_cond(uint curr_tmp_table);
   bool make_tmp_tables_info();
   void set_plan_state(enum_plan_state plan_state_arg);
   bool compare_costs_of_subquery_strategies(
@@ -844,6 +836,7 @@ private:
       use by 'execute' or 'explain'
   */
   void test_skip_sort();
+  void substitute_gc();
 };
 
 /// RAII class to ease the call of LEX::mark_broken() if error.
@@ -862,17 +855,18 @@ private:
 
 bool uses_index_fields_only(Item *item, TABLE *tbl, uint keyno, 
                             bool other_tbls_ok);
-Item *remove_eq_conds(THD *thd, Item *cond, Item::cond_result *cond_value);
-Item *optimize_cond(THD *thd, Item *conds, COND_EQUAL **cond_equal,
+bool remove_eq_conds(THD *thd, Item *cond, Item **retcond,
+                     Item::cond_result *cond_value);
+bool optimize_cond(THD *thd, Item **conds, COND_EQUAL **cond_equal,
                     List<TABLE_LIST> *join_list,
-                    bool build_equalities, Item::cond_result *cond_value);
+                    Item::cond_result *cond_value);
 Item* substitute_for_best_equal_field(Item *cond,
                                       COND_EQUAL *cond_equal,
                                       void *table_join_idx);
-Item *build_equal_items(THD *thd, Item *cond,
-                        COND_EQUAL *inherited, bool do_inherit,
-                        List<TABLE_LIST> *join_list,
-                        COND_EQUAL **cond_equal_ref);
+bool build_equal_items(THD *thd, Item *cond, Item **retcond,
+                       COND_EQUAL *inherited, bool do_inherit,
+                       List<TABLE_LIST> *join_list,
+                       COND_EQUAL **cond_equal_ref);
 bool is_indexed_agg_distinct(JOIN *join, List<Item_field> *out_args);
 Key_use_array *create_keyuse_for_table(THD *thd, TABLE *table, uint keyparts,
                                        Item_field **fields,

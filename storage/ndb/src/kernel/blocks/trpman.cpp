@@ -1,5 +1,5 @@
 /*
-  Copyright (c) 2011, 2014, Oracle and/or its affiliates. All rights reserved.
+  Copyright (c) 2011, 2015, Oracle and/or its affiliates. All rights reserved.
 
   This program is free software; you can redistribute it and/or modify
   it under the terms of the GNU General Public License as published by
@@ -24,6 +24,8 @@
 #include <signaldata/DumpStateOrd.hpp>
 
 #include <mt.hpp>
+#include <EventLogger.hpp>
+extern EventLogger * g_eventLogger;
 
 #define JAM_FILE_ID 430
 
@@ -186,27 +188,32 @@ Trpman::execCLOSE_COMREQ(Signal* signal)
   const BlockReference userRef = closeCom->xxxBlockRef;
   Uint32 requestType = closeCom->requestType;
   Uint32 failNo = closeCom->failNo;
-//  Uint32 noOfNodes = closeCom->noOfNodes;
+  Uint32 noOfNodes = closeCom->noOfNodes;
+  Uint32 found_nodes = 0;
 
   jamEntry();
   for (unsigned i = 1; i < MAX_NODES; i++)
   {
-    if (NodeBitmask::get(closeCom->theNodes, i) &&
-        handles_this_node(i))
+    if (NodeBitmask::get(closeCom->theNodes, i))
     {
-      jam();
+      found_nodes++;
+      if (handles_this_node(i))
+      {
+        jam();
 
-      //-----------------------------------------------------
-      // Report that the connection to the node is closed
-      //-----------------------------------------------------
-      signal->theData[0] = NDB_LE_CommunicationClosed;
-      signal->theData[1] = i;
-      sendSignal(CMVMI_REF, GSN_EVENT_REP, signal, 2, JBB);
+        //-----------------------------------------------------
+        // Report that the connection to the node is closed
+        //-----------------------------------------------------
+        signal->theData[0] = NDB_LE_CommunicationClosed;
+        signal->theData[1] = i;
+        sendSignal(CMVMI_REF, GSN_EVENT_REP, signal, 2, JBB);
 
-      globalTransporterRegistry.setIOState(i, HaltIO);
-      globalTransporterRegistry.do_disconnect(i);
+        globalTransporterRegistry.setIOState(i, HaltIO);
+        globalTransporterRegistry.do_disconnect(i);
+      }
     }
   }
+  ndbrequire(noOfNodes == found_nodes);
 
   if (requestType != CloseComReqConf::RT_NO_REPLY)
   {
@@ -377,6 +384,7 @@ Trpman::execDBINFO_SCANREQ(Signal *signal)
   const Ndbinfo::ScanCursor* cursor =
     CAST_CONSTPTR(Ndbinfo::ScanCursor, DbinfoScan::getCursorPtr(&req));
   Ndbinfo::Ratelimit rl;
+  char addr_buf[NDB_ADDR_STRLEN];
 
   jamEntry();
 
@@ -413,7 +421,13 @@ Trpman::execDBINFO_SCANREQ(Signal *signal)
           if (globalTransporterRegistry.get_connect_address(rnode).s_addr != 0)
           {
             jam();
-            row.write_string(inet_ntoa(globalTransporterRegistry.get_connect_address(rnode)));
+            struct in_addr conn_addr = globalTransporterRegistry.
+                                         get_connect_address(rnode);
+            char *addr_str = Ndb_inet_ntop(AF_INET,
+                                           static_cast<void*>(&conn_addr),
+                                           addr_buf,
+                                           (socklen_t)sizeof(addr_buf));
+            row.write_string(addr_str);
           }
           else
           {
@@ -581,12 +595,13 @@ Trpman::execDUMP_STATE_ORD(Signal* signal)
       {
         if (block)
         {
-          ndbout_c("TRPMAN : Blocking receive from node %u", nodeId);
+          g_eventLogger->info("TRPMAN : Blocking receive from node %u", nodeId);
           globalTransporterRegistry.blockReceive(*recvdata, nodeId);
         }
         else
         {
-          ndbout_c("TRPMAN : Unblocking receive from node %u", nodeId);
+          g_eventLogger->info("TRPMAN : Unblocking receive from node %u", 
+                              nodeId);
 
           globalTransporterRegistry.unblockReceive(*recvdata, nodeId);
         }
@@ -638,7 +653,7 @@ Trpman::execDUMP_STATE_ORD(Signal* signal)
             default:
               break;
             }
-            ndbout_c("TRPMAN : Blocking receive from node %u", node);
+            g_eventLogger->info("TRPMAN : Blocking receive from node %u", node);
             globalTransporterRegistry.blockReceive(*recvdata, node);
           }
         }
@@ -655,7 +670,7 @@ Trpman::execDUMP_STATE_ORD(Signal* signal)
         continue;
       if (globalTransporterRegistry.isBlocked(node))
       {
-        ndbout_c("CMVMI : Unblocking receive from node %u", node);
+        g_eventLogger->info("TRPMAN : Unblocking receive from node %u", node);
         globalTransporterRegistry.unblockReceive(*recvdata, node);
       }
     }

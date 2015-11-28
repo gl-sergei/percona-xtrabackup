@@ -32,6 +32,7 @@
 #include "sp_cache.h"
 #include "sql_parse.h"         // cleanup_items
 #include "sql_base.h"          // close_thread_tables
+#include "template_utils.h"    // pointer_cast
 #include "transaction.h"       // trans_commit_stmt
 #include "opt_trace.h"         // opt_trace_disable_etc
 
@@ -286,9 +287,11 @@ sp_head::sp_head(enum_sp_type type)
   m_body= NULL_STR;
   m_body_utf8= NULL_STR;
 
-  my_hash_init(&m_sptabs, system_charset_info, 0, 0, 0, sp_table_key, 0, 0);
+  my_hash_init(&m_sptabs, system_charset_info, 0, 0, 0, sp_table_key, 0, 0,
+               key_memory_sp_head_main_root);
   my_hash_init(&m_sroutines, system_charset_info, 0, 0, 0, sp_sroutine_key,
-               0, 0);
+               0, 0,
+               key_memory_sp_head_main_root);
 
   m_trg_chistics.ordering_clause= TRG_ORDER_NONE;
   m_trg_chistics.anchor_trigger_name.str= NULL;
@@ -486,7 +489,7 @@ sp_head::~sp_head()
     THD::lex. It is safe to not update LEX::ptr because further query
     string parsing and execution will be stopped anyway.
   */
-  while ((lex= (LEX *) m_parser_data.pop_lex()))
+  while ((lex= m_parser_data.pop_lex()))
   {
     THD *thd= lex->thd;
     thd->lex->sphead= NULL;
@@ -680,15 +683,19 @@ bool sp_head::execute(THD *thd, bool merge_da_on_success)
     too early in the calling query.
   */
   thd->change_list.move_elements_to(&old_change_list);
-  /*
-    Cursors will use thd->packet, so they may corrupt data which was prepared
-    for sending by upper level. OTOH cursors in the same routine can share this
-    buffer safely so let use use routine-local packet instead of having own
-    packet buffer for each cursor.
 
-    It is probably safe to use same thd->convert_buff everywhere.
-  */
-  old_packet.swap(thd->packet);
+  if (thd->is_classic_protocol())
+  {
+    /*
+      Cursors will use thd->packet, so they may corrupt data which was
+      prepared for sending by upper level. OTOH cursors in the same routine
+      can share this buffer safely so let use use routine-local packet
+      instead of having own packet buffer for each cursor.
+
+      It is probably safe to use same thd->convert_buff everywhere.
+    */
+    old_packet.swap(*thd->get_protocol_classic()->get_packet());
+  }
 
   /*
     Switch to per-instruction arena here. We can do it since we cleanup
@@ -836,8 +843,9 @@ bool sp_head::execute(THD *thd, bool merge_da_on_success)
 
   thd->sp_runtime_ctx->pop_all_cursors(); // To avoid memory leaks after an error
 
-  /* Restore all saved */
-  old_packet.swap(thd->packet);
+  if(thd->is_classic_protocol())
+    /* Restore all saved */
+    old_packet.swap(*thd->get_protocol_classic()->get_packet());
   DBUG_ASSERT(thd->change_list.is_empty());
   old_change_list.move_elements_to(&thd->change_list);
   thd->lex= old_lex;
@@ -1436,6 +1444,13 @@ bool sp_head::execute_procedure(THD *thd, List<Item> *args)
           break;
         }
       }
+
+      if (thd->variables.session_track_transaction_info > TX_TRACK_NONE)
+      {
+        ((Transaction_state_tracker *)
+         thd->session_tracker.get_tracker(TRANSACTION_INFO_TRACKER))
+          ->add_trx_state_from_thd(thd);
+      }
     }
 
     /*
@@ -1632,7 +1647,7 @@ bool sp_head::restore_lex(THD *thd)
 
   sublex->set_trg_event_type_for_tables();
 
-  LEX *oldlex= (LEX *) m_parser_data.pop_lex();
+  LEX *oldlex= m_parser_data.pop_lex();
 
   if (!oldlex)
     return false; // Nothing to restore
@@ -1726,7 +1741,7 @@ bool sp_head::show_create_routine(THD *thd, enum_sp_type type)
 
   bool err_status;
 
-  Protocol *protocol= thd->protocol;
+  Protocol *protocol= thd->get_protocol();
   List<Item> fields;
 
   LEX_STRING sql_mode;
@@ -1769,15 +1784,15 @@ bool sp_head::show_create_routine(THD *thd, enum_sp_type type)
   fields.push_back(new Item_empty_string("Database Collation",
                                          MY_CS_NAME_SIZE));
 
-  if (protocol->send_result_set_metadata(&fields,
-                            Protocol::SEND_NUM_ROWS | Protocol::SEND_EOF))
+  if (thd->send_result_metadata(&fields,
+                                Protocol::SEND_NUM_ROWS | Protocol::SEND_EOF))
   {
     return true;
   }
 
   /* Send data. */
 
-  protocol->prepare_for_resend();
+  protocol->start_row();
 
   protocol->store(m_name.str, m_name.length, system_charset_info);
   protocol->store(sql_mode.str, sql_mode.length, system_charset_info);
@@ -1793,7 +1808,7 @@ bool sp_head::show_create_routine(THD *thd, enum_sp_type type)
   protocol->store(m_creation_ctx->get_connection_cl()->name, system_charset_info);
   protocol->store(m_creation_ctx->get_db_cl()->name, system_charset_info);
 
-  err_status= protocol->write();
+  err_status= protocol->end_row();
 
   if (!err_status)
     my_eof(thd);
@@ -1926,7 +1941,7 @@ void sp_head::opt_mark()
 #ifndef DBUG_OFF
 bool sp_head::show_routine_code(THD *thd)
 {
-  Protocol *protocol= thd->protocol;
+  Protocol *protocol= thd->get_protocol();
   char buff[2048];
   String buffer(buff, sizeof(buff), system_charset_info);
   List<Item> field_list;
@@ -1942,8 +1957,8 @@ bool sp_head::show_routine_code(THD *thd)
   // 1024 is for not to confuse old clients
   field_list.push_back(new Item_empty_string("Instruction",
                                              std::max<size_t>(buffer.length(), 1024U)));
-  if (protocol->send_result_set_metadata(&field_list, Protocol::SEND_NUM_ROWS |
-                                         Protocol::SEND_EOF))
+  if (thd->send_result_metadata(&field_list,
+                                Protocol::SEND_NUM_ROWS | Protocol::SEND_EOF))
     return true;
 
   for (ip= 0; (i = get_instr(ip)) ; ip++)
@@ -1964,13 +1979,13 @@ bool sp_head::show_routine_code(THD *thd)
       */
       push_warning(thd, Sql_condition::SL_WARNING, ER_UNKNOWN_ERROR, tmp);
     }
-    protocol->prepare_for_resend();
+    protocol->start_row();
     protocol->store((longlong)ip);
 
     buffer.set("", 0, system_charset_info);
     i->print(&buffer);
     protocol->store(buffer.ptr(), buffer.length(), system_charset_info);
-    if ((res= protocol->write()))
+    if ((res= protocol->end_row()))
       break;
   }
 
@@ -2087,31 +2102,19 @@ void sp_head::add_used_tables_to_table_list(THD *thd,
 
   for (uint i= 0; i < m_sptabs.records; i++)
   {
-    char *tab_buff, *key_buff;
-    SP_TABLE *stab= (SP_TABLE*) my_hash_element(&m_sptabs, i);
+    SP_TABLE *stab= pointer_cast<SP_TABLE*>(my_hash_element(&m_sptabs, i));
     if (stab->temp)
       continue;
 
-    if (!(tab_buff= (char *)thd->mem_calloc(ALIGN_SIZE(sizeof(TABLE_LIST)) *
-                                        stab->lock_count)) ||
-        !(key_buff= (char*)thd->memdup(stab->qname.str,
-                                       stab->qname.length)))
+    char *tab_buff= static_cast<char*>
+      (thd->alloc(ALIGN_SIZE(sizeof(TABLE_LIST)) * stab->lock_count));
+    char *key_buff= static_cast<char*>(thd->memdup(stab->qname.str,
+                                                   stab->qname.length));
+    if (!tab_buff || !key_buff)
       return;
 
     for (uint j= 0; j < stab->lock_count; j++)
     {
-      TABLE_LIST *table= (TABLE_LIST *)tab_buff;
-
-      table->db= key_buff;
-      table->db_length= stab->db_length;
-      table->table_name= table->db + table->db_length + 1;
-      table->table_name_length= stab->table_name_length;
-      table->alias= table->table_name + table->table_name_length + 1;
-      table->lock_type= stab->lock_type;
-      table->cacheable_table= 1;
-      table->prelocking_placeholder= 1;
-      table->belong_to_view= belong_to_view;
-      table->trg_event_map= stab->trg_event_map;
       /*
         Since we don't allow DDL on base tables in prelocked mode it
         is safe to infer the type of metadata lock from the type of
@@ -2126,7 +2129,7 @@ void sp_head::add_used_tables_to_table_list(THD *thd,
           acquire "strong" locks to ensure that LOCK TABLES properly
           works for storage engines which don't use THR_LOCK locks.
         */
-        mdl_lock_type= (table->lock_type >= TL_WRITE_ALLOW_WRITE) ?
+        mdl_lock_type= (stab->lock_type >= TL_WRITE_ALLOW_WRITE) ?
                        MDL_SHARED_NO_READ_WRITE : MDL_SHARED_READ_ONLY;
       }
       else
@@ -2136,12 +2139,21 @@ void sp_head::add_used_tables_to_table_list(THD *thd,
           Let us respect explicit LOW_PRIORITY clause if was used
           in the routine.
         */
-        mdl_lock_type= mdl_type_for_dml(table->lock_type);
+        mdl_lock_type= mdl_type_for_dml(stab->lock_type);
       }
 
-      MDL_REQUEST_INIT(&table->mdl_request,
-                       MDL_key::TABLE, table->db, table->table_name,
-                       mdl_lock_type, MDL_TRANSACTION);
+      TABLE_LIST *table= pointer_cast<TABLE_LIST*>(tab_buff);
+      table->init_one_table(key_buff, stab->db_length,
+                            key_buff + stab->db_length + 1,
+                            stab->table_name_length,
+                            key_buff + stab->db_length + 1 +
+                            stab->table_name_length + 1,
+                            stab->lock_type, mdl_lock_type);
+
+      table->cacheable_table= 1;
+      table->prelocking_placeholder= 1;
+      table->belong_to_view= belong_to_view;
+      table->trg_event_map= stab->trg_event_map;
 
       /* Everyting else should be zeroed */
 

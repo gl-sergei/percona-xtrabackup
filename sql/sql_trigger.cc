@@ -137,13 +137,8 @@ bool mysql_create_or_drop_trigger(THD *thd, TABLE_LIST *tables, bool create)
     */
     thd->lex->sql_command= backup.sql_command;
 
-    if (opt_readonly &&
-        !(thd->security_context()->check_access(SUPER_ACL)) &&
-        !thd->slave_thread)
-    {
-      my_error(ER_OPTION_PREVENTS_STATEMENT, MYF(0), "--read-only");
+    if (check_readonly(thd, true))
       goto end;
-    }
 
     if (add_table_for_trigger(thd,
                               thd->lex->spname->m_db,
@@ -366,9 +361,7 @@ bool add_table_for_trigger(THD *thd,
   if (Trigger_loader::load_trn_file(thd, trigger_name, trn_path, &tbl_name))
     DBUG_RETURN(TRUE);
 
-  *table= sp_add_to_query_tables(thd, lex, db_name.str,
-                                 tbl_name.str, TL_IGNORE,
-                                 MDL_SHARED_NO_WRITE);
+  *table= sp_add_to_query_tables(thd, lex, db_name.str, tbl_name.str);
 
   DBUG_RETURN(*table ? FALSE : TRUE);
 }

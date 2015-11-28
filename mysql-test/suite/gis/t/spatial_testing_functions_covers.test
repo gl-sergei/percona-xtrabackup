@@ -20,7 +20,7 @@
 --echo #Creating the spatial Geometry object
 USE test;
 
-CREATE TABLE gis_geometrycollection (fid INTEGER NOT NULL PRIMARY KEY, g GEOMETRYCOLLECTION);
+CREATE TABLE gis_geometrycollection (fid INTEGER NOT NULL PRIMARY KEY, g GEOMETRY);
 
 ############################################################################################
 # Inserting the values specific to the spatial objects                                     #
@@ -241,6 +241,7 @@ SELECT MBRCOVERS(ST_GEOMFROMTEXT(@star_top),ST_GEOMFROMTEXT(@star_top_to_center)
 
 SELECT MBRCOVERS(g,ST_GEOMFROMTEXT(@star_top_to_center)) FROM gis_geometrycollection WHERE fid=104;
 
+--error ER_GIS_INVALID_DATA
 SELECT MBRCOVERS(ST_GEOMFROMTEXT('POINT(0 0)'),ST_GEOMFROMTEXT('LINESTRING(0 0)'));
 
 SELECT MBRCOVERS(ST_GEOMFROMTEXT('POINT(5 0)'),ST_GEOMFROMTEXT('LINESTRING(0 0,10 0)'));
@@ -256,6 +257,7 @@ SELECT MBRCOVERS(ST_GEOMFROMTEXT(@star_top),ST_GEOMFROMTEXT(@star_lines_near_ver
 
 SELECT MBRCOVERS(g,ST_GEOMFROMTEXT(@star_lines_near_vertical)) FROM gis_geometrycollection WHERE fid=104;
 
+--error ER_GIS_INVALID_DATA
 SELECT MBRCOVERS(ST_GEOMFROMTEXT('POINT(0 0)'),ST_GEOMFROMTEXT('MULTILINESTRING((0 0))'));
 
 SELECT MBRCOVERS(ST_GEOMFROMTEXT('POINT(10 0)'),ST_GEOMFROMTEXT('MULTILINESTRING((0 0,5 0),(5 0,10 0))'));
@@ -419,21 +421,24 @@ SELECT MBRCOVERS(g,ST_GEOMFROMTEXT(@star_lines_near_horizontal)) FROM gis_geomet
 --echo #====================================================================================
 --echo # linestring,polygon
 --echo #====================================================================================
-SELECT MBRCOVERS(ST_GEOMFROMTEXT(@star_line_horizontal),ST_GEOMFROMTEXT('POLYGON((11 15,19 15,19 10))'));
+SELECT MBRCOVERS(ST_GEOMFROMTEXT(@star_line_horizontal),ST_GEOMFROMTEXT('POLYGON((11 15,19 15,19 10,11 15))'));
 
 SELECT MBRCOVERS(ST_GEOMFROMTEXT(@star_line_horizontal),ST_GEOMFROMTEXT(@star_elem_horizontal));
 
+--error ER_GIS_INVALID_DATA
 SELECT MBRCOVERS(g,ST_GEOMFROMTEXT('POLYGON((11 15,19 15,11 15))')) FROM gis_geometrycollection WHERE fid=110;
 
-SELECT MBRCOVERS(ST_GEOMFROMTEXT(@star_line_horizontal),ST_GEOMFROMTEXT('POLYGON((11 15,19 15,19 10))'));
+SELECT MBRCOVERS(ST_GEOMFROMTEXT(@star_line_horizontal),ST_GEOMFROMTEXT('POLYGON((11 15,19 15,19 10,11 15))'));
 
 --echo #====================================================================================
 --echo # linestring,multipolygon
 --echo #====================================================================================
+--error ER_GIS_INVALID_DATA
 SELECT MBRCOVERS(ST_GEOMFROMTEXT(@star_line_horizontal),ST_GEOMFROMTEXT('MULTIPOLYGON(((11 15,19 15,11 15)),((25 0,0 15,25 0)))'));
 
 SELECT MBRCOVERS(ST_GEOMFROMTEXT(@star_line_horizontal),ST_GEOMFROMTEXT(@star_of_elems));
 
+--error ER_GIS_INVALID_DATA
 SELECT MBRCOVERS(g,ST_GEOMFROMTEXT('MULTIPOLYGON(((11 15,19 15,11 15)),((25 0,0 15,25 0)))')) FROM gis_geometrycollection WHERE fid=110;
 
 --echo #====================================================================================
@@ -587,7 +592,7 @@ SELECT MBRCOVERS(g,ST_GEOMFROMTEXT(@star_collection_elems)) FROM gis_geometrycol
 
 SELECT MBRCOVERS(ST_GEOMFROMTEXT(@star),ST_GEOMFROMTEXT(@star_collection_multilinestr));
 
-SELECT MBRCOVERS(ST_GEOMFROMTEXT('POLYGON((0 0,0 10,10 10,10 0,0 0))'),ST_GEOMFROMTEXT('GEOMETRYCOLLECTION(GEOMETRYCOLLECTION())'));
+SELECT MBRCOVERS(ST_GEOMFROMTEXT('POLYGON((0 0,0 10,10 10,10 0,0 0,0 0))'),ST_GEOMFROMTEXT('GEOMETRYCOLLECTION(GEOMETRYCOLLECTION())'));
 
 --echo #====================================================================================
 --echo # multipolygon,point
@@ -673,9 +678,9 @@ SELECT MBRCOVERS(ST_GEOMFROMTEXT(@star_collection_elems),ST_GEOMFROMTEXT('POINT(
 
 SELECT MBRCOVERS(g,ST_GEOMFROMTEXT(@star_top)) FROM gis_geometrycollection WHERE fid=115;
 
-Select MBRCOVERS(ST_GEOMFROMTEXT('GEOMETRYCOLLECTION(GEOMETRYCOLLECTION(),POLYGON((0 0,0 10,10 10,10 0,0 0)))'),ST_GEOMFROMTEXT('POINT(100 100)'));
+Select MBRCOVERS(ST_GEOMFROMTEXT('GEOMETRYCOLLECTION(GEOMETRYCOLLECTION(),POLYGON((0 0,0 10,10 10,10 0,0 0,0 0)))'),ST_GEOMFROMTEXT('POINT(100 100)'));
 
-Select MBRCOVERS(ST_GEOMFROMTEXT('GEOMETRYCOLLECTION(POLYGON((0 0,0 10,10 10,10 0,0 0)),GEOMETRYCOLLECTION())'),ST_GEOMFROMTEXT('POINT(100 100)'));
+Select MBRCOVERS(ST_GEOMFROMTEXT('GEOMETRYCOLLECTION(POLYGON((0 0,0 10,10 10,10 0,0 0,0 0)),GEOMETRYCOLLECTION())'),ST_GEOMFROMTEXT('POINT(100 100)'));
 
 --echo #====================================================================================
 --echo # geometrycollection,multipoint

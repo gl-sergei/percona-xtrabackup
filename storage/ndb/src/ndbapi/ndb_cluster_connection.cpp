@@ -1,5 +1,5 @@
 /*
-   Copyright (c) 2004, 2013, Oracle and/or its affiliates. All rights reserved.
+   Copyright (c) 2004, 2015, Oracle and/or its affiliates. All rights reserved.
 
    This program is free software; you can redistribute it and/or modify
    it under the terms of the GNU General Public License as published by
@@ -345,13 +345,13 @@ Ndb_cluster_connection::wait_until_ready(int timeout,
   int milliCounter = 0;
   int noChecksSinceFirstAliveFound = 0;
   do {
-    unsigned int foundAliveNode = get_no_ready();
+    const Uint32 unconnected_nodes = m_impl.get_unconnected_nodes();
 
-    if (foundAliveNode == no_db_nodes())
+    if (unconnected_nodes == 0)
     {
       DBUG_RETURN(0);
     }
-    else if (foundAliveNode > 0)
+    else if (unconnected_nodes < no_db_nodes())
     {
       noChecksSinceFirstAliveFound++;
       // 100 ms delay -> 10*
@@ -436,6 +436,7 @@ Ndb_cluster_connection_impl(const char * connect_string,
 
   m_event_add_drop_mutex= NdbMutex_Create();
   m_new_delete_ndb_mutex = NdbMutex_Create();
+  m_new_delete_ndb_cond = NdbCondition_Create();
 
   m_connect_thread= 0;
   m_connect_callback= 0;
@@ -479,20 +480,23 @@ Ndb_cluster_connection_impl::~Ndb_cluster_connection_impl()
 {
   DBUG_ENTER("~Ndb_cluster_connection");
 
-  if (m_first_ndb_object != 0)
+  // Wait until all Ndb instances belonging to this Ndb_cluster_connection
+  // have been released(they have references to the TransporterFacade)
+  NdbMutex_Lock(m_new_delete_ndb_mutex);
+  if (m_first_ndb_object)
   {
-    g_eventLogger->warning("Deleting Ndb_cluster_connection with Ndb-object"
-                           " not deleted");
-    Ndb * p = m_first_ndb_object;
-    printf("this: %p Ndb-object(s): ", (Ndb_cluster_connection*)this);
-    while (p)
+    g_eventLogger->warning("Waiting for Ndb instances belonging to "
+                           "Ndb_cluster_connection %p to be deleted...",
+                           this);
+
+    while(m_first_ndb_object)
     {
-      printf("%p ", p);
-      p = p->theImpl->m_next_ndb_object;
+      NdbCondition_WaitTimeout(m_new_delete_ndb_cond,
+                               m_new_delete_ndb_mutex,
+                               1000);
     }
-    printf("\n");
-    fflush(stdout);
   }
+  NdbMutex_Unlock(m_new_delete_ndb_mutex);
 
   if (m_transporter_facade != 0)
   {
@@ -541,6 +545,10 @@ Ndb_cluster_connection_impl::~Ndb_cluster_connection_impl()
   if (m_new_delete_ndb_mutex)
     NdbMutex_Destroy(m_new_delete_ndb_mutex);
   m_new_delete_ndb_mutex = 0;
+
+  if (m_new_delete_ndb_cond)
+    NdbCondition_Destroy(m_new_delete_ndb_cond);
+  m_new_delete_ndb_cond = 0;
   
   if(m_multi_wait_group)
     delete m_multi_wait_group;
@@ -583,6 +591,10 @@ Ndb_cluster_connection_impl::link_ndb_object(Ndb* p)
   m_first_ndb_object = p;
   
   p->theFirstTransId += m_max_trans_id;
+
+  // Wake up anyone waiting for changes to the Ndb instance list
+  NdbCondition_Broadcast(m_new_delete_ndb_cond);
+
   unlock_ndb_objects();
 }
 
@@ -625,6 +637,9 @@ Ndb_cluster_connection_impl::unlink_ndb_object(Ndb* p)
   {
     globalApiStatsBaseline[i] += p->theImpl->clientStats[i];
   }
+
+  // Wake up anyone waiting for changes to the Ndb instance list
+  NdbCondition_Broadcast(m_new_delete_ndb_cond);
 
   unlock_ndb_objects();  
 }
@@ -744,6 +759,45 @@ Ndb_cluster_connection_impl::get_db_nodes(Uint8 arr[MAX_NDB_NODES]) const
   for (Uint32 i = 0; i<cnt; i++)
     arr[i] = (Uint8)nodes[i].id;
   return cnt;
+}
+
+Uint32
+Ndb_cluster_connection_impl::get_unconnected_nodes() const
+{
+  TransporterFacade *tp = m_transporter_facade;
+
+  NodeBitmask db_nodes;  // All data nodes known by configuration
+  NodeBitmask connected; // All nodes connected
+  NodeBitmask started;   // All started nodes known by connected db nodes
+
+  tp->lock_poll_mutex();
+  for(unsigned i= 0; i < m_all_nodes.size(); i++)
+  {
+    const Uint32 node_id = m_all_nodes[i].id;
+    db_nodes.set(node_id);
+    const trp_node& node = tp->theClusterMgr->getNodeInfo(node_id);
+    if (!node.m_alive)
+    {
+      continue;
+    }
+    connected.set(node_id);
+    started.bitOR(node.m_state.m_connected_nodes);
+  }
+  tp->unlock_poll_mutex();
+
+  if (connected.count() == 0)
+  {
+    /**
+     * No db nodes connected, means all unconnected.
+     */
+    return m_all_nodes.size();
+  }
+
+  /**
+   * Return count of started but not connected db nodes
+   */
+  started.bitAND(db_nodes);
+  return started.bitANDC(connected).count();
 }
 
 int

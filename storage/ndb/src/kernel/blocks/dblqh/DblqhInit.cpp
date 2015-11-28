@@ -1,5 +1,5 @@
 /*
-   Copyright (c) 2003, 2014, Oracle and/or its affiliates. All rights reserved.
+   Copyright (c) 2003, 2015, Oracle and/or its affiliates. All rights reserved.
 
    This program is free software; you can redistribute it and/or modify
    it under the terms of the GNU General Public License as published by
@@ -67,7 +67,6 @@ void Dblqh::initData()
 
   cLqhTimeOutCount = 0;
   cLqhTimeOutCheckCount = 0;
-  cbookedAccOps = 0;
   cpackedListIndex = 0;
   m_backup_ptr = RNIL;
   clogFileSize = 16;
@@ -299,6 +298,7 @@ Dblqh::Dblqh(Block_context& ctx, Uint32 instanceNumber):
   c_lcp_waiting_fragments(c_fragment_pool),
   c_lcp_restoring_fragments(c_fragment_pool),
   c_lcp_complete_fragments(c_fragment_pool),
+  c_queued_lcp_frag_ord(c_fragment_pool),
   m_commitAckMarkerHash(m_commitAckMarkerPool),
   c_scanTakeOverHash(c_scanRecordPool)
 {
@@ -383,7 +383,6 @@ Dblqh::Dblqh(Block_context& ctx, Uint32 instanceNumber):
   addRecSignal(GSN_COPY_FRAGREF, &Dblqh::execCOPY_FRAGREF);
   addRecSignal(GSN_COPY_FRAGCONF, &Dblqh::execCOPY_FRAGCONF);
   addRecSignal(GSN_COPY_ACTIVEREQ, &Dblqh::execCOPY_ACTIVEREQ);
-  addRecSignal(GSN_COPY_STATEREQ, &Dblqh::execCOPY_STATEREQ);
   addRecSignal(GSN_LQH_TRANSREQ, &Dblqh::execLQH_TRANSREQ);
   addRecSignal(GSN_TRANSID_AI, &Dblqh::execTRANSID_AI);
   addRecSignal(GSN_INCL_NODEREQ, &Dblqh::execINCL_NODEREQ);
@@ -418,7 +417,6 @@ Dblqh::Dblqh(Block_context& ctx, Uint32 instanceNumber):
   addRecSignal(GSN_DROP_TAB_REF, &Dblqh::execDROP_TAB_REF);
   addRecSignal(GSN_DROP_TAB_CONF, &Dblqh::execDROP_TAB_CONF);
 
-  addRecSignal(GSN_LQH_ALLOCREQ, &Dblqh::execLQH_ALLOCREQ);
   addRecSignal(GSN_LQH_WRITELOG_REQ, &Dblqh::execLQH_WRITELOG_REQ);
   addRecSignal(GSN_TUP_DEALLOCREQ, &Dblqh::execTUP_DEALLOCREQ);
 

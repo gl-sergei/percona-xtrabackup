@@ -1,7 +1,7 @@
 drop table if exists t1,t2,t3,t4,t5,t6,t7;
 SET sql_mode = 'NO_ENGINE_SUBSTITUTION';
 Warnings:
-Warning	3129	Unsetting sql mode 'NO_AUTO_CREATE_USER' is deprecated. It will be made read-only in a future release.
+Warning	3090	Changing sql mode 'NO_AUTO_CREATE_USER' is deprecated. It will be removed in a future release.
 CREATE TABLE t1 (a blob, b text, c blob(250), d text(70000), e text(70000000));
 show columns from t1;
 Field	Type	Null	Key	Default	Extra
@@ -815,12 +815,12 @@ NULL
 drop table t1;
 set @@sql_mode='TRADITIONAL';
 Warnings:
-Warning	3090	Setting sql mode 'NO_AUTO_CREATE_USER' is deprecated. It will be made read-only in a future release.
+Warning	3090	Changing sql mode 'NO_AUTO_CREATE_USER' is deprecated. It will be removed in a future release.
 create table t1 (a text default '');
 ERROR 42000: BLOB/TEXT column 'a' can't have a default value
 set @@sql_mode='';
 Warnings:
-Warning	3129	Unsetting sql mode 'NO_AUTO_CREATE_USER' is deprecated. It will be made read-only in a future release.
+Warning	3090	Changing sql mode 'NO_AUTO_CREATE_USER' is deprecated. It will be removed in a future release.
 CREATE TABLE t (c TEXT CHARSET ASCII);
 INSERT INTO t (c) VALUES (REPEAT('1',65537));
 Warnings:
@@ -1215,3 +1215,28 @@ SET @g3 = ST_GeomFromText('POLYGON((30 30,40 40,50 50,30 50,30 40,30 30))');
 select @g1 > @g3;
 @g1 > @g3
 1
+#
+# Bug#21153489 VALGRIND ERRORS IN ITEM_BOOL_FUNC2::IS_NULL 
+#              LEAD TO CRASH LATER
+#
+set sql_mode="";
+Warnings:
+Warning	3090	Changing sql mode 'NO_AUTO_CREATE_USER' is deprecated. It will be removed in a future release.
+CREATE TABLE t1(a LONGBLOB NOT NULL) engine=innodb default charset=latin1;
+INSERT INTO t1 VALUES (''),(''),(''),('');
+CREATE TABLE t2 (b LONGTEXT) engine=innodb default charset=latin1;
+INSERT INTO t2 VALUES ('a');
+SELECT ( SELECT ( b <> 1 ) FROM t2) <> ALL(SELECT 1681007452 FROM t1) FROM t1;
+( SELECT ( b <> 1 ) FROM t2) <> ALL(SELECT 1681007452 FROM t1)
+1
+1
+1
+1
+SELECT ( SELECT ( b <> 1 ) FROM t2) <> ALL(SELECT 1681007452 FROM t1) FROM t1;
+( SELECT ( b <> 1 ) FROM t2) <> ALL(SELECT 1681007452 FROM t1)
+1
+1
+1
+1
+DROP TABLE t1,t2;
+set sql_mode=default;

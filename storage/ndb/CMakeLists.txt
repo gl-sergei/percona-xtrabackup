@@ -108,6 +108,8 @@ SET(NDBCLUSTER_SOURCES
   ../../sql/ndb_tdc.cc
   ../../sql/ndb_log.cc
   ../../sql/ndb_binlog_thread.cc
+  ../../sql/ndb_find_files_list.cc
+  ../../sql/ndb_name_util.cc
 )
 
 # Include directories used when building ha_ndbcluster
@@ -117,9 +119,6 @@ IF(NOT MYSQL_CLUSTER_VERSION)
  # Global schema lock not supported in non
  # MySQL Cluster version yet, compile ndbcluster without it
  ADD_DEFINITIONS(-DNDB_WITHOUT_GLOBAL_SCHEMA_LOCK)
- # The function 'make_db_list' is not available in non
- # MySQL Cluster version yet, compile ndbcluster without it
- ADD_DEFINITIONS(-DNDB_WITHOUT_MAKE_DB_LIST)
 ENDIF()
 
 # NDB needs replication

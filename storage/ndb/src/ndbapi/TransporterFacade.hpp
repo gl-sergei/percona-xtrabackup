@@ -1,5 +1,5 @@
 /*
-   Copyright (c) 2003, 2013, Oracle and/or its affiliates. All rights reserved.
+   Copyright (c) 2003, 2015, Oracle and/or its affiliates. All rights reserved.
 
    This program is free software; you can redistribute it and/or modify
    it under the terms of the GNU General Public License as published by
@@ -23,6 +23,7 @@
 #include <NdbThread.h>
 #include <TransporterRegistry.hpp>
 #include <NdbMutex.h>
+#include <Vector.hpp>
 #include "DictCache.hpp"
 #include <BlockNumbers.h>
 #include <mgmapi.h>
@@ -72,6 +73,7 @@ public:
   Uint32 open_clnt(trp_client*, int blockNo = -1);
   int close_clnt(trp_client*);
   void perform_close_clnt(trp_client*);
+  void expand_clnt();
 
   Uint32 get_active_ndb_objects() const;
 
@@ -103,9 +105,7 @@ public:
    * These are functions used by ndb_mgmd
    */
   void ext_set_max_api_reg_req_interval(Uint32 ms);
-  void ext_update_connections();
   struct in_addr ext_get_connect_address(Uint32 nodeId);
-  void ext_forceHB();
   bool ext_isConnected(NodeId aNodeId);
   void ext_doConnect(int aNodeId);
 
@@ -130,6 +130,8 @@ public:
   NodeId get_an_alive_node();
   void trp_node_status(NodeId, Uint32 event);
 
+  bool is_cluster_completely_unavailable();
+
   /**
    * Send signal to each registered object
    */
@@ -138,10 +140,6 @@ public:
   
   void lock_poll_mutex();
   void unlock_poll_mutex();
-
-  // Improving the API performance
-  void forceSend(Uint32 block_number);
-  int checkForceSend(Uint32 block_number);
 
   TransporterRegistry* get_registry() { return theTransporterRegistry;};
 
@@ -152,6 +150,8 @@ public:
   With the below new methods and variables each thread has the possibility
   of becoming owner of the "right" to poll for signals. Effectually this
   means that the thread acts temporarily as a receiver thread.
+  There is also a dedicated receiver thread (threadMainReceive) which will
+  be activated to off load the client threads if the load is sufficient high.
   For the thread that succeeds in grabbing this "ownership" it will avoid
   a number of expensive calls to conditional mutex and even more expensive
   context switches to wake up.
@@ -162,7 +162,7 @@ public:
   be the last to complete its reception.
 */
   void start_poll(trp_client*);
-  void do_poll(trp_client* clnt,
+  bool do_poll(trp_client* clnt,
                Uint32 wait_time,
                bool is_poll_owner = false,
                bool stay_poll_owner = false);
@@ -178,6 +178,13 @@ public:
   trp_client* remove_last_from_poll_queue();
   void add_to_poll_queue(trp_client* clnt);
   void remove_from_poll_queue(trp_client* clnt);
+
+  /*
+    Optimize detection of connection state changes by requesting 
+    an ::update_connections() to be done in the next do_poll().
+  */
+  void request_connection_check()
+  { m_check_connections = true; }
 
   /*
     Configuration handling of the receiver threads handling of polling
@@ -249,9 +256,7 @@ private:
   friend class Ndb_cluster_connection;
   friend class Ndb_cluster_connection_impl;
 
-  void checkClusterMgr(NDB_TICKS & lastTime);
   bool try_become_poll_owner(trp_client* clnt, Uint32 wait_time);
-  bool become_poll_owner(trp_client* clnt, NDB_TICKS currtime);
   static void finish_poll(trp_client* clnt,
                           Uint32 cnt,
                           Uint32& cnt_woken,
@@ -262,9 +267,7 @@ private:
                             Uint32 first_check);
 
   Uint32 m_num_active_clients;
-  NDB_TICKS m_receive_activation_time;
-
-  bool isConnected(NodeId aNodeId);
+  volatile bool m_check_connections;
 
   TransporterRegistry* theTransporterRegistry;
   SocketServer m_socket_server;
@@ -274,12 +277,6 @@ private:
 
   ClusterMgr* theClusterMgr;
   
-  // Improving the API response time
-  int checkCounter;
-  Uint32 currentSendLimit;
-  
-  void calculateSendLimit();
-
   /* Single dozer supported currently.
    * In future, use a DLList to support > 1
    */
@@ -314,21 +311,41 @@ private:
     
     Uint32 m_use_cnt;
     Uint32 m_firstFree;
-    Vector<Uint32> m_statusNext;
-    Vector<trp_client*> m_objectExecute;
-    
+
+    struct Client {
+      trp_client* m_clnt;
+      Uint32 m_next;
+
+      Client()
+	: m_clnt(NULL), m_next(END_OF_LIST) {};
+
+      Client(trp_client* clnt, Uint32 next)
+	: m_clnt(clnt), m_next(next) {};
+    };
+    Vector<struct Client> m_clients;
+
+    /**
+     * open, close and expand need to hold the m_open_close_mutex.
+     * In addition, close and expand need the poll right to 
+     * serialize access with get (also need poll right)
+     */
     int open(trp_client*);
     int close(int number);
     void expand(Uint32 size);
 
     inline trp_client* get(Uint16 blockNo) const {
       blockNo -= MIN_API_BLOCK_NO;
-      if(likely (blockNo < m_objectExecute.size()))
+      if(likely (blockNo < m_clients.size()))
       {
-        return m_objectExecute.getBase()[blockNo];
+        return m_clients[blockNo].m_clnt;
       }
       return 0;
     }
+
+    Uint32 freeCnt() const {
+      return m_clients.size() - m_use_cnt;
+    }
+
   } m_threads;
 
   Uint32 m_fixed2dynamic[NO_API_FIXED_BLOCKS];
@@ -365,11 +382,35 @@ private:
     TFSendBuffer()
     {
       m_sending = false;
+      m_reset = false;
       m_node_active = false;
     }
+
+    /**
+     * Protection of struct members:
+     * - boolean flags and 'm_buffer' is protected directly
+     *   by holding mutex lock.
+     * - 'm_out_buffer' is protected by setting 'm_sending==true'
+     *   as a signal to other threads to keep away. 'm_sending'
+     *   itself is protected by 'm_mutex', but we don't have to
+     *   keep that mutex lock after 'm_sending' has been granted.
+     *   This locking mechanism is implemented by try_lock_send()
+     *   and unlock_send().
+     *
+     * Thus, appending buffers to m_buffer are allowed without
+     * being blocked by another thread sending from m_out_buffers.
+     */
     NdbMutex m_mutex;
-    bool m_sending;
+
+    bool m_sending;     // Send is ongoing, keep away from 'm_out_buffer'
+    bool m_reset;       // Reset pending, await 'm_sending' to complete
     bool m_node_active;
+
+    /**
+     * A protected view of the current send buffer size of the node.
+     * This is to support getSendBufferLevel.
+     */
+    Uint32 m_current_send_buffer_size;
 
     /**
      * This is data that have been "scheduled" to be sent
@@ -380,8 +421,20 @@ private:
      * This is data that is being sent
      */
     TFBuffer m_out_buffer;
+
+    /**
+     *  Implements the 'm_out_buffer' locking as described above.
+     */
+    bool try_lock_send();
+    void unlock_send();
   } m_send_buffers[MAX_NODES];
 
+  void do_send_buffer(Uint32 node, TFSendBuffer *b);
+
+  Uint32 get_current_send_buffer_size(NodeId node)
+  {
+    return m_send_buffers[node].m_current_send_buffer_size;
+  }
   void wakeup_send_thread(void);
   NdbMutex * m_send_thread_mutex;
   NdbCondition * m_send_thread_cond;
@@ -402,8 +455,38 @@ TransporterFacade::unlock_poll_mutex()
   NdbMutex_Unlock(thePollMutex);
 }
 
+inline
+bool
+TransporterFacade::TFSendBuffer::try_lock_send()
+{
+  //assert(NdbMutex_Trylock(&m_mutex) != 0); //Lock should be held
+  if (!m_sending)
+  {
+    m_sending = true;
+    return true;
+  }
+  return false;
+}
+
+inline
+void
+TransporterFacade::TFSendBuffer::unlock_send()
+{
+  //assert(NdbMutex_Trylock(&m_mutex) != 0); //Lock should be held
+  assert(m_sending);
+  m_sending = false;
+}
+
+
 #include "ClusterMgr.hpp"
 #include "ndb_cluster_connection_impl.hpp"
+
+inline
+bool
+TransporterFacade::is_cluster_completely_unavailable()
+{
+  return theClusterMgr->is_cluster_completely_unavailable();
+}
 
 inline
 unsigned Ndb_cluster_connection_impl::get_connect_count() const
@@ -570,7 +653,7 @@ public :
          * all of them
          */
         Uint32 wordsToCopy = MIN(chunkRemain, n);
-        memcpy(dest, chunkPtr, wordsToCopy << 2);
+        memmove(dest, chunkPtr, wordsToCopy << 2);
         chunkPtr += wordsToCopy;
         chunkRemain -= wordsToCopy;
 

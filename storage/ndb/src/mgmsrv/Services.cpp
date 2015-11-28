@@ -1,5 +1,5 @@
 /*
-   Copyright (c) 2003, 2013, Oracle and/or its affiliates. All rights reserved.
+   Copyright (c) 2003, 2015, Oracle and/or its affiliates. All rights reserved.
 
    This program is free software; you can redistribute it and/or modify
    it under the terms of the GNU General Public License as published by
@@ -339,7 +339,14 @@ MgmApiSession::MgmApiSession(class MgmtSrvr & mgm, NDB_SOCKET_TYPE sock, Uint64 
   struct sockaddr_in addr;
   SOCKET_SIZE_TYPE addrlen= sizeof(addr);
   if (my_getpeername(sock, (struct sockaddr*)&addr, &addrlen) == 0)
-    m_name.assfmt("%s:%d", inet_ntoa(addr.sin_addr), ntohs(addr.sin_port));
+  {
+    char addr_buf[NDB_ADDR_STRLEN];
+    char *addr_str = Ndb_inet_ntop(AF_INET,
+                                   static_cast<void*>(&addr.sin_addr),
+                                   addr_buf,
+                                   (socklen_t)sizeof(addr_buf));
+    m_name.assfmt("%s:%d", addr_str, ntohs(addr.sin_port));
+  }
   DBUG_PRINT("info", ("new connection from: %s", m_name.c_str()));
 
   DBUG_VOID_RETURN;
@@ -1004,9 +1011,13 @@ printNodeStatus(OutputStream *output,
       connectCount = 0;
     bool system;
     const char *address= NULL;
+    char addr_buf[NDB_ADDR_STRLEN];
+
     mgmsrv.status(nodeId, &status, &version, &mysql_version, &startPhase,
 		  &system, &dynamicId, &nodeGroup, &connectCount,
-		  &address);
+		  &address,
+                  addr_buf,
+                  sizeof(addr_buf));
     output->println("node.%d.type: %s",
 		      nodeId,
 		      ndb_mgm_get_node_type_string(type));
@@ -1304,7 +1315,7 @@ MgmApiSession::start(Parser<MgmApiSession>::Context &,
 
   args.get("node", &node);
   
-  int result = m_mgmsrv.start(node);
+  int result = m_mgmsrv.sendSTART_ORD(node);
 
   m_output->println("start reply");
   if(result != 0)
@@ -1321,7 +1332,7 @@ MgmApiSession::startAll(Parser<MgmApiSession>::Context &,
   int started = 0;
 
   while(m_mgmsrv.getNextNodeId(&node, NDB_MGM_NODE_TYPE_NDB))
-    if(m_mgmsrv.start(node) == 0)
+    if(m_mgmsrv.sendSTART_ORD(node) == 0)
       started++;
 
   m_output->println("start reply");
@@ -1774,15 +1785,18 @@ void
 MgmApiSession::transporter_connect(Parser_t::Context &ctx,
 				   Properties const &args)
 {
+  bool close_with_reset = true;
   BaseString errormsg;
-  if (!m_mgmsrv.transporter_connect(m_socket, errormsg))
+  if (!m_mgmsrv.transporter_connect(m_socket, errormsg, close_with_reset))
   {
     // Connection not allowed or failed
     g_eventLogger->warning("Failed to convert connection "
                            "from '%s' to transporter: %s",
                            name(),
                            errormsg.c_str());
-    // Close the socket to indicate failure to other side
+    // Close the socket to indicate failure to client
+    ndb_socket_close(m_socket, close_with_reset);
+    my_socket_invalidate(&m_socket); // Already closed
   }
   else
   {

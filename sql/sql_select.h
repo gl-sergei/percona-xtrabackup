@@ -616,6 +616,22 @@ private:
   Item          **m_join_cond_ref;
 public:
   COND_EQUAL    *cond_equal;    /**< multiple equalities for the on expression*/
+
+  /**
+    The maximum value for the cost of seek operations for key lookup
+    during ref access. The cost model for ref access assumes every key
+    lookup will cause reading a block from disk. With many key lookups
+    into the same table, most of the blocks will soon be in a memory
+    buffer. As a consequence, there will in most cases be an upper
+    limit on the number of actual disk accesses the ref access will
+    cause. This variable is used for storing a maximum cost estimate
+    for the disk accesses for ref access. It is used for limiting the
+    cost estimate for ref access to a more realistic value than
+    assuming every key lookup causes a random disk access. Without
+    having this upper limit for the cost of ref access, table scan
+    would be more likely to be chosen for cases where ref access
+    performs better.
+  */
   double	worst_seeks;
   /** Keys with constant part. Subset of keys. */
   key_map	const_keys;
@@ -907,8 +923,7 @@ public:
     THD *thd= to_field->table->in_use;
     enum_check_fields saved_count_cuted_fields= thd->count_cuted_fields;
     sql_mode_t sql_mode= thd->variables.sql_mode;
-    thd->variables.sql_mode&= ~(MODE_STRICT_ALL_TABLES |
-                                MODE_STRICT_TRANS_TABLES);
+    thd->variables.sql_mode&= ~(MODE_NO_ZERO_IN_DATE | MODE_NO_ZERO_DATE);
 
     thd->count_cuted_fields= CHECK_FIELD_IGNORE;
 
@@ -941,6 +956,7 @@ type_conversion_status_to_store_key (type_conversion_status ts)
   case TYPE_NOTE_TIME_TRUNCATED:
     return store_key::STORE_KEY_CONV;
   case TYPE_WARN_OUT_OF_RANGE:
+  case TYPE_WARN_ALL_TRUNCATED:
   case TYPE_ERR_NULL_CONSTRAINT_VIOLATION:
   case TYPE_ERR_BAD_VALUE:
   case TYPE_ERR_OOM:

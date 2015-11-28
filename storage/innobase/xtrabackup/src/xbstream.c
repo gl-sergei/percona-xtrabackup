@@ -389,7 +389,8 @@ mode_extract(int argc __attribute__((unused)),
 
 	if (my_hash_init(&filehash, &my_charset_bin, START_FILE_HASH_SIZE,
 			  0, 0, (my_hash_get_key) get_file_entry_key,
-			  (my_hash_free_key) file_entry_free, MYF(0))) {
+			  (my_hash_free_key) file_entry_free, MYF(0),
+			  PSI_NOT_INSTRUMENTED)) {
 		msg("%s: failed to initialize file hash.\n", my_progname);
 		goto err;
 	}

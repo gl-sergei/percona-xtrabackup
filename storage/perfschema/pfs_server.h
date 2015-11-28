@@ -37,7 +37,7 @@
   #define PFS_MAX_THREAD_CLASS 50
 #endif
 #ifndef PFS_MAX_FILE_CLASS
-  #define PFS_MAX_FILE_CLASS 50
+  #define PFS_MAX_FILE_CLASS 80
 #endif
 #ifndef PFS_MAX_FILE_HANDLE
   #define PFS_MAX_FILE_HANDLE 32768
@@ -236,7 +236,7 @@ struct PFS_global_param
 
   long m_metadata_lock_sizing;
 
-  ulong m_max_digest_length;
+  long m_max_digest_length;
   ulong m_max_sql_text_length;
 
   /** Sizing hints, for auto tuning. */

@@ -1,5 +1,5 @@
 /*
-   Copyright (c) 2003, 2014, Oracle and/or its affiliates. All rights reserved.
+   Copyright (c) 2003, 2015, Oracle and/or its affiliates. All rights reserved.
 
    This program is free software; you can redistribute it and/or modify
    it under the terms of the GNU General Public License as published by
@@ -126,26 +126,71 @@ void Dbtup::copyAttrinfo(Operationrec * regOperPtr,
 }
 
 void
-Dbtup::setChecksum(Tuple_header* tuple_ptr,
-                   Tablerec* regTabPtr)
+Dbtup::setInvalidChecksum(Tuple_header *tuple_ptr,
+                          const Tablerec * regTabPtr)
 {
-  tuple_ptr->m_checksum= 0;
-  tuple_ptr->m_checksum= calculateChecksum(tuple_ptr, regTabPtr);
+  if (regTabPtr->m_bits & Tablerec::TR_Checksum)
+  {
+    jam();
+    /**
+     * Set a magic checksum when tuple isn't supposed to be read.
+     */
+    tuple_ptr->m_checksum = 0x87654321;
+  }
+}
+
+void
+Dbtup::updateChecksum(Tuple_header *tuple_ptr,
+                      const Tablerec *regTabPtr,
+                      Uint32 old_header,
+                      Uint32 new_header)
+{
+  /**
+   * This function is used when only updating the header bits in row.
+   * We start by XOR:ing the old header, this negates the impact of the
+   * old header since old_header ^ old_header = 0. Next we XOR with new
+   * header to get the new checksum and finally we store the new checksum.
+   */
+  if (regTabPtr->m_bits & Tablerec::TR_Checksum)
+  {
+    Uint32 checksum = tuple_ptr->m_checksum;
+    jam();
+    checksum ^= old_header;
+    checksum ^= new_header;
+    tuple_ptr->m_checksum = checksum;
+  }
+}
+
+void
+Dbtup::setChecksum(Tuple_header* tuple_ptr,
+                   const Tablerec* regTabPtr)
+{
+  if (regTabPtr->m_bits & Tablerec::TR_Checksum)
+  {
+    jam();
+    tuple_ptr->m_checksum= 0;
+    tuple_ptr->m_checksum= calculateChecksum(tuple_ptr, regTabPtr);
+  }
 }
 
 Uint32
 Dbtup::calculateChecksum(Tuple_header* tuple_ptr,
-                         Tablerec* regTabPtr)
+                         const Tablerec* regTabPtr)
 {
   Uint32 checksum;
   Uint32 rec_size, *tuple_header;
   rec_size= regTabPtr->m_offsets[MM].m_fix_header_size;
-  tuple_header= tuple_ptr->m_data;
+  tuple_header= &tuple_ptr->m_header_bits;
   // includes tupVersion
   //printf("%p - ", tuple_ptr);
 
+  /**
+   * We include every except the first word of the Tuple header
+   * which is only used on copy tuples. We do however include
+   * the header bits.
+   */
   checksum = computeXorChecksum(
-               tuple_header, rec_size-Tuple_header::HeaderSize);
+               tuple_header, (rec_size-Tuple_header::HeaderSize) + 1);
   
   //printf("-> %.8x\n", checksum);
 
@@ -169,9 +214,13 @@ Dbtup::calculateChecksum(Tuple_header* tuple_ptr,
 }
 
 int
-Dbtup::corruptedTupleDetected(KeyReqStruct *req_struct)
+Dbtup::corruptedTupleDetected(KeyReqStruct *req_struct, Tablerec *regTabPtr)
 {
-  ndbout_c("Tuple corruption detected."); 
+  Uint32 checksum = calculateChecksum(req_struct->m_tuple_ptr, regTabPtr);
+  Uint32 header_bits = req_struct->m_tuple_ptr->m_header_bits;
+  ndbout_c("Tuple corruption detected, checksum: 0x%x, header_bits: 0x%x"
+           ", checksum word: 0x%x",
+           checksum, header_bits, req_struct->m_tuple_ptr->m_checksum); 
   if (c_crashOnCorruptedTuple && !ERROR_INSERTED(4036))
   {
     ndbout_c(" Exiting."); 
@@ -202,6 +251,7 @@ Dbtup::insertActiveOpList(OperationrecPtr regOperPtr,
   if (prevOpPtr.i == RNIL) {
     return true;
   } else {
+    jam();
     req_struct->prevOpPtr.p= prevOpPtr.p= c_operation_pool.getPtr(prevOpPtr.i);
     prevOpPtr.p->nextActiveOp= regOperPtr.i;
 
@@ -420,6 +470,7 @@ Dbtup::load_diskpage(Signal* signal,
   int res= 1;
   if(ptr->m_header_bits & Tuple_header::DISK_PART)
   {
+    jam();
     Page_cache_client::Request req;
     memcpy(&req.m_page, ptr->get_disk_ref_ptr(regTabPtr), sizeof(Local_key));
     req.m_callback.m_callbackData= opRec;
@@ -445,21 +496,6 @@ Dbtup::load_diskpage(Signal* signal,
     
     Page_cache_client pgman(this, c_pgman);
     res= pgman.get_page(signal, req, flags);
-    m_pgman_ptr = pgman.m_ptr;
-    if(res > 0)
-    {
-      //ndbout_c("in cache");
-      // In cache
-    } 
-    else if(res == 0)
-    {
-      //ndbout_c("waiting for callback");
-      // set state
-    }
-    else 
-    {
-      // Error
-    }
   }
 
   switch(flags & 7)
@@ -472,6 +508,7 @@ Dbtup::load_diskpage(Signal* signal,
   case ZINSERT:
   case ZWRITE:
   case ZREFRESH:
+    jam();
     regOperPtr->op_struct.bit_field.m_wait_log_buffer= 1;
     regOperPtr->op_struct.bit_field.m_load_diskpage_on_commit= 1;
   }
@@ -515,6 +552,7 @@ Dbtup::load_diskpage_scan(Signal* signal,
   int res= 1;
   if(ptr->m_header_bits & Tuple_header::DISK_PART)
   {
+    jam();
     Page_cache_client::Request req;
     memcpy(&req.m_page, ptr->get_disk_ref_ptr(regTabPtr), sizeof(Local_key));
     req.m_callback.m_callbackData= opRec;
@@ -523,21 +561,6 @@ Dbtup::load_diskpage_scan(Signal* signal,
     
     Page_cache_client pgman(this, c_pgman);
     res= pgman.get_page(signal, req, flags);
-    m_pgman_ptr = pgman.m_ptr;
-    if(res > 0)
-    {
-      // ndbout_c("in cache");
-      // In cache
-    } 
-    else if(res == 0)
-    {
-      //ndbout_c("waiting for callback");
-      // set state
-    }
-    else 
-    {
-      // Error
-    }
   }
   return res;
 }
@@ -637,6 +660,7 @@ bool Dbtup::execTUPKEYREQ(Signal* signal)
 
 #ifdef VM_TRACE
    {
+     bool error_found = false;
      Local_key key;
      key.m_page_no = tupKeyReq->keyRef1;
      key.m_page_idx = tupKeyReq->keyRef2;
@@ -644,18 +668,24 @@ bool Dbtup::execTUPKEYREQ(Signal* signal)
      {
        ndbout << "page_no = " << prepare_orig_local_key.m_page_no;
        ndbout << " keyRef1 = " << key.m_page_no << endl;
+       error_found = true;
      }
      if (key.m_page_idx != prepare_orig_local_key.m_page_idx)
      {
        ndbout << "page_idx = " << prepare_orig_local_key.m_page_idx;
        ndbout << " keyRef2 = " << key.m_page_idx << endl;
+       error_found = true;
      }
      if (prepare_fragptr.i != tupKeyReq->fragPtr)
      {
        ndbout << "fragptr.i = " << prepare_fragptr.i;
        ndbout << " keyRef1 = " << tupKeyReq->fragPtr << endl;
+       error_found = true;
      }
-     ndbout << flush;
+     if (error_found)
+     {
+       ndbout << flush;
+     }
      ndbassert(prepare_orig_local_key.m_page_no == key.m_page_no);
      ndbassert(prepare_orig_local_key.m_page_idx == key.m_page_idx);
      ndbassert(prepare_fragptr.i == tupKeyReq->fragPtr);
@@ -703,7 +733,8 @@ bool Dbtup::execTUPKEYREQ(Signal* signal)
    Dbtup::TransState trans_state = get_trans_state(regOperPtr);
 
    req_struct.signal= signal;
-   req_struct.no_fired_triggers= 0;
+   req_struct.num_fired_triggers= 0;
+   req_struct.no_exec_instructions = 0;
    req_struct.read_length= 0;
    req_struct.last_row= false;
    req_struct.changeMask.clear();
@@ -738,6 +769,7 @@ bool Dbtup::execTUPKEYREQ(Signal* signal)
      op_struct.bit_field.m_disable_fk_checks = disable_fk_checks;
      op_struct.bit_field.primary_replica= primaryReplica;
      op_struct.bit_field.m_reorg = TupKeyReq::getReorgFlag(TrequestInfo);
+     req_struct.m_prio_a_flag = TupKeyReq::getPrioAFlag(TrequestInfo);
      req_struct.m_reorg = TupKeyReq::getReorgFlag(TrequestInfo);
      regOperPtr->op_struct.op_bit_fields = op_struct.op_bit_fields;
      regOperPtr->op_type= TupKeyReq::getOperation(TrequestInfo);
@@ -1191,7 +1223,8 @@ Dbtup::setup_lcp_read_copy_tuple(KeyReqStruct* req_struct,
   
   Uint32 Rcreate_rowid = req_struct->m_use_rowid;
   Uint32 RuserPointer= regOperPtr->userpointer;
-  Uint32 RnoFiredTriggers= req_struct->no_fired_triggers;
+  Uint32 RnumFiredTriggers= req_struct->num_fired_triggers;
+  const Uint32 RnoExecInstructions = req_struct->no_exec_instructions;
   Uint32 log_size= req_struct->log_size;
   Uint32 read_length= req_struct->read_length;
   Uint32 last_row= req_struct->last_row;
@@ -1199,9 +1232,10 @@ Dbtup::setup_lcp_read_copy_tuple(KeyReqStruct* req_struct,
   tupKeyConf->userPtr= RuserPointer;
   tupKeyConf->readLength= read_length;
   tupKeyConf->writeLength= log_size;
-  tupKeyConf->noFiredTriggers= RnoFiredTriggers;
+  tupKeyConf->numFiredTriggers= RnumFiredTriggers;
   tupKeyConf->lastRow= last_row;
   tupKeyConf->rowid = Rcreate_rowid;
+  tupKeyConf->noExecInstructions = RnoExecInstructions;
   set_tuple_state(regOperPtr, TUPLE_PREPARED);
   set_trans_state(regOperPtr, trans_state);
 }
@@ -1224,7 +1258,7 @@ int Dbtup::handleReadReq(Signal* signal,
        (calculateChecksum(req_struct->m_tuple_ptr, regTabPtr) != 0)) ||
       ERROR_INSERTED(4036)) {
     jam();
-    return corruptedTupleDetected(req_struct);
+    return corruptedTupleDetected(req_struct, regTabPtr);
   }
 
   const Uint32 node = refToNode(sendBref);
@@ -1326,6 +1360,7 @@ int Dbtup::handleUpdateReq(Signal* signal,
   }
   else
   {
+    jam();
     Operationrec* prevOp= req_struct->prevOpPtr.p;
     tup_version= prevOp->op_struct.bit_field.tupVersion;
     Uint32 * rawptr = get_copy_tuple_raw(&prevOp->m_copy_tuple_location);
@@ -1343,7 +1378,7 @@ int Dbtup::handleUpdateReq(Signal* signal,
       (calculateChecksum(req_struct->m_tuple_ptr, regTabPtr) != 0)) 
   {
     jam();
-    return corruptedTupleDetected(req_struct);
+    return corruptedTupleDetected(req_struct, regTabPtr);
   }
 
   req_struct->m_tuple_ptr= dst;
@@ -1359,6 +1394,7 @@ int Dbtup::handleUpdateReq(Signal* signal,
     expand_tuple(req_struct, sizes, org, regTabPtr, disk);
     if(disk && operPtrP->m_undo_buffer_space == 0)
     {
+      jam();
       operPtrP->op_struct.bit_field.m_wait_log_buffer = 1;
       operPtrP->op_struct.bit_field.m_load_diskpage_on_commit = 1;
       Uint32 sz= operPtrP->m_undo_buffer_space= 
@@ -1366,9 +1402,10 @@ int Dbtup::handleUpdateReq(Signal* signal,
       
       D("Logfile_client - handleUpdateReq");
       Logfile_client lgman(this, c_lgman, regFragPtr->m_logfile_group_id);
-      terrorCode= lgman.alloc_log_space(sz);
+      terrorCode= lgman.alloc_log_space(sz, jamBuffer());
       if(unlikely(terrorCode))
       {
+        jam();
 	operPtrP->m_undo_buffer_space= 0;
 	goto error;
       }
@@ -1449,10 +1486,8 @@ int Dbtup::handleUpdateReq(Signal* signal,
   }
   
   req_struct->m_tuple_ptr->set_tuple_version(tup_version);
-  if (regTabPtr->m_bits & Tablerec::TR_Checksum) {
-    jam();
-    setChecksum(req_struct->m_tuple_ptr, regTabPtr);
-  }
+
+  setChecksum(req_struct->m_tuple_ptr, regTabPtr);
 
   set_tuple_state(operPtrP, TUPLE_PREPARED);
 
@@ -1887,7 +1922,10 @@ int Dbtup::handleInsertReq(Signal* signal,
     tup_version= prevOp->op_struct.bit_field.tupVersion + 1;
     
     if(!prevOp->is_first_operation())
+    {
+      jam();
       org= get_copy_tuple(&prevOp->m_copy_tuple_location);
+    }
     if (regTabPtr->need_expand())
     {
       expand_tuple(req_struct, sizes, org, regTabPtr, !disk_insert);
@@ -1917,6 +1955,7 @@ int Dbtup::handleInsertReq(Signal* signal,
   int res;
   if (disk_insert)
   {
+    jam();
     if (ERROR_INSERTED(4015))
     {
       terrorCode = 1501;
@@ -1925,9 +1964,10 @@ int Dbtup::handleInsertReq(Signal* signal,
 
     D("Logfile_client - handleInsertReq");
     Logfile_client lgman(this, c_lgman, regFragPtr->m_logfile_group_id);
-    res= lgman.alloc_log_space(regOperPtr.p->m_undo_buffer_space);
+    res= lgman.alloc_log_space(regOperPtr.p->m_undo_buffer_space, jamBuffer());
     if(unlikely(res))
     {
+      jam();
       terrorCode= res;
       goto log_space_error;
     }
@@ -2099,6 +2139,12 @@ int Dbtup::handleInsertReq(Signal* signal,
     base->m_operation_ptr_i= regOperPtr.i;
     base->m_header_bits= Tuple_header::ALLOC |
       (sizes[2+MM] > 0 ? Tuple_header::VAR_PART : 0);
+    /**
+     * No need to set checksum here, the tuple is allocated, but contains
+     * no data, so if we attempt to read it in this state we even want the
+     * checksum to be wrong since it is not allowed to read the tuple in
+     * this state.
+     */
   }
   else 
   {
@@ -2118,11 +2164,19 @@ int Dbtup::handleInsertReq(Signal* signal,
       goto size_change_error;
     }
     req_struct->m_use_rowid = false;
+    Uint32 old_header = base->m_header_bits;
     base->m_header_bits &= ~(Uint32)Tuple_header::FREE;
+    Uint32 new_header = base->m_header_bits;
+    if (old_header != new_header)
+    {
+      jam();
+      updateChecksum(base, regTabPtr, old_header, new_header);
+    }
   }
 
   if (disk_insert)
   {
+    jam();
     Local_key tmp;
     Uint32 size= regTabPtr->m_attributes[DD].m_no_of_varsize == 0 ? 
       1 : sizes[2+DD];
@@ -2135,6 +2189,7 @@ int Dbtup::handleInsertReq(Signal* signal,
 
     if (!Local_key::isShort(frag_page_id))
     {
+      jam();
       terrorCode = 1603;
       goto disk_prealloc_error;
     }
@@ -2142,6 +2197,7 @@ int Dbtup::handleInsertReq(Signal* signal,
     int ret= disk_page_prealloc(signal, fragPtr, &tmp, size);
     if (unlikely(ret < 0))
     {
+      jam();
       terrorCode = -ret;
       goto disk_prealloc_error;
     }
@@ -2186,11 +2242,7 @@ int Dbtup::handleInsertReq(Signal* signal,
     * accminupdateptr = 0; // No accminupdate should be performed
   }
 
-  if (regTabPtr->m_bits & Tablerec::TR_Checksum) 
-  {
-    jam();
-    setChecksum(req_struct->m_tuple_ptr, regTabPtr);
-  }
+  setChecksum(req_struct->m_tuple_ptr, regTabPtr);
 
   set_tuple_state(regOperPtr.p, TUPLE_PREPARED);
 
@@ -2241,6 +2293,7 @@ exit_error:
   {
     jam();
     /* Memory allocated, abort insert, releasing memory if appropriate */
+    signal->theData[0] = regOperPtr.i;
     do_tup_abortreq(signal, ZSKIP_TUX_TRIGGERS | ZABORT_DEALLOC);
   }
   tupkeyErrorLab(req_struct);
@@ -2249,6 +2302,7 @@ exit_error:
 disk_prealloc_error:
   jam();
   base->m_header_bits |= Tuple_header::FREED;
+  setInvalidChecksum(base, regTabPtr);
   goto exit_error;
 }
 
@@ -2272,6 +2326,7 @@ int Dbtup::handleDeleteReq(Signal* signal,
   // delete must set but not increment tupVersion
   if (!regOperPtr->is_first_operation())
   {
+    jam();
     Operationrec* prevOp= req_struct->prevOpPtr.p;
     regOperPtr->op_struct.bit_field.tupVersion=
       prevOp->op_struct.bit_field.tupVersion;
@@ -2300,6 +2355,7 @@ int Dbtup::handleDeleteReq(Signal* signal,
 
   if(disk && regOperPtr->m_undo_buffer_space == 0)
   {
+    jam();
     regOperPtr->op_struct.bit_field.m_wait_log_buffer = 1;
     regOperPtr->op_struct.bit_field.m_load_diskpage_on_commit = 1;
     Uint32 sz= regOperPtr->m_undo_buffer_space= 
@@ -2308,9 +2364,10 @@ int Dbtup::handleDeleteReq(Signal* signal,
     
     D("Logfile_client - handleDeleteReq");
     Logfile_client lgman(this, c_lgman, regFragPtr->m_logfile_group_id);
-    terrorCode= lgman.alloc_log_space(sz);
+    terrorCode= lgman.alloc_log_space(sz, jamBuffer());
     if(unlikely(terrorCode))
     {
+      jam();
       regOperPtr->m_undo_buffer_space= 0;
       goto error;
     }
@@ -2437,12 +2494,19 @@ Dbtup::handleRefreshReq(Signal* signal,
       //ndbout_c("case 2");
       jam();
 
-      Uint32 tup_version_save = req_struct->m_tuple_ptr->get_tuple_version();
-      Uint32 new_tup_version = decr_tup_version(tup_version_save);
       Tuple_header* origTuple = req_struct->m_tuple_ptr;
-      origTuple->set_tuple_version(new_tup_version);
+      Uint32 tup_version_save = origTuple->get_tuple_version();
+      {
+        /* Set new row version and update the tuple header */
+        Uint32 old_header = origTuple->m_header_bits;
+        Uint32 new_tup_version = decr_tup_version(tup_version_save);
+        origTuple->set_tuple_version(new_tup_version);
+        Uint32 new_header = origTuple->m_header_bits;
+        updateChecksum(origTuple, regTabPtr, old_header, new_header);
+      }
       int res = handleUpdateReq(signal, regOperPtr.p, regFragPtr.p,
                                 regTabPtr, req_struct, disk);
+
       /* Now we must reset the original tuple header back
        * to the original version.
        * The copy tuple will have the correct version due to
@@ -2451,8 +2515,16 @@ Dbtup::handleRefreshReq(Signal* signal,
        * On abort, the original tuple remains.  If we don't
        * reset it here, then aborts cause the version to
        * decrease
+       *
+       * We also need to recalculate checksum since we're changing the
+       * row here.
        */
-      origTuple->set_tuple_version(tup_version_save);
+      {
+        Uint32 old_header = origTuple->m_header_bits;
+        origTuple->set_tuple_version(tup_version_save);
+        Uint32 new_header = origTuple->m_header_bits;
+        updateChecksum(origTuple, regTabPtr, old_header, new_header);
+      }
       if (res == -1)
         return -1;
     }
@@ -2912,7 +2984,6 @@ int Dbtup::interpreterNextLab(Signal* signal,
 {
   register Uint32* TcurrentProgram= mainProgram;
   register Uint32 TcurrentSize= TmainProgLen;
-  register Uint32 RnoOfInstructions= 0;
   register Uint32 TprogramCounter= 0;
   register Uint32 theInstruction;
   register Uint32 theRegister;
@@ -2925,6 +2996,8 @@ int Dbtup::interpreterNextLab(Signal* signal,
   (void)align; // kill warning
   Uint32 TstackMemBuffer[32];
 
+  Uint32& RnoOfInstructions = req_struct->no_exec_instructions;
+  ndbassert(RnoOfInstructions == 0);
   /* ---------------------------------------------------------------- */
   // Initialise all 8 registers to contain the NULL value.
   // In this version we can handle 32 and 64 bit unsigned integers.
@@ -3798,7 +3871,17 @@ Dbtup::expand_tuple(KeyReqStruct* req_struct,
 
   src->m_header_bits= bits & 
     ~(Uint32)(Tuple_header::MM_SHRINK | Tuple_header::MM_GROWN);
-  
+ 
+  /**
+   * The source tuple only touches the header parts. The updates of the
+   * tuple is applied on the new copy tuple. We still need to ensure that
+   * the checksum is correct on the tuple even after changing the header
+   * parts since the header is part of the checksum. This is not covered
+   * by setting checksum normally since mostly we don't touch the
+   * original tuple.
+   */
+  updateChecksum(src, tabPtrP, bits, src->m_header_bits);
+
   sizes[DD]= 0;
   if(disk && dd_tot)
   {
@@ -4287,11 +4370,11 @@ Dbtup::handle_size_change_after_update(KeyReqStruct* req_struct,
     org->m_header_bits= bits | Tuple_header::MM_GROWN | Tuple_header::VAR_PART;
     new_var_part[needed-1]= orig_size;
 
-    if (regTabPtr->m_bits & Tablerec::TR_Checksum) 
-    {
-      jam();
-      setChecksum(org, regTabPtr);
-    }
+    /**
+     * Here we can change both header bits and the reference to the varpart,
+     * this means that we need to completely recalculate the checksum here.
+     */
+    setChecksum(org, regTabPtr);
   }
   return 0;
 }
@@ -4329,12 +4412,7 @@ Dbtup::optimize_var_part(KeyReqStruct* req_struct,
      */
     move_var_part(regFragPtr, regTabPtr, pagePtr,
                   refptr, var_part_size);
-
-    if (regTabPtr->m_bits & Tablerec::TR_Checksum)
-    {
-      jam();
-      setChecksum(org, regTabPtr);
-    }
+    setChecksum(org, regTabPtr);
   }
 
   return 0;
@@ -4355,12 +4433,13 @@ Dbtup::nr_update_gci(Uint32 fragPtrI, const Local_key* key, Uint32 gci)
     Local_key tmp = *key;
     PagePtr pagePtr;
 
-    Uint32 err;
-    pagePtr.i = allocFragPage(&err, tablePtr.p, fragPtr.p, tmp.m_page_no);
+    pagePtr.i = getRealpidCheck(fragPtr.p, tmp.m_page_no);
     if (unlikely(pagePtr.i == RNIL))
     {
-      return -(int)err;
+      jam();
+      return 0;
     }
+
     c_page_pool.getPtr(pagePtr);
     
     Tuple_header* ptr = (Tuple_header*)
@@ -4386,12 +4465,15 @@ Dbtup::nr_read_pk(Uint32 fragPtrI,
 
   Local_key tmp = *key;
   
-  Uint32 err;
   PagePtr pagePtr;
-  pagePtr.i = allocFragPage(&err, tablePtr.p, fragPtr.p, tmp.m_page_no);
+  pagePtr.i = getRealpidCheck(fragPtr.p, tmp.m_page_no);
   if (unlikely(pagePtr.i == RNIL))
-    return -(int)err;
-  
+  {
+    jam();
+    dst[0] = 0;
+    return 0;
+  }
+
   c_page_pool.getPtr(pagePtr);
   KeyReqStruct req_struct(this);
   Uint32* ptr= ((Fix_page*)pagePtr.p)->get_ptr(key->m_page_idx, 0);
@@ -4524,7 +4606,7 @@ Dbtup::nr_delete(Signal* signal, Uint32 senderData,
     
     D("Logfile_client - nr_delete");
     Logfile_client lgman(this, c_lgman, fragPtr.p->m_logfile_group_id);
-    int res = lgman.alloc_log_space(sz);
+    int res = lgman.alloc_log_space(sz, jamBuffer());
     ndbrequire(res == 0);
     
     /**
@@ -4568,10 +4650,10 @@ Dbtup::nr_delete(Signal* signal, Uint32 senderData,
       }
     }
 #endif
-    
+    Ptr<GlobalPage> diskPagePtr; 
     Page_cache_client pgman(this, c_pgman);
     res = pgman.get_page(signal, preq, flags);
-    m_pgman_ptr = pgman.m_ptr;
+    diskPagePtr = pgman.m_ptr;
     if (res == 0)
     {
       goto timeslice;
@@ -4581,7 +4663,7 @@ Dbtup::nr_delete(Signal* signal, Uint32 senderData,
       return -1;
     }
 
-    PagePtr disk_page((Tup_page*)m_pgman_ptr.p, m_pgman_ptr.i);
+    PagePtr disk_page((Tup_page*)diskPagePtr.p, diskPagePtr.i);
     disk_page_set_dirty(disk_page);
 
     CallbackPtr cptr;
@@ -4643,11 +4725,13 @@ Dbtup::nr_delete_page_callback(Signal* signal,
   int res= lgman.get_log_buffer(signal, sz, &cb);
   switch(res){
   case 0:
+    jam();
     return;
   case -1:
     ndbrequire("NOT YET IMPLEMENTED" == 0);
     break;
   }
+  jam();
     
   if (0) ndbout << "PAGE CALLBACK DISK DELETE: " << op.m_disk_ref << endl;
   disk_page_free(signal, tablePtr.p, fragPtr.p,
@@ -4682,7 +4766,7 @@ Dbtup::nr_delete_log_buffer_callback(Signal* signal,
    * reset page no
    */
   if (0) ndbout << "LOGBUFFER CALLBACK DISK DELETE: " << op.m_disk_ref << endl;
-  
+  jam();
   disk_page_free(signal, tablePtr.p, fragPtr.p,
 		 &op.m_disk_ref, pagePtr, op.m_gci_hi);
   

@@ -46,7 +46,6 @@ Created 1/8/1996 Heikki Tuuri
 #include <deque>
 
 #ifndef UNIV_HOTBACKUP
-# include "sync0mutex.h"
 # include "sync0rw.h"
 /********************************************************************//**
 Get the database name length in a table name.
@@ -183,8 +182,8 @@ void
 dict_col_copy_type(
 /*===============*/
 	const dict_col_t*	col,	/*!< in: column */
-	dtype_t*		type)	/*!< out: data type */
-	__attribute__((nonnull));
+	dtype_t*		type);	/*!< out: data type */
+
 /**********************************************************************//**
 Determine bytes of column prefix to be stored in the undo log. Please
 note if the table format is UNIV_FORMAT_A (< UNIV_FORMAT_B), no prefix
@@ -198,6 +197,18 @@ dict_max_field_len_store_undo(
 	const dict_col_t*	col)	/*!< in: column which index prefix
 					is based on */
 	__attribute__((nonnull, warn_unused_result));
+
+/** Determine maximum bytes of a virtual column need to be stored
+in the undo log.
+@param[in]	table		dict_table_t for the table
+@param[in]	col_no		virtual column number
+@return maximum bytes of virtual column to be stored in the undo log */
+UNIV_INLINE
+ulint
+dict_max_v_field_len_store_undo(
+	dict_table_t*		table,
+	ulint			col_no);
+
 #endif /* !UNIV_HOTBACKUP */
 #ifdef UNIV_DEBUG
 /*********************************************************************//**
@@ -269,6 +280,18 @@ dict_col_get_clust_pos(
 	const dict_col_t*	col,		/*!< in: table column */
 	const dict_index_t*	clust_index)	/*!< in: clustered index */
 	__attribute__((nonnull, warn_unused_result));
+
+/** Gets the column position in the given index.
+@param[in]	col	table column
+@param[in]	index	index to be searched for column
+@return position of column in the given index. */
+UNIV_INLINE
+ulint
+dict_col_get_index_pos(
+	const dict_col_t*	col,
+	const dict_index_t*	index)
+	__attribute__((nonnull, warn_unused_result));
+
 /****************************************************************//**
 If the given column name is reserved for InnoDB system columns, return
 TRUE.
@@ -293,6 +316,19 @@ dict_table_autoinc_initialize(
 	dict_table_t*	table,	/*!< in/out: table */
 	ib_uint64_t	value)	/*!< in: next value to assign to a row */
 	__attribute__((nonnull));
+
+/** Store autoinc value when the table is evicted.
+@param[in]	table	table evicted */
+void
+dict_table_autoinc_store(
+	const dict_table_t*	table);
+
+/** Restore autoinc value when the table is loaded.
+@param[in]	table	table loaded */
+void
+dict_table_autoinc_restore(
+	dict_table_t*	table);
+
 /********************************************************************//**
 Reads the next autoinc value (== autoinc counter value), 0 if not yet
 initialized.
@@ -351,6 +387,14 @@ dict_table_remove_from_cache(
 /*=========================*/
 	dict_table_t*	table)	/*!< in, own: table */
 	__attribute__((nonnull));
+/**********************************************************************//**
+Removes a table object from the dictionary cache. */
+void
+dict_table_remove_from_cache_low(
+/*=============================*/
+	dict_table_t*	table,		/*!< in, own: table */
+	ibool		lru_evict);	/*!< in: TRUE if table being evicted
+					to make room in the table LRU list */
 /**********************************************************************//**
 Renames a table object.
 @return TRUE if success */
@@ -411,17 +455,6 @@ dict_foreign_add_to_cache(
 				/*!< in: error to be ignored */
 	__attribute__((nonnull(1), warn_unused_result));
 /*********************************************************************//**
-Check if the index is referenced by a foreign key, if TRUE return the
-matching instance NULL otherwise.
-@return pointer to foreign key struct if index is defined for foreign
-key, otherwise NULL */
-dict_foreign_t*
-dict_table_get_referenced_constraint(
-/*=================================*/
-	dict_table_t*	table,	/*!< in: InnoDB table */
-	dict_index_t*	index)	/*!< in: InnoDB index */
-	__attribute__((nonnull, warn_unused_result));
-/*********************************************************************//**
 Checks if a table is referenced by foreign keys.
 @return TRUE if table is referenced by a foreign key */
 ibool
@@ -452,18 +485,6 @@ dict_str_starts_with_keyword(
 	const char*	str,		/*!< in: string to scan for keyword */
 	const char*	keyword)	/*!< in: keyword to look for */
 	__attribute__((nonnull, warn_unused_result));
-/*********************************************************************//**
-Checks if a index is defined for a foreign key constraint. Index is a part
-of a foreign key constraint if the index is referenced by foreign key
-or index is a foreign key index
-@return pointer to foreign key struct if index is defined for foreign
-key, otherwise NULL */
-dict_foreign_t*
-dict_table_get_foreign_constraint(
-/*==============================*/
-	dict_table_t*	table,	/*!< in: InnoDB table */
-	dict_index_t*	index)	/*!< in: InnoDB index */
-	__attribute__((nonnull, warn_unused_result));
 /** Scans a table create SQL string and adds to the data dictionary
 the foreign key constraints declared in the string. This function
 should be called after the indexes for a table have been created.
@@ -480,7 +501,6 @@ fields than mentioned in the constraint.
 				database id the database of parameter name
 @param[in]	sql_length	length of sql_string
 @param[in]	name		table full name in normalized form
-@param[in,out]	handler		table handler if table is intrinsic
 @param[in]	reject_fks	if TRUE, fail with error code
 				DB_CANNOT_ADD_CONSTRAINT if any
 				foreign keys are found.
@@ -491,7 +511,6 @@ dict_create_foreign_constraints(
 	const char*		sql_string,
 	size_t			sql_length,
 	const char*		name,
-	dict_table_t*		handler,
 	ibool			reject_fks)
 	__attribute__((warn_unused_result));
 /**********************************************************************//**
@@ -566,6 +585,15 @@ dict_table_get_col_name(
 	const dict_table_t*	table,	/*!< in: table */
 	ulint			col_nr)	/*!< in: column number */
 	__attribute__((nonnull, warn_unused_result));
+
+/** Returns a virtual column's name.
+@param[in]	table		table object
+@param[in]	col_nr		virtual column number(nth virtual column)
+@return column name. */
+const char*
+dict_table_get_v_col_name(
+	const dict_table_t*	table,
+	ulint			col_nr);
 
 /** Check if the table has a given column.
 @param[in]	table		table object
@@ -716,6 +744,13 @@ dict_index_is_spatial(
 /*==================*/
 	const dict_index_t*	index)	/*!< in: index */
 	__attribute__((warn_unused_result));
+/** Check whether the index contains a virtual column.
+@param[in]	index	index
+@return	nonzero for index on virtual column, zero for other indexes */
+UNIV_INLINE
+ulint
+dict_index_has_virtual(
+	const dict_index_t*	index);
 /********************************************************************//**
 Check whether the index is the insert buffer tree.
 @return nonzero for insert buffer, zero for other indexes */
@@ -745,15 +780,24 @@ dict_table_get_all_fts_indexes(
 	ib_vector_t*		indexes);
 
 /********************************************************************//**
-Gets the number of user-defined columns in a table in the dictionary
-cache.
-@return number of user-defined (e.g., not ROW_ID) columns of a table */
+Gets the number of user-defined non-virtual columns in a table in the
+dictionary cache.
+@return number of user-defined (e.g., not ROW_ID) non-virtual
+columns of a table */
 UNIV_INLINE
 ulint
 dict_table_get_n_user_cols(
 /*=======================*/
 	const dict_table_t*	table)	/*!< in: table */
 	__attribute__((warn_unused_result));
+/** Gets the number of user-defined virtual and non-virtual columns in a table
+in the dictionary cache.
+@param[in]	table	table
+@return number of user-defined (e.g., not ROW_ID) columns of a table */
+UNIV_INLINE
+ulint
+dict_table_get_n_tot_u_cols(
+	const dict_table_t*	table);
 /********************************************************************//**
 Gets the number of system columns in a table.
 For intrinsic table on ROW_ID column is added for all other
@@ -766,8 +810,8 @@ dict_table_get_n_sys_cols(
 	const dict_table_t*	table)	/*!< in: table */
 	__attribute__((warn_unused_result));
 /********************************************************************//**
-Gets the number of all columns (also system) in a table in the dictionary
-cache.
+Gets the number of all non-virtual columns (also system) in a table
+in the dictionary cache.
 @return number of columns of a table */
 UNIV_INLINE
 ulint
@@ -775,6 +819,23 @@ dict_table_get_n_cols(
 /*==================*/
 	const dict_table_t*	table)	/*!< in: table */
 	__attribute__((warn_unused_result));
+
+/** Gets the number of virtual columns in a table in the dictionary cache.
+@param[in]	table	the table to check
+@return number of virtual columns of a table */
+UNIV_INLINE
+ulint
+dict_table_get_n_v_cols(
+	const dict_table_t*	table);
+
+/** Check if a table has indexed virtual columns
+@param[in]	table	the table to check
+@return true is the table has indexed virtual columns */
+UNIV_INLINE
+bool
+dict_table_has_indexed_v_cols(
+	const dict_table_t*	table);
+
 /********************************************************************//**
 Gets the approximately estimated number of rows in the table.
 @return estimated number of rows */
@@ -804,6 +865,17 @@ dict_table_n_rows_dec(
 /*==================*/
 	dict_table_t*	table)	/*!< in/out: table */
 	__attribute__((nonnull));
+
+
+/** Get nth virtual column
+@param[in]	table	target table
+@param[in]	col_nr	column number in MySQL Table definition
+@return dict_v_col_t ptr */
+dict_v_col_t*
+dict_table_get_nth_v_col_mysql(
+	const dict_table_t*	table,
+	ulint			col_nr);
+
 #ifdef UNIV_DEBUG
 /********************************************************************//**
 Gets the nth column of a table.
@@ -815,6 +887,15 @@ dict_table_get_nth_col(
 	const dict_table_t*	table,	/*!< in: table */
 	ulint			pos)	/*!< in: position of column */
 	__attribute__((nonnull, warn_unused_result));
+/** Gets the nth virtual column of a table.
+@param[in]	table	table
+@param[in]	pos	position of virtual column
+@return pointer to virtual column object */
+UNIV_INLINE
+dict_v_col_t*
+dict_table_get_nth_v_col(
+        const dict_table_t*	table,
+        ulint			pos);
 /********************************************************************//**
 Gets the given system column of a table.
 @return pointer to column object */
@@ -831,6 +912,8 @@ dict_table_get_sys_col(
 #define dict_table_get_sys_col(table, sys)	\
 ((table)->cols + (table)->n_cols + (sys)	\
  - (dict_table_get_n_sys_cols(table)))
+/* Get nth virtual columns */
+#define dict_table_get_nth_v_col(table, pos)	((table)->v_cols + (pos))
 #endif /* UNIV_DEBUG */
 /********************************************************************//**
 Gets the given system column number of a table.
@@ -940,6 +1023,14 @@ dict_tf_get_page_size(
 	ulint	flags)
 __attribute__((const));
 
+/** Determine the extent size (in pages) for the given table
+@param[in]	table	the table whose extent size is being
+			calculated.
+@return extent size in pages (256, 128 or 64) */
+ulint
+dict_table_extent_size(
+	const dict_table_t*	table);
+
 /** Get the table page size.
 @param[in]	table	table
 @return compressed page size, or 0 if not compressed */
@@ -987,6 +1078,17 @@ dict_table_has_fts_index(
 /*=====================*/
 	dict_table_t*   table)		/*!< in: table */
 	__attribute__((nonnull, warn_unused_result));
+/** Copies types of virtual columns contained in table to tuple and sets all
+fields of the tuple to the SQL NULL value.  This function should
+be called right after dtuple_create().
+@param[in,out]	tuple	data tuple
+@param[in]	table	table
+*/
+void
+dict_table_copy_v_types(
+	dtuple_t*		tuple,
+	const dict_table_t*	table);
+
 /*******************************************************************//**
 Copies types of columns contained in table to tuple and sets all
 fields of the tuple to the SQL NULL value.  This function should
@@ -1031,20 +1133,43 @@ dict_make_room_in_cache(
 
 #define BIG_ROW_SIZE	1024
 
-/**********************************************************************//**
-Adds an index to the dictionary cache.
+/** Adds an index to the dictionary cache.
+@param[in]	table	table on which the index is
+@param[in]	index	index; NOTE! The index memory
+			object is freed in this function!
+@param[in]	page_no	root page number of the index
+@param[in]	strict	TRUE=refuse to create the index
+			if records could be too big to fit in
+			an B-tree page
 @return DB_SUCCESS, DB_TOO_BIG_RECORD, or DB_CORRUPTION */
 dberr_t
 dict_index_add_to_cache(
-/*====================*/
-	dict_table_t*	table,	/*!< in: table on which the index is */
-	dict_index_t*	index,	/*!< in, own: index; NOTE! The index memory
-				object is freed in this function! */
-	ulint		page_no,/*!< in: root page number of the index */
-	ibool		strict)	/*!< in: TRUE=refuse to create the index
-				if records could be too big to fit in
-				an B-tree page */
-	__attribute__((nonnull, warn_unused_result));
+	dict_table_t*	table,
+	dict_index_t*	index,
+	ulint		page_no,
+	ibool		strict)
+	__attribute__((warn_unused_result));
+
+/** Adds an index to the dictionary cache, with possible indexing newly
+added column.
+@param[in]	table	table on which the index is
+@param[in]	index	index; NOTE! The index memory
+			object is freed in this function!
+@param[in]	add_v	new virtual column that being added along with
+			an add index call
+@param[in]	page_no	root page number of the index
+@param[in]	strict	TRUE=refuse to create the index
+			if records could be too big to fit in
+			an B-tree page
+@return DB_SUCCESS, DB_TOO_BIG_RECORD, or DB_CORRUPTION */
+dberr_t
+dict_index_add_to_cache_w_vcol(
+	dict_table_t*		table,
+	dict_index_t*		index,
+	const dict_add_v_col_t* add_v,
+	ulint			page_no,
+	ibool			strict)
+	__attribute__((warn_unused_result));
 #endif /* !UNIV_HOTBACKUP */
 /********************************************************************//**
 Gets the number of fields in the internal representation of an index,
@@ -1157,27 +1282,35 @@ dict_index_get_nth_col_pos(
 	const dict_index_t*	index,	/*!< in: index */
 	ulint			n)	/*!< in: column number */
 	__attribute__((nonnull, warn_unused_result));
-/********************************************************************//**
-Looks for column n in an index.
+/** Looks for column n in an index.
+@param[in]	index		index
+@param[in]	n		column number
+@param[in]	inc_prefix	true=consider column prefixes too
+@param[in]	is_virtual	true==virtual column
 @return position in internal representation of the index;
 ULINT_UNDEFINED if not contained */
 ulint
 dict_index_get_nth_col_or_prefix_pos(
-/*=================================*/
 	const dict_index_t*	index,		/*!< in: index */
 	ulint			n,		/*!< in: column number */
-	ibool			inc_prefix)	/*!< in: TRUE=consider
+	bool			inc_prefix,	/*!< in: TRUE=consider
 						column prefixes too */
-	__attribute__((nonnull, warn_unused_result));
+	bool			is_virtual)	/*!< in: is a virtual column */
+	__attribute__((warn_unused_result));
 /********************************************************************//**
 Returns TRUE if the index contains a column or a prefix of that column.
+@param[in]	index		index
+@param[in]	n		column number
+@param[in]	is_virtual	whether it is a virtual col
 @return TRUE if contains the column or its prefix */
 ibool
 dict_index_contains_col_or_prefix(
 /*==============================*/
 	const dict_index_t*	index,	/*!< in: index */
-	ulint			n)	/*!< in: column number */
-	__attribute__((nonnull, warn_unused_result));
+	ulint			n,	/*!< in: column number */
+	bool			is_virtual)
+					/*!< in: whether it is a virtual col */
+	__attribute__((warn_unused_result));
 /********************************************************************//**
 Looks for a matching field in an index. The column has to be the same. The
 column in index must be complete, or must contain a prefix longer than the
@@ -1516,8 +1649,9 @@ dict_table_is_fts_column(
 				/* out: ULINT_UNDEFINED if no match else
 				the offset within the vector */
 	ib_vector_t*	indexes,/* in: vector containing only FTS indexes */
-	ulint		col_no)	/* in: col number to search for */
-	__attribute__((nonnull, warn_unused_result));
+	ulint		col_no,	/* in: col number to search for */
+	bool		is_virtual)/*!< in: whether it is a virtual column */
+	__attribute__((warn_unused_result));
 /**********************************************************************//**
 Prevent table eviction by moving a table to the non-LRU list from the
 LRU list if it is not already there. */
@@ -1565,7 +1699,9 @@ extern ib_mutex_t	dict_foreign_err_mutex; /* mutex protecting the
 /** the dictionary system */
 extern dict_sys_t*	dict_sys;
 /** the data dictionary rw-latch protecting dict_sys */
-extern rw_lock_t	dict_operation_lock;
+extern rw_lock_t*	dict_operation_lock;
+
+typedef std::map<table_id_t, ib_uint64_t> autoinc_map_t;
 
 /* Dictionary system struct */
 struct dict_sys_t{
@@ -1586,13 +1722,14 @@ struct dict_sys_t{
 					on name */
 	hash_table_t*	table_id_hash;	/*!< hash table of the tables, based
 					on id */
-	ulint		size;		/*!< varying space in bytes occupied
+	lint		size;		/*!< varying space in bytes occupied
 					by the data dictionary table and
 					index objects */
 	dict_table_t*	sys_tables;	/*!< SYS_TABLES table */
 	dict_table_t*	sys_columns;	/*!< SYS_COLUMNS table */
 	dict_table_t*	sys_indexes;	/*!< SYS_INDEXES table */
 	dict_table_t*	sys_fields;	/*!< SYS_FIELDS table */
+	dict_table_t*	sys_virtual;	/*!< SYS_VIRTUAL table */
 
 	/*=============================*/
 	UT_LIST_BASE_NODE_T(dict_table_t)
@@ -1601,6 +1738,8 @@ struct dict_sys_t{
 	UT_LIST_BASE_NODE_T(dict_table_t)
 			table_non_LRU;	/*!< List of tables that can't be
 					evicted from the cache */
+	autoinc_map_t*	autoinc_map;	/*!< Map to store table id and autoinc
+					when table is evicted */
 };
 #endif /* !UNIV_HOTBACKUP */
 
@@ -1727,16 +1866,13 @@ dict_set_corrupted(
 	const char*	ctx)	/*!< in: context */
 	UNIV_COLD __attribute__((nonnull));
 
-/**********************************************************************//**
-Flags an index corrupted in the data dictionary cache only. This
+/** Flags an index corrupted in the data dictionary cache only. This
 is used mostly to mark a corrupted index when index's own dictionary
-is corrupted, and we force to load such index for repair purpose */
+is corrupted, and we force to load such index for repair purpose
+@param[in,out]	index	index that is corrupted */
 void
 dict_set_corrupted_index_cache_only(
-/*================================*/
-	dict_index_t*	index,		/*!< in/out: index */
-	dict_table_t*	table)		/*!< in/out: table */
-	__attribute__((nonnull));
+	dict_index_t*	index);
 
 /**********************************************************************//**
 Flags a table with specified space_id corrupted in the table dictionary
@@ -1917,6 +2053,36 @@ dict_table_get_index_on_first_col(
 	const dict_table_t*	table,		/*!< in: table */
 	ulint			col_index);	/*!< in: position of column
 						in table */
+/** Check if a column is a virtual column
+@param[in]	col	column
+@return true if it is a virtual column, false otherwise */
+UNIV_INLINE
+bool
+dict_col_is_virtual(
+	const dict_col_t*	col);
+
+/** encode number of columns and number of virtual columns in one
+4 bytes value. We could do this because the number of columns in
+InnoDB is limited to 1017
+@param[in]	n_col	number of non-virtual column
+@param[in]	n_v_col	number of virtual column
+@return encoded value */
+UNIV_INLINE
+ulint
+dict_table_encode_n_col(
+	ulint	n_col,
+	ulint	n_v_col);
+
+/** Decode number of virtual and non-virtual columns in one 4 bytes value.
+@param[in]	encoded	encoded value
+@param[in,out]	n_col	number of non-virtual column
+@param[in,out]	n_v_col	number of virtual column */
+UNIV_INLINE
+void
+dict_table_decode_n_col(
+	ulint	encoded,
+	ulint*	n_col,
+	ulint*	n_v_col);
 
 /** Look for any dictionary objects that are found in the given tablespace.
 @param[in]	space	Tablespace ID to search for.

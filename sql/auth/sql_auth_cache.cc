@@ -59,8 +59,6 @@ HASH column_priv_hash, proc_priv_hash, func_priv_hash;
 hash_filo *acl_cache;
 HASH acl_check_hosts;
 
-mysql_rwlock_t proxy_users_rwlock;
-
 bool initialized=0;
 bool allow_all_hosts=1;
 uint grant_version=0; /* Version of priv tables */
@@ -271,7 +269,6 @@ ACL_PROXY_USER::check_validity(bool check_no_resolve)
                       proxied_host.get_host() ? proxied_host.get_host() : "",
                       user ? user : "",
                       host.get_host() ? host.get_host() : "");
-    return TRUE;
   }
   return FALSE;
 }
@@ -466,7 +463,8 @@ int wild_case_compare(CHARSET_INFO *cs, const char *str,const char *wildstr)
 /*
   Return a number which, if sorted 'desc', puts strings in this order:
     no wildcards
-    wildcards
+    strings containg wildcards and non-wildcard characters
+    single muilt-wildcard character('%')
     empty string
 */
 
@@ -483,7 +481,16 @@ ulong get_sort(uint count,...)
   {
     char *start, *str= va_arg(args,char*);
     uint chars= 0;
-    uint wild_pos= 0;           /* first wildcard position */
+    uint wild_pos= 0;
+
+    /*
+      wild_pos
+        0                            if string is empty
+        1                            if string is a single muilt-wildcard
+                                     character('%')
+        first wildcard position + 1  if string containg wildcards and
+                                     non-wildcard characters
+    */
 
     if ((start= str))
     {
@@ -494,6 +501,8 @@ ulong get_sort(uint count,...)
         else if (*str == wild_many || *str == wild_one)
         {
           wild_pos= (uint) (str - start) + 1;
+          if (!(wild_pos == 1 && *str == wild_many && *(++str) == '\0'))
+            wild_pos++;
           break;
         }
         chars= 128;                             // Marker that chars existed
@@ -534,22 +543,12 @@ ulong get_sort(uint count,...)
 
 bool hostname_requires_resolving(const char *hostname)
 {
+
+  /* called only for --skip-name-resolve */
+  DBUG_ASSERT(specialflag & SPECIAL_NO_RESOLVE);
+
   if (!hostname)
     return FALSE;
-
-  /* Check if hostname is the localhost. */
-
-  size_t hostname_len= strlen(hostname);
-  size_t localhost_len= strlen(my_localhost);
-
-  if (hostname == my_localhost ||
-      (hostname_len == localhost_len &&
-       !my_strnncoll(system_charset_info,
-                     (const uchar *) hostname,  hostname_len,
-                     (const uchar *) my_localhost, strlen(my_localhost))))
-  {
-    return FALSE;
-  }
 
   /*
     If the string contains any of {':', '%', '_', '/'}, it is definitely
@@ -648,7 +647,8 @@ GRANT_TABLE::GRANT_TABLE(const char *h, const char *d,const char *u,
   :GRANT_NAME(h,d,u,t,p, FALSE), cols(c)
 {
   (void) my_hash_init2(&hash_columns,4,system_charset_info,
-                   0,0,0, (my_hash_get_key) get_key_column,0,0);
+                   0,0,0, (my_hash_get_key) get_key_column,0,0,
+                   key_memory_acl_memex);
 }
 
 
@@ -682,11 +682,9 @@ GRANT_NAME::GRANT_NAME(TABLE *form, bool is_routine)
 }
 
 
-GRANT_TABLE::GRANT_TABLE(TABLE *form, TABLE *col_privs)
-  :GRANT_NAME(form, FALSE)
+GRANT_TABLE::GRANT_TABLE(TABLE *form)
+  :GRANT_NAME(form, false)
 {
-  uchar key[MAX_KEY_LENGTH];
-
   if (!db || !tname)
   {
     /* Wrong table row; Ignore it */
@@ -698,10 +696,33 @@ GRANT_TABLE::GRANT_TABLE(TABLE *form, TABLE *col_privs)
   cols =  fix_rights_for_column(cols);
 
   (void) my_hash_init2(&hash_columns,4,system_charset_info,
-                   0,0,0, (my_hash_get_key) get_key_column,0,0);
+                   0,0,0, (my_hash_get_key) get_key_column,0,0,
+                   key_memory_acl_memex);
+}
+
+
+GRANT_TABLE::~GRANT_TABLE()
+{
+  my_hash_free(&hash_columns);
+}
+
+
+bool GRANT_TABLE::init(TABLE *col_privs)
+{
+  int error;
+
   if (cols)
   {
+    uchar key[MAX_KEY_LENGTH];
     uint key_prefix_len;
+
+    if (!col_privs->key_info)
+    {
+      my_error(ER_TABLE_CORRUPT, MYF(0), col_privs->s->db.str,
+               col_privs->s->table_name.str);
+      return true;
+    }
+
     KEY_PART_INFO *key_part= col_privs->key_info->key_part;
     col_privs->field[0]->store(host.get_host(),
                                host.get_host() ? host.get_host_len() : 0,
@@ -715,53 +736,65 @@ GRANT_TABLE::GRANT_TABLE(TABLE *form, TABLE *col_privs)
                      key_part[2].store_length +
                      key_part[3].store_length);
     key_copy(key, col_privs->record[0], col_privs->key_info, key_prefix_len);
-    col_privs->field[4]->store("",0, &my_charset_latin1);
+    col_privs->field[4]->store("", 0, &my_charset_latin1);
 
-    if (col_privs->file->ha_index_init(0, 1))
+    error= col_privs->file->ha_index_init(0, 1);
+    if (error)
     {
+      acl_print_ha_error(col_privs, error);
+      return true;
+    }
+
+    error=
+      col_privs->file->ha_index_read_map(col_privs->record[0], (uchar*) key,
+                                         (key_part_map)15, HA_READ_KEY_EXACT);
+    DBUG_EXECUTE_IF("se_error_grant_table_init_read",
+                    error= HA_ERR_LOCK_WAIT_TIMEOUT;);
+    if (error)
+    {
+      bool ret= false;
       cols= 0;
-      return;
+      if (error != HA_ERR_KEY_NOT_FOUND && error != HA_ERR_END_OF_FILE)
+      {
+        acl_print_ha_error(col_privs, error);
+        ret= true;
+      }
+      col_privs->file->ha_index_end();
+      return ret;
     }
 
-    if (col_privs->file->ha_index_read_map(col_privs->record[0], (uchar*) key,
-                                           (key_part_map)15, HA_READ_KEY_EXACT))
-    {
-      cols = 0; /* purecov: deadcode */
-      col_privs->file->ha_index_end();
-      return;
-    }
     do
     {
       String *res,column_name;
       GRANT_COLUMN *mem_check;
       /* As column name is a string, we don't have to supply a buffer */
-      res=col_privs->field[4]->val_str(&column_name);
+      res= col_privs->field[4]->val_str(&column_name);
       ulong priv= (ulong) col_privs->field[6]->val_int();
-      if (!(mem_check = new GRANT_COLUMN(*res,
-                                         fix_rights_for_column(priv))))
+      if (!(mem_check= new GRANT_COLUMN(*res,
+                                        fix_rights_for_column(priv))) ||
+            my_hash_insert(&hash_columns, (uchar *) mem_check))
       {
         /* Don't use this entry */
-        privs = cols = 0;               /* purecov: deadcode */
-        return;                         /* purecov: deadcode */
+        col_privs->file->ha_index_end();
+        return true;
       }
-      if (my_hash_insert(&hash_columns, (uchar *) mem_check))
+
+      error= col_privs->file->ha_index_next(col_privs->record[0]);
+      DBUG_EXECUTE_IF("se_error_grant_table_init_read_next",
+                      error= HA_ERR_LOCK_WAIT_TIMEOUT;);
+      if (error && error != HA_ERR_END_OF_FILE)
       {
-        /* Invalidate this entry */
-        privs= cols= 0;
-        return;
+        acl_print_ha_error(col_privs, error);
+        col_privs->file->ha_index_end();
+        return true;
       }
-    } while (!col_privs->file->ha_index_next(col_privs->record[0]) &&
-             !key_cmp_if_same(col_privs,key,0,key_prefix_len));
+    }
+    while (!error && !key_cmp_if_same(col_privs,key,0,key_prefix_len));
     col_privs->file->ha_index_end();
   }
+
+  return false;
 }
-
-
-GRANT_TABLE::~GRANT_TABLE()
-{
-  my_hash_free(&hash_columns);
-}
-
 
 /*
   Find first entry that matches the current user
@@ -877,12 +910,11 @@ acl_find_proxy_user(const char *user, const char *host, const char *ip,
       }
       else
       {
-        // we never use anonymous users when mapping 
+        // we never use anonymous users when mapping
         // proxy users for internal plugins:
         if (strcmp(proxy->get_proxied_user() ?
           proxy->get_proxied_user() : "", ""))
         {
-          mysql_mutex_lock(&acl_cache->lock);
           if (find_acl_user(
             proxy->get_proxied_host(),
             proxy->get_proxied_user(),
@@ -900,7 +932,6 @@ acl_find_proxy_user(const char *user, const char *host, const char *ip,
             DBUG_PRINT("info", ("skipping match because ACL user \
               does not exist, looking for next match to map"));
           }
-          mysql_mutex_unlock(&acl_cache->lock);
           if (*proxy_used)
           {
             DBUG_PRINT("info", ("returning matching user"));
@@ -947,10 +978,10 @@ ulong acl_get(const char *host, const char *ip,
   acl_entry *entry;
   DBUG_ENTER("acl_get");
 
-  copy_length= (size_t) (strlen(ip ? ip : "") +
-                 strlen(user ? user : "") +
-                 strlen(db ? db : "")) + 2; /* Added 2 at the end to avoid  
-                                               buffer overflow at strmov()*/
+  copy_length= (strlen(ip ? ip : "") +
+                strlen(user ? user : "") +
+                strlen(db ? db : "")) + 2; /* Added 2 at the end to avoid
+                                              buffer overflow at strmov()*/
   /*
     Make sure that my_stpcpy() operations do not result in buffer overflow.
   */
@@ -999,7 +1030,9 @@ ulong acl_get(const char *host, const char *ip,
 exit:
   /* Save entry in cache for quick retrieval */
   if (!db_is_pattern &&
-      (entry= (acl_entry*) malloc(sizeof(acl_entry)+key_length)))
+      (entry= (acl_entry*) my_malloc(key_memory_acl_cache,
+                                     sizeof(acl_entry)+key_length,
+                                     MYF(0))))
   {
     entry->access=(db_access & host_access);
     entry->length=key_length;
@@ -1044,10 +1077,13 @@ static void init_check_host(void)
     acl_wild_hosts=
       new Prealloced_array<ACL_HOST_AND_IP, ACL_PREALLOC_SIZE>(key_memory_acl_mem);
 
+  size_t acl_users_size= acl_users ? acl_users->size() : 0;
+
   (void) my_hash_init(&acl_check_hosts,system_charset_info,
-                      acl_users->size(), 0, 0,
-                      (my_hash_get_key) check_get_key, 0, 0);
-  if (!allow_all_hosts)
+                      acl_users_size, 0, 0,
+                      (my_hash_get_key) check_get_key, 0, 0,
+                      key_memory_acl_mem);
+  if (acl_users_size && !allow_all_hosts)
   {
     for (ACL_USER *acl_user= acl_users->begin();
          acl_user != acl_users->end(); ++acl_user)
@@ -1336,14 +1372,14 @@ my_bool acl_init(bool dont_read_acl_tables)
   my_bool return_val;
   DBUG_ENTER("acl_init");
 
-  acl_cache= new hash_filo(ACL_CACHE_SIZE, 0, 0,
+  acl_cache= new hash_filo(key_memory_acl_cache,
+                           ACL_CACHE_SIZE, 0, 0,
                            (my_hash_get_key) acl_entry_get_key,
-                           (my_hash_free_key) free,
+                           (my_hash_free_key) my_free,
                            &my_charset_utf8_bin);
 
-  mysql_rwlock_init(key_rwlock_proxy_users, &proxy_users_rwlock);
   LOCK_grant.init(LOCK_GRANT_PARTITIONS
-#ifdef HAVE_PSI_RWLOCK_INTERFACE
+#ifdef HAVE_PSI_INTERFACE
                   , key_rwlock_LOCK_grant
 #endif
                   );
@@ -1439,7 +1475,8 @@ static my_bool acl_load(THD *thd, TABLE_LIST *tables)
   is_old_db_layout= user_table_schema_factory.is_old_user_table_schema(table);
 
   allow_all_hosts=0;
-  while (!(read_record_info.read_record(&read_record_info)))
+  int read_rec_errcode;
+  while (!(read_rec_errcode= read_record_info.read_record(&read_record_info)))
   {
     password_expired= false;
     /* Reading record from mysql.user */
@@ -1470,7 +1507,6 @@ static my_bool acl_load(THD *thd, TABLE_LIST *tables)
                         "ignored in --skip-name-resolve mode.",
                         user.user ? user.user : "",
                         user.host.get_host() ? user.host.get_host() : "");
-      continue;
     }
 
     /* Read password from authentication_string field */
@@ -1482,6 +1518,8 @@ static my_bool acl_load(THD *thd, TABLE_LIST *tables)
     {
       sql_print_error("Fatal error: mysql.user table is damaged. "
                       "Please run mysql_upgrade.");
+
+      end_read_record(&read_record_info);
       goto end;
     }
     if(user.auth_string.str)
@@ -1677,7 +1715,7 @@ static my_bool acl_load(THD *thd, TABLE_LIST *tables)
         if (plugin)
         {
           st_mysql_auth *auth= (st_mysql_auth *) plugin_decl(plugin)->info;
-          if (auth->validate_authentication_string((char*)user.auth_string.str,
+          if (auth->validate_authentication_string(user.auth_string.str,
                                                    user.auth_string.length))
           {
             sql_print_warning("Found invalid password for user: '%s@%s'; "
@@ -1783,9 +1821,12 @@ static my_bool acl_load(THD *thd, TABLE_LIST *tables)
         allow_all_hosts=1;                      // Anyone can connect
     }
   } // END while reading records from the mysql.user table
-  
-  std::sort(acl_users->begin(), acl_users->end(), ACL_compare());
+
   end_read_record(&read_record_info);
+  if (read_rec_errcode > 0)
+    goto end;
+
+  std::sort(acl_users->begin(), acl_users->end(), ACL_compare());
   acl_users->shrink_to_fit();
 
   if (super_users_with_empty_plugin)
@@ -1815,7 +1856,7 @@ static my_bool acl_load(THD *thd, TABLE_LIST *tables)
   table->use_all_columns();
   acl_dbs->clear();
 
-  while (!(read_record_info.read_record(&read_record_info)))
+  while (!(read_rec_errcode= read_record_info.read_record(&read_record_info)))
   {
     /* Reading record in mysql.db */
     ACL_DB db;
@@ -1835,7 +1876,6 @@ static my_bool acl_load(THD *thd, TABLE_LIST *tables)
                         db.db,
                         db.user ? db.user : "",
                         db.host.get_host() ? db.host.get_host() : "");
-      continue;
     }
     db.access=get_access(table,3,0);
     db.access=fix_rights_for_db(db.access);
@@ -1866,9 +1906,12 @@ static my_bool acl_load(THD *thd, TABLE_LIST *tables)
     }
     acl_dbs->push_back(db);
   } // END reading records from mysql.db tables
-  
-  std::sort(acl_dbs->begin(), acl_dbs->end(), ACL_compare());
+
   end_read_record(&read_record_info);
+  if (read_rec_errcode > 0)
+    goto end;
+
+  std::sort(acl_dbs->begin(), acl_dbs->end(), ACL_compare());
   acl_dbs->shrink_to_fit();
 
   /* Prepare to read records from the mysql.proxies_priv table */
@@ -1880,7 +1923,7 @@ static my_bool acl_load(THD *thd, TABLE_LIST *tables)
                          NULL, 1, 1, FALSE))
       goto end;
     table->use_all_columns();
-    while (!(read_record_info.read_record(&read_record_info)))
+    while (!(read_rec_errcode= read_record_info.read_record(&read_record_info)))
     {
       /* Reading record in mysql.proxies_priv */
       ACL_PROXY_USER proxy;
@@ -1894,8 +1937,11 @@ static my_bool acl_load(THD *thd, TABLE_LIST *tables)
       }
     } // END reading records from the mysql.proxies_priv table
 
-    std::sort(acl_proxy_users->begin(), acl_proxy_users->end(), ACL_compare());
     end_read_record(&read_record_info);
+    if (read_rec_errcode > 0)
+      goto end;
+
+    std::sort(acl_proxy_users->begin(), acl_proxy_users->end(), ACL_compare());
   }
   else
   {
@@ -1942,7 +1988,6 @@ void acl_free(bool end)
     if (rwlocks_initialized)
     {
       LOCK_grant.destroy();
-      mysql_rwlock_destroy(&proxy_users_rwlock);
       rwlocks_initialized= false;
     }
   }
@@ -2004,19 +2049,12 @@ my_bool acl_reload(THD *thd)
       sql_print_error("Fatal error: Can't open and lock privilege tables: %s",
                       thd->get_stmt_da()->message_text());
     }
-    acl_free();
     close_acl_tables(thd);
     DBUG_RETURN(true);
   }
 
-  Write_lock proxy_users_wlk(&proxy_users_rwlock, DEFER);
-
   if ((old_initialized=initialized))
-  {
-    /* If you need these two locks, always acquire them in this order:*/
     mysql_mutex_lock(&acl_cache->lock);
-    proxy_users_wlk.lock();
-  }
 
   Prealloced_array<ACL_USER, ACL_PREALLOC_SIZE> *old_acl_users= acl_users;
   Prealloced_array<ACL_DB, ACL_PREALLOC_SIZE> *old_acl_dbs= acl_dbs;
@@ -2055,10 +2093,7 @@ my_bool acl_reload(THD *thd)
     delete old_acl_proxy_users;
   }
   if (old_initialized)
-  {
     mysql_mutex_unlock(&acl_cache->lock);
-    proxy_users_wlk.unlock();
-  }
 
   close_acl_tables(thd);
   DBUG_RETURN(return_val);
@@ -2068,6 +2103,7 @@ my_bool acl_reload(THD *thd)
 void acl_insert_proxy_user(ACL_PROXY_USER *new_value)
 {
   DBUG_ENTER("acl_insert_proxy_user");
+  mysql_mutex_assert_owner(&acl_cache->lock);
   acl_proxy_users->push_back(*new_value);
   std::sort(acl_proxy_users->begin(), acl_proxy_users->end(), ACL_compare());
   DBUG_VOID_RETURN;
@@ -2140,16 +2176,22 @@ void  grant_free(void)
   @brief Initialize structures responsible for table/column-level privilege
    checking and load information for them from tables in the 'mysql' database.
 
+  @param skip_grant_tables  true if the command line option
+    --skip-grant-tables is specified, else false.
+
   @return Error status
-    @retval 0 OK
-    @retval 1 Could not initialize grant subsystem.
+    @retval false OK
+    @retval true  Could not initialize grant subsystem.
 */
 
-my_bool grant_init()
+bool grant_init(bool skip_grant_tables)
 {
   THD  *thd;
   my_bool return_val;
   DBUG_ENTER("grant_init");
+
+  if (skip_grant_tables)
+    DBUG_RETURN(false);
 
   if (!(thd= new THD))
     DBUG_RETURN(1);                             /* purecov: deadcode */
@@ -2157,6 +2199,10 @@ my_bool grant_init()
   thd->store_globals();
 
   return_val=  grant_reload(thd);
+
+  if (return_val && thd->get_stmt_da()->is_error())
+    sql_print_error("Fatal: can't initialize grant subsystem - '%s'",
+                    thd->get_stmt_da()->message_text());
 
   thd->release_resources();
   delete thd;
@@ -2166,14 +2212,13 @@ my_bool grant_init()
 
 
 /**
-  @brief Helper function to grant_reload_procs_priv
+  @brief Helper function to grant_reload
 
   Reads the procs_priv table into memory hash.
 
   @param table A pointer to the procs_priv table structure.
 
   @see grant_reload
-  @see grant_reload_procs_priv
 
   @return Error state
     @retval TRUE An error occurred
@@ -2184,20 +2229,35 @@ static my_bool grant_load_procs_priv(TABLE *p_table)
 {
   MEM_ROOT *memex_ptr;
   my_bool return_val= 1;
+  int error;
   bool check_no_resolve= specialflag & SPECIAL_NO_RESOLVE;
   MEM_ROOT **save_mem_root_ptr= my_thread_get_THR_MALLOC();
   DBUG_ENTER("grant_load_procs_priv");
   (void) my_hash_init(&proc_priv_hash, &my_charset_utf8_bin,
                       0,0,0, (my_hash_get_key) get_grant_table,
-                      0,0);
+                      0, 0, key_memory_acl_memex);
   (void) my_hash_init(&func_priv_hash, &my_charset_utf8_bin,
                       0,0,0, (my_hash_get_key) get_grant_table,
-                      0,0);
-  if (p_table->file->ha_index_init(0, 1))
-    DBUG_RETURN(TRUE);
+                      0, 0, key_memory_acl_memex);
+  error= p_table->file->ha_index_init(0, 1);
+  if (error)
+  {
+    acl_print_ha_error(p_table, error);
+    DBUG_RETURN(true);
+  }
   p_table->use_all_columns();
 
-  if (!p_table->file->ha_index_first(p_table->record[0]))
+  error= p_table->file->ha_index_first(p_table->record[0]);
+  DBUG_EXECUTE_IF("se_error_grant_load_procs_read",
+                  error= HA_ERR_LOCK_WAIT_TIMEOUT;);
+  if (error)
+  {
+    if (error == HA_ERR_END_OF_FILE)
+      return_val= 0; // Return Ok.
+    else
+      acl_print_ha_error(p_table, error);
+  }
+  else
   {
     memex_ptr= &memex;
     my_thread_set_THR_MALLOC(&memex_ptr);
@@ -2220,7 +2280,6 @@ static my_bool grant_load_procs_priv(TABLE *p_table)
                             mem_check->tname, mem_check->user,
                             mem_check->host.get_host() ?
                             mem_check->host.get_host() : "");
-          continue;
         }
       }
       if (p_table->field[4]->val_int() == SP_TYPE_PROCEDURE)
@@ -2248,11 +2307,20 @@ static my_bool grant_load_procs_priv(TABLE *p_table)
         delete mem_check;
         goto end_unlock;
       }
+      error= p_table->file->ha_index_next(p_table->record[0]);
+      DBUG_EXECUTE_IF("se_error_grant_load_procs_read_next",
+                      error= HA_ERR_LOCK_WAIT_TIMEOUT;);
+      if (error)
+      {
+        if (error == HA_ERR_END_OF_FILE)
+          return_val= 0;
+        else
+          acl_print_ha_error(p_table, error);
+        goto end_unlock;
+      }
     }
-    while (!p_table->file->ha_index_next(p_table->record[0]));
+    while (true);
   }
-  /* Return ok */
-  return_val= 0;
 
 end_unlock:
   p_table->file->ha_index_end();
@@ -2280,6 +2348,7 @@ static my_bool grant_load(THD *thd, TABLE_LIST *tables)
 {
   MEM_ROOT *memex_ptr;
   my_bool return_val= 1;
+  int error;
   TABLE *t_table= 0, *c_table= 0;
   bool check_no_resolve= specialflag & SPECIAL_NO_RESOLVE;
   MEM_ROOT **save_mem_root_ptr= my_thread_get_THR_MALLOC();
@@ -2290,25 +2359,48 @@ static my_bool grant_load(THD *thd, TABLE_LIST *tables)
 
   (void) my_hash_init(&column_priv_hash, &my_charset_utf8_bin,
                       0,0,0, (my_hash_get_key) get_grant_table,
-                      (my_hash_free_key) free_grant_table,0);
+                      (my_hash_free_key) free_grant_table,0,
+                      key_memory_acl_memex);
 
   t_table = tables[0].table;
   c_table = tables[1].table;
-  if (t_table->file->ha_index_init(0, 1))
+  error= t_table->file->ha_index_init(0, 1);
+  if (error)
+  {
+    acl_print_ha_error(t_table, error);
     goto end_index_init;
+  }
   t_table->use_all_columns();
   c_table->use_all_columns();
 
-  if (!t_table->file->ha_index_first(t_table->record[0]))
+  error= t_table->file->ha_index_first(t_table->record[0]);
+  DBUG_EXECUTE_IF("se_error_grant_load_read",
+                  error= HA_ERR_LOCK_WAIT_TIMEOUT;);
+  if (error)
+  {
+    if (error == HA_ERR_END_OF_FILE)
+      return_val= 0; // Return Ok.
+    else
+      acl_print_ha_error(t_table, error);
+  }
+  else
   {
     memex_ptr= &memex;
     my_thread_set_THR_MALLOC(&memex_ptr);
     do
     {
       GRANT_TABLE *mem_check;
-      if (!(mem_check=new (memex_ptr) GRANT_TABLE(t_table,c_table)))
+      mem_check= new (memex_ptr) GRANT_TABLE(t_table);
+
+      if (!mem_check)
       {
         /* This could only happen if we are out memory */
+        goto end_unlock;
+      }
+
+      if (mem_check->init(c_table))
+      {
+        delete mem_check;
         goto end_unlock;
       }
 
@@ -2322,7 +2414,6 @@ static my_bool grant_load(THD *thd, TABLE_LIST *tables)
                             mem_check->user ? mem_check->user : "",
                             mem_check->host.get_host() ?
                             mem_check->host.get_host() : "");
-          continue;
         }
       }
 
@@ -2333,11 +2424,21 @@ static my_bool grant_load(THD *thd, TABLE_LIST *tables)
         delete mem_check;
         goto end_unlock;
       }
-    }
-    while (!t_table->file->ha_index_next(t_table->record[0]));
-  }
+      error= t_table->file->ha_index_next(t_table->record[0]);
+      DBUG_EXECUTE_IF("se_error_grant_load_read_next",
+                      error= HA_ERR_LOCK_WAIT_TIMEOUT;);
+      if (error)
+      {
+        if (error != HA_ERR_END_OF_FILE)
+          acl_print_ha_error(t_table, error);
+        else
+          return_val= 0;
+        goto end_unlock;
+      }
 
-  return_val=0;                                 // Return ok
+    }
+    while (true);
+  }
 
 end_unlock:
   t_table->file->ha_index_end();
@@ -2353,6 +2454,7 @@ end_index_init:
     exists.
 
   @param thd A pointer to the thread handler object.
+  @param table A pointer to the table list.
 
   @see grant_reload
 
@@ -2361,36 +2463,22 @@ end_index_init:
     @retval TRUE An error has occurred.
 */
 
-static my_bool grant_reload_procs_priv(THD *thd)
+static my_bool grant_reload_procs_priv(THD *thd, TABLE_LIST *table)
 {
   HASH old_proc_priv_hash, old_func_priv_hash;
-  TABLE_LIST table;
   my_bool return_val= FALSE;
   DBUG_ENTER("grant_reload_procs_priv");
-
-  table.init_one_table("mysql", 5, "procs_priv",
-                       strlen("procs_priv"), "procs_priv",
-                       TL_READ);
-  table.open_type= OT_BASE_ONLY;
-
-  if (open_and_lock_tables(thd, &table, MYSQL_LOCK_IGNORE_TIMEOUT))
-  {
-    my_hash_free(&proc_priv_hash);
-    my_hash_free(&func_priv_hash);
-    DBUG_RETURN(TRUE);
-  }
-
-  Partitioned_rwlock_write_guard lock(&LOCK_grant);
 
   /* Save a copy of the current hash if we need to undo the grant load */
   old_proc_priv_hash= proc_priv_hash;
   old_func_priv_hash= func_priv_hash;
 
-  if ((return_val= grant_load_procs_priv(table.table)))
+  if ((return_val= grant_load_procs_priv(table->table)))
   {
     /* Error; Reverting to old hash */
     DBUG_PRINT("error",("Reverting to old privileges"));
-    grant_free();
+    my_hash_free(&proc_priv_hash);
+    my_hash_free(&func_priv_hash);
     proc_priv_hash= old_proc_priv_hash;
     func_priv_hash= old_func_priv_hash;
   }
@@ -2421,7 +2509,7 @@ static my_bool grant_reload_procs_priv(THD *thd)
 
 my_bool grant_reload(THD *thd)
 {
-  TABLE_LIST tables[2];
+  TABLE_LIST tables[3];
   HASH old_column_priv_hash;
   MEM_ROOT old_mem;
   my_bool return_val= 1;
@@ -2437,8 +2525,34 @@ my_bool grant_reload(THD *thd)
   tables[1].init_one_table(C_STRING_WITH_LEN("mysql"),
                            C_STRING_WITH_LEN("columns_priv"),
                            "columns_priv", TL_READ);
+  tables[2].init_one_table(C_STRING_WITH_LEN("mysql"),
+                           C_STRING_WITH_LEN("procs_priv"),
+                           "procs_priv", TL_READ);
+
   tables[0].next_local= tables[0].next_global= tables+1;
-  tables[0].open_type= tables[1].open_type= OT_BASE_ONLY;
+  tables[1].next_local= tables[1].next_global= tables+2;
+  tables[0].open_type= tables[1].open_type= tables[2].open_type= OT_BASE_ONLY;
+
+  /*
+    Reload will work in the following manner:-
+
+                             proc_priv_hash structure
+                              /                     \
+                    not initialized                 initialized
+                   /               \                     |
+    mysql.procs_priv table        Server Startup         |
+        is missing                      \                |
+             |                         open_and_lock_tables()
+    Assume we are working on           /success             \failure
+    pre 4.1 system tables.        Normal Scenario.          An error is thrown.
+    A warning is printed          Reload column privilege.  Retain the old hash.
+    and continue with             Reload function and
+    reloading the column          procedure privileges,
+    privileges.                   if available.
+  */
+
+  if (!(my_hash_inited(&proc_priv_hash)))
+    tables[2].open_strategy= TABLE_LIST::OPEN_IF_EXISTS;
 
   /*
     To avoid deadlocks we should obtain table locks before
@@ -2446,12 +2560,26 @@ my_bool grant_reload(THD *thd)
   */
   if (open_and_lock_tables(thd, tables, MYSQL_LOCK_IGNORE_TIMEOUT))
   {
-    my_hash_free(&column_priv_hash);
+    if (thd->get_stmt_da()->is_error())
+    {
+      sql_print_error("Fatal error: Can't open and lock privilege tables: %s",
+                      thd->get_stmt_da()->message_text());
+    }
     goto end;
+  }
+
+  if (tables[2].table == NULL)
+  {
+    sql_print_warning("Table 'mysql.procs_priv' does not exist. "
+                      "Please run mysql_upgrade.");
+    push_warning_printf(thd, Sql_condition::SL_WARNING, ER_NO_SUCH_TABLE,
+                        ER(ER_NO_SUCH_TABLE), tables[2].db,
+                        tables[2].table_name);
   }
 
   LOCK_grant.wrlock();
 
+  /* Save a copy of the current hash if we need to undo the grant load */
   old_column_priv_hash= column_priv_hash;
 
   /*
@@ -2461,33 +2589,27 @@ my_bool grant_reload(THD *thd)
   old_mem= memex;
   init_sql_alloc(key_memory_acl_memex,
                  &memex, ACL_ALLOC_BLOCK_SIZE, 0);
-
-  if ((return_val= grant_load(thd, tables)))
+  /*
+    tables[2].table i.e. procs_priv can be null if we are working with
+    pre 4.1 privilage tables
+  */
+  if ((return_val= (grant_load(thd, tables) ||
+                    (tables[2].table != NULL &&
+                     grant_reload_procs_priv(thd, &tables[2])))
+     ))
   {                                             // Error. Revert to old hash
     DBUG_PRINT("error",("Reverting to old privileges"));
-    grant_free();                               /* purecov: deadcode */
+    my_hash_free(&column_priv_hash);
+    free_root(&memex,MYF(0));
     column_priv_hash= old_column_priv_hash;     /* purecov: deadcode */
     memex= old_mem;                             /* purecov: deadcode */
   }
   else
-  {
+  {                                             //Reload successful
     my_hash_free(&old_column_priv_hash);
     free_root(&old_mem,MYF(0));
+    grant_version++;
   }
-
-  LOCK_grant.wrunlock();
-
-  close_acl_tables(thd);
-
-  /*
-    It is OK failing to load procs_priv table because we may be
-    working with 4.1 privilege tables.
-  */
-  if (grant_reload_procs_priv(thd))
-    return_val= 1;
-
-  LOCK_grant.wrlock();
-  grant_version++;
   LOCK_grant.wrunlock();
 
 end:
@@ -2506,7 +2628,8 @@ void acl_update_user(const char *user, const char *host,
                      const LEX_CSTRING &plugin,
                      const LEX_CSTRING &auth,
 		     MYSQL_TIME password_change_time,
-                     LEX_ALTER password_life)
+                     LEX_ALTER password_life,
+                     ulong what_is_set)
 {
   DBUG_ENTER("acl_update_user");
   mysql_mutex_assert_owner(&acl_cache->lock);
@@ -2561,7 +2684,9 @@ void acl_update_user(const char *user, const char *host,
                                    strdup_root(&global_acl_memory, x509_subject) : 0);
         }
         /* update details related to password lifetime, password expiry */
-        acl_user->password_expired= password_life.update_password_expired_column;
+        if (password_life.update_password_expired_column ||
+            what_is_set & PLUGIN_ATTR)
+          acl_user->password_expired= password_life.update_password_expired_column;
         if (!password_life.update_password_expired_column)
         {
           if (!password_life.use_default_password_lifetime)
@@ -2669,6 +2794,8 @@ void acl_insert_user(const char *user, const char *host,
 
 void acl_update_proxy_user(ACL_PROXY_USER *new_value, bool is_revoke)
 {
+  mysql_mutex_assert_owner(&acl_cache->lock);
+
   DBUG_ENTER("acl_update_proxy_user");
   for (ACL_PROXY_USER *acl_user= acl_proxy_users->begin();
        acl_user != acl_proxy_users->end(); ++acl_user)
@@ -2775,7 +2902,8 @@ void get_mqh(const char *user, const char *host, USER_CONN *uc)
   Update the security context when updating the user
 
   Helper function.
-  Update only if the security context is pointing to the same user.
+  Update only if the security context is pointing to the same user and
+  the user is not a proxied user for a different proxy user.
   And return true if the update happens (i.e. we're operating on the
   user account of the current user).
   Normalize the names for a safe compare.
@@ -2792,6 +2920,12 @@ update_sctx_cache(Security_context *sctx, ACL_USER *acl_user_ptr, bool expired)
   const char *acl_user= acl_user_ptr->user;
   const char *sctx_user= sctx->priv_user().str;
   const char *sctx_host= sctx->priv_host().str;
+
+  /* If the user is connected as a proxied user, verify against proxy user */
+  if (sctx->proxy_user().str && *sctx->proxy_user().str != '\0')
+  {
+    sctx_user = sctx->user().str;
+  }
 
   if (!acl_host)
     acl_host= "";

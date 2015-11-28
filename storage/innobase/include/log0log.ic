@@ -1,6 +1,6 @@
 /*****************************************************************************
 
-Copyright (c) 1995, 2014, Oracle and/or its affiliates. All Rights Reserved.
+Copyright (c) 1995, 2015, Oracle and/or its affiliates. All Rights Reserved.
 
 This program is free software; you can redistribute it and/or modify it under
 the terms of the GNU General Public License as published by the Free Software
@@ -26,6 +26,7 @@ Created 12/9/1995 Heikki Tuuri
 #include "os0file.h"
 #include "mach0data.h"
 #include "srv0mon.h"
+#include "srv0srv.h"
 #include "ut0crc32.h"
 
 #ifdef UNIV_LOG_LSN_DEBUG
@@ -198,14 +199,14 @@ log_block_calc_checksum(
 {
 	return(log_checksum_algorithm_ptr(block));
 }
-/************************************************************//**
-Calculates the checksum for a log block using the default InnoDB algorithm.
-@return	checksum */
+
+/** Calculate the checksum for a log block using the pre-5.7.9 algorithm.
+@param[in]	block	log block
+@return		checksum */
 UNIV_INLINE
 ulint
-log_block_calc_checksum_innodb(
-/*===========================*/
-	const byte*	block)	/*!< in: log block */
+log_block_calc_checksum_format_0(
+	const byte*	block)
 {
 	ulint	sum;
 	ulint	sh;
@@ -228,26 +229,24 @@ log_block_calc_checksum_innodb(
 	return(sum);
 }
 
-/************************************************************//**
-Calculates the checksum for a log block using the CRC32 algorithm.
-@return	checksum */
+/** Calculate the checksum for a log block using the MySQL 5.7 algorithm.
+@param[in]	block	log block
+@return checksum */
 UNIV_INLINE
 ulint
 log_block_calc_checksum_crc32(
-/*==========================*/
-	const byte*	block)	/*!< in: log block */
+	const byte*	block)
 {
 	return(ut_crc32(block, OS_FILE_LOG_BLOCK_SIZE - LOG_BLOCK_TRL_SIZE));
 }
 
-/************************************************************//**
-Calculates the checksum for a log block using the "no-op" algorithm.
-@return	checksum */
+/** Calculates the checksum for a log block using the "no-op" algorithm.
+@param[in]     block   log block
+@return        checksum */
 UNIV_INLINE
 ulint
 log_block_calc_checksum_none(
-/*=========================*/
-	const byte*	block)	/*!< in: log block */
+	const byte*	block)
 {
 	return(LOG_NO_CHECKSUM_MAGIC);
 }
@@ -468,6 +467,7 @@ void
 log_free_check(void)
 /*================*/
 {
+#ifdef UNIV_DEBUG
 	/* During row_log_table_apply(), this function will be called while we
 	are holding some latches. This is OK, as long as we are not holding
 	any latches on buffer blocks. */
@@ -480,10 +480,11 @@ log_free_check(void)
 		SYNC_INDEX_TREE		/* index->lock */
 	};
 
-	sync_allowed_latches check(latches,
-				   latches + sizeof(latches)/sizeof(*latches));
+	sync_allowed_latches check(
+		latches, latches + sizeof(latches)/sizeof(*latches));
 
         ut_ad(!sync_check_iterate(check));
+#endif /* UNIV_DEBUG */
 
 	if (log_sys->check_flush_or_checkpoint) {
 

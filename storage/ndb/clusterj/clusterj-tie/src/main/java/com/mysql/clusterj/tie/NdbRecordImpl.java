@@ -1,5 +1,5 @@
 /*
-   Copyright (c) 2012, 2014, Oracle and/or its affiliates. All rights reserved.
+   Copyright (c) 2012, 2015, Oracle and/or its affiliates. All rights reserved.
 
    This program is free software; you can redistribute it and/or modify
    it under the terms of the GNU General Public License as published by
@@ -26,6 +26,7 @@ import java.nio.ByteOrder;
 import java.util.ArrayList;
 import java.util.List;
 
+import com.mysql.clusterj.ClusterJDatastoreException;
 import com.mysql.clusterj.ClusterJFatalInternalException;
 import com.mysql.clusterj.ClusterJFatalUserException;
 import com.mysql.clusterj.ClusterJUserException;
@@ -43,6 +44,7 @@ import com.mysql.clusterj.tie.DbImpl.BufferManager;
 
 import com.mysql.ndbjtie.ndbapi.NdbRecord;
 import com.mysql.ndbjtie.ndbapi.NdbRecordConst;
+import com.mysql.ndbjtie.ndbapi.NdbDictionary;
 import com.mysql.ndbjtie.ndbapi.NdbDictionary.ColumnConst;
 import com.mysql.ndbjtie.ndbapi.NdbDictionary.Dictionary;
 import com.mysql.ndbjtie.ndbapi.NdbDictionary.IndexConst;
@@ -93,7 +95,10 @@ public class NdbRecordImpl {
     /** The NdbIndex, which will be null for complete-table instances */
     IndexConst indexConst = null;
 
-    /** The size of the buffer for this NdbRecord */
+    /** The name of this NdbRecord; table name + index name */
+    String name;
+
+    /** The size of the buffer for this NdbRecord, set during analyzeColumns */
     protected int bufferSize;
 
     /** The maximum column id for this NdbRecord */
@@ -129,12 +134,21 @@ public class NdbRecordImpl {
     /** Number of columns for this NdbRecord */
     private int numberOfTableColumns;
 
+    /** ByteBuffer pool for new records, created during createNdbRecord once the buffer size is known */
+    private FixedByteBufferPoolImpl bufferPool = null;
+
     /** These fields are only used during construction of the RecordSpecificationArray */
     int offset = 0;
     int nullablePosition = 0;
     byte[] defaultValues;
 
     private int[] recordSpecificationIndexes = null;
+
+    /** The autoincrement column or null if none */
+    private Column autoIncrementColumn;
+
+    /** The function to handle setting autoincrement values */
+    private AutoIncrementValueSetter autoIncrementValueSetter;
 
     /** Constructor for table operations.
      * 
@@ -144,6 +158,7 @@ public class NdbRecordImpl {
     protected NdbRecordImpl(Table storeTable, Dictionary ndbDictionary) {
         this.ndbDictionary = ndbDictionary;
         this.tableConst = getNdbTable(storeTable.getName());
+        this.name = storeTable.getName();
         this.numberOfTableColumns = tableConst.getNoOfColumns();
         this.recordSpecificationArray = RecordSpecificationArray.create(numberOfTableColumns);
         recordSpecificationIndexes = new int[numberOfTableColumns];
@@ -152,6 +167,10 @@ public class NdbRecordImpl {
         this.nullbitBitInByte = new int[numberOfTableColumns];
         this.nullbitByteOffset = new int[numberOfTableColumns];
         this.storeColumns = new Column[numberOfTableColumns];
+        this.autoIncrementColumn = storeTable.getAutoIncrementColumn();
+        if (this.autoIncrementColumn != null) {
+            chooseAutoIncrementValueSetter();
+        }
         this.ndbRecord = createNdbRecord(storeTable, ndbDictionary);
         if (logger.isDetailEnabled()) logger.detail(storeTable.getName() + " " + dumpDefinition());
         initializeDefaultBuffer();
@@ -168,6 +187,7 @@ public class NdbRecordImpl {
         this.ndbDictionary = ndbDictionary;
         this.tableConst = getNdbTable(storeTable.getName());
         this.indexConst = getNdbIndex(storeIndex.getInternalName(), tableConst.getName());
+        this.name = storeTable.getName() + ":" + storeIndex.getInternalName();
         this.numberOfTableColumns = tableConst.getNoOfColumns();
         int numberOfIndexColumns = this.indexConst.getNoOfColumns();
         this.recordSpecificationArray = RecordSpecificationArray.create(numberOfIndexColumns);
@@ -189,7 +209,7 @@ public class NdbRecordImpl {
     private void initializeDefaultBuffer() {
         // create the default value for the buffer: null values or zeros for all columns
         defaultValues = new byte[bufferSize];
-        ByteBuffer zeros = ByteBuffer.allocateDirect(bufferSize);
+        ByteBuffer zeros = bufferPool.borrowBuffer();
         zeros.order(ByteOrder.nativeOrder());
         // just to be sure, initialize with zeros
         zeros.put(defaultValues);
@@ -203,6 +223,7 @@ public class NdbRecordImpl {
         zeros.position(0);
         zeros.limit(bufferSize);
         zeros.get(defaultValues);
+        bufferPool.returnBuffer(zeros);
         // default values is now immutable and can be used thread-safe
     }
 
@@ -211,9 +232,19 @@ public class NdbRecordImpl {
      * @return a new byte buffer for use with this NdbRecord.
      */
     protected ByteBuffer newBuffer() {
-        ByteBuffer result = ByteBuffer.allocateDirect(bufferSize);
+        ByteBuffer result = bufferPool.borrowBuffer();
         initializeBuffer(result);
         return result;
+    }
+
+    /** Return the buffer to the buffer pool */
+    protected void returnBuffer(ByteBuffer buffer) {
+        bufferPool.returnBuffer(buffer);
+    }
+
+    /** Check the NdbRecord buffer guard */
+    protected void checkGuard(ByteBuffer buffer, String where) {
+        bufferPool.checkGuard(buffer, where);
     }
 
     /** Initialize an already-allocated buffer with default values for all columns.
@@ -222,10 +253,9 @@ public class NdbRecordImpl {
      */
     protected void initializeBuffer(ByteBuffer buffer) {
         buffer.order(ByteOrder.nativeOrder());
-        buffer.limit(bufferSize);
-        buffer.position(0);
+        buffer.clear();
         buffer.put(defaultValues);
-        buffer.position(0);
+        buffer.clear();
     }
 
     public int setNull(ByteBuffer buffer, Column storeColumn) {
@@ -257,9 +287,7 @@ public class NdbRecordImpl {
         int columnId = storeColumn.getColumnId();
         int newPosition = offsets[columnId];
         buffer.position(newPosition);
-        // TODO provide the buffer to Utility.convertValue to avoid copying
-        ByteBuffer bigIntegerBuffer = Utility.convertValue(storeColumn, value);
-        buffer.put(bigIntegerBuffer);
+        Utility.convertValue(buffer, storeColumn, value);
         buffer.limit(bufferSize);
         buffer.position(0);
         return columnId;
@@ -302,9 +330,7 @@ public class NdbRecordImpl {
         int columnId = storeColumn.getColumnId();
         int newPosition = offsets[columnId];
         buffer.position(newPosition);
-        // TODO provide the buffer to Utility.convertValue to avoid copying
-        ByteBuffer decimalBuffer = Utility.convertValue(storeColumn, value);
-        buffer.put(decimalBuffer);
+        Utility.convertValue(buffer, storeColumn, value);
         return columnId;
     }
 
@@ -667,6 +693,14 @@ public class NdbRecordImpl {
         // create the NdbRecord
         NdbRecord result = ndbDictionary.createRecord(indexConst, tableConst, recordSpecificationArray,
                 columnNames.length, SIZEOF_RECORD_SPECIFICATION, 0);
+        int rowLength = NdbDictionary.getRecordRowLength(result);
+        // create the buffer pool now that the size of the record is known
+        if (this.bufferSize < rowLength) {
+            logger.warn("NdbRecordImpl.createNdbRecord rowLength for " + this.name + " is " + rowLength +
+                    " but we only allocate length of " + this.bufferSize);
+            this.bufferSize = rowLength;
+        }
+        bufferPool = new FixedByteBufferPoolImpl(this.bufferSize, this.name);
         // delete the RecordSpecificationArray since it is no longer needed
         RecordSpecificationArray.delete(recordSpecificationArray);
         handleError(result, ndbDictionary);
@@ -681,6 +715,14 @@ public class NdbRecordImpl {
         // create the NdbRecord
         NdbRecord result = ndbDictionary.createRecord(tableConst, recordSpecificationArray,
                 columnNames.length, SIZEOF_RECORD_SPECIFICATION, 0);
+        int rowLength = NdbDictionary.getRecordRowLength(result);
+        // create the buffer pool now that the size of the record is known
+        if (this.bufferSize < rowLength) {
+            logger.warn("NdbRecordImpl.createNdbRecord rowLength for " + this.name + " is " + rowLength +
+                    " but we only allocate length of " + this.bufferSize);
+            this.bufferSize = rowLength;
+        }
+        bufferPool = new FixedByteBufferPoolImpl(this.bufferSize, this.name);
         // delete the RecordSpecificationArray since it is no longer needed
         RecordSpecificationArray.delete(recordSpecificationArray);
         handleError(result, ndbDictionary);
@@ -919,6 +961,8 @@ public class NdbRecordImpl {
             if (logger.isDebugEnabled())logger.debug("Releasing NdbRecord for " + tableConst.getName());
             ndbDictionary.releaseRecord(ndbRecord);
             ndbRecord = null;
+            // release the buffer pool; pooled byte buffers will be garbage collected
+            this.bufferPool = null;
         }
     }
 
@@ -930,4 +974,95 @@ public class NdbRecordImpl {
         return storeColumns[columnId].isLob();
     }
 
+    public void setAutoIncrementValue(ByteBuffer valueBuffer, long value) {
+        autoIncrementValueSetter.set(valueBuffer, value);
+    }
+
+    /** Choose the appropriate autoincrement value setter based on the column type.
+     * This is done once during construction when the autoincrement column is known.
+     */
+    private void chooseAutoIncrementValueSetter() {
+        switch (autoIncrementColumn.getType()) {
+            case Int:
+            case Unsigned:
+                logger.debug("chooseAutoIncrementValueSetter autoIncrementValueSetterInt.");
+                autoIncrementValueSetter = autoIncrementValueSetterInt;
+                break;
+            case Bigint:
+            case Bigunsigned:
+                logger.debug("chooseAutoIncrementValueSetter autoIncrementValueSetterBigint.");
+                autoIncrementValueSetter = autoIncrementValueSetterLong;
+                break;
+            case Smallint:
+            case Smallunsigned:
+                logger.debug("chooseAutoIncrementValueSetter autoIncrementValueSetterSmallint.");
+                autoIncrementValueSetter = autoIncrementValueSetterShort;
+                break;
+            case Tinyint:
+            case Tinyunsigned:
+                logger.debug("chooseAutoIncrementValueSetter autoIncrementValueSetterTinyint.");
+                autoIncrementValueSetter = autoIncrementValueSetterByte;
+                break;
+            default: 
+                logger.error("chooseAutoIncrementValueSetter undefined.");
+                autoIncrementValueSetter = autoIncrementValueSetterError;
+                throw new ClusterJFatalInternalException(local.message("ERR_Unsupported_AutoIncrement_Column_Type",
+                        autoIncrementColumn.getType(), autoIncrementColumn.getName(), tableConst.getName()));
+        }
+    }
+
+    protected interface AutoIncrementValueSetter {
+        void set(ByteBuffer valueBuffer, long value);
+    }
+
+    protected AutoIncrementValueSetter autoIncrementValueSetterError = new AutoIncrementValueSetter() {
+        public void set(ByteBuffer valueBuffer, long value) {
+            throw new ClusterJFatalInternalException(local.message("ERR_No_AutoIncrement_Column",
+                    tableConst.getName()));
+        }
+    };
+
+    protected AutoIncrementValueSetter autoIncrementValueSetterInt = new AutoIncrementValueSetter() {
+        public void set(ByteBuffer valueBuffer, long value) {
+            if (logger.isDetailEnabled()) logger.detail("autoincrement set value: " + value);
+            if (value < 0 || value > Integer.MAX_VALUE) {
+                throw new ClusterJDatastoreException(local.message("ERR_AutoIncrement_Value_Out_Of_Range",
+                        value, autoIncrementColumn.getName(), tableConst.getName()));
+            }
+            setInt(valueBuffer, autoIncrementColumn, (int)value);
+        }
+    };
+
+    protected AutoIncrementValueSetter autoIncrementValueSetterLong = new AutoIncrementValueSetter() {
+        public void set(ByteBuffer valueBuffer, long value) {
+            if (logger.isDetailEnabled()) logger.detail("autoincrement set value: " + value);
+            if (value < 0) {
+                throw new ClusterJDatastoreException(local.message("ERR_AutoIncrement_Value_Out_Of_Range",
+                        value, autoIncrementColumn.getName(), tableConst.getName()));
+            }
+            setLong(valueBuffer, autoIncrementColumn, value);
+        }
+    };
+
+    protected AutoIncrementValueSetter autoIncrementValueSetterShort = new AutoIncrementValueSetter() {
+        public void set(ByteBuffer valueBuffer, long value) {
+            if (logger.isDetailEnabled()) logger.detail("autoincrement set value: " + value);
+            if (value < 0 || value > Short.MAX_VALUE) {
+                throw new ClusterJDatastoreException(local.message("ERR_AutoIncrement_Value_Out_Of_Range",
+                        value, autoIncrementColumn.getName(), tableConst.getName()));
+            }
+            setShort(valueBuffer, autoIncrementColumn, (short)value);
+        }
+    };
+
+    protected AutoIncrementValueSetter autoIncrementValueSetterByte = new AutoIncrementValueSetter() {
+        public void set(ByteBuffer valueBuffer, long value) {
+            if (logger.isDetailEnabled()) logger.detail("autoincrement set value: " + value);
+            if (value < 0 || value > Byte.MAX_VALUE) {
+                throw new ClusterJDatastoreException(local.message("ERR_AutoIncrement_Value_Out_Of_Range",
+                        value, autoIncrementColumn.getName(), tableConst.getName()));
+            }
+            setByte(valueBuffer, autoIncrementColumn, (byte)value);
+        }
+    };
 }
