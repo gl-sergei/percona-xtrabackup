@@ -218,6 +218,8 @@ EOF
 ########################################################################
 function cleanup_on_exit()
 {
+    cat ${RESULTS_DIR}/*
+
     kill_servers $TEST_VAR_ROOT
 
     remove_var_dirs
@@ -812,6 +814,7 @@ else
    tests="t/*.sh"
 fi
 
+export RESULTS_DIR="$PWD/results"
 export OUTFILE="$PWD/results/setup"
 
 rm -rf results
