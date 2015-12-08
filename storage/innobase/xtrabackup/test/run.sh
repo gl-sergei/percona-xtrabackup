@@ -218,7 +218,7 @@ EOF
 ########################################################################
 function cleanup_on_exit()
 {
-    cat ${RESULTS_DIR}/*
+    cat ${RESULTS_DIR}/* 1>&2
 
     kill_servers $TEST_VAR_ROOT
 
