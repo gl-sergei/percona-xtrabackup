@@ -63,6 +63,8 @@ function call_mysql_install_db()
             exit -1
         fi
 
+        mkdir ${MYSQLD_DATADIR}/test
+
         cd - >/dev/null 2>&1
 }
 
@@ -314,9 +316,11 @@ log-bin=mysql-bin
 relay-log=mysql-relay-bin
 pid-file=${MYSQLD_PIDFILE}
 replicate-ignore-db=mysql
+replicate-ignore-db=performance_schema
+replicate-ignore-db=sys
 innodb_log_file_size=48M
 ${MYSQLD_EXTRA_MY_CNF_OPTS:-}
-core-file
+#core-file
 
 [client]
 socket=${MYSQLD_SOCKET}

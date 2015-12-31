@@ -49,6 +49,7 @@ Created 9/20/1997 Heikki Tuuri
 #include "trx0undo.h"
 #include "trx0rec.h"
 #include "fil0fil.h"
+#include "fsp0types.h"
 #include "buf0rea.h"
 #include "srv0srv.h"
 #include "srv0start.h"
@@ -220,6 +221,16 @@ fil_name_process(
 	ulint	space_id,
 	bool	deleted)
 {
+	/* store remote tablespaces inside the backup directory */
+
+	if (*name == '/') {
+		char* name_beg = name;
+		name = strrchr(name, '/') - 1;
+		while (name > name_beg && *(name - 1) != '/') {
+			--name;
+		}
+	}
+
 	/* We will also insert space=NULL into the map, so that
 	further checks can ensure that a MLOG_FILE_NAME record was
 	scanned before applying any page records for the space_id. */
@@ -350,17 +361,13 @@ fil_name_parse(
 	mlog_id_t	type,
 	bool		apply)
 {
-#ifdef UNIV_HOTBACKUP
 	ulint		flags	= 0;
-#endif /* UNIV_HOTBACKUP */
 
 	if (type == MLOG_FILE_CREATE2) {
 		if (end < ptr + 4) {
 			return(NULL);
 		}
-#ifdef UNIV_HOTBACKUP
 		flags = mach_read_from_4(ptr);
-#endif /* UNIV_HOTBACKUP */
 		ptr += 4;
 	}
 
@@ -403,14 +410,12 @@ fil_name_parse(
 		}
 		fil_name_process(
 			reinterpret_cast<char*>(ptr), len, space_id, true);
-#if 1
 		if (apply && recv_replay_file_ops
 		    && fil_space_get(space_id)) {
 			dberr_t	err = fil_delete_tablespace(
 				space_id, BUF_REMOVE_FLUSH_NO_WRITE);
 			ut_a(err == DB_SUCCESS);
 		}
-#endif /* UNIV_HOTBACKUP */
 		break;
 	case MLOG_FILE_CREATE2:
 #ifdef UNIV_HOTBACKUP
@@ -456,11 +461,9 @@ fil_name_parse(
 		if (!apply) {
 			break;
 		}
-#ifdef UNIV_HOTBACKUP
 		if (!recv_replay_file_ops) {
 			break;
 		}
-#endif /* UNIV_HOTBACKUP */
 
 		if (!fil_op_replay_rename(
 			    space_id, first_page_no,
@@ -3452,6 +3455,8 @@ static
 dberr_t
 recv_init_missing_space(dberr_t err, const recv_spaces_t::const_iterator& i)
 {
+	/* It is OK for XtraBackup if tablespace is missing */
+#if 0
 	if (srv_force_recovery == 0) {
 		ib::error() << "Tablespace " << i->first << " was not"
 			" found at " << i->second.name << ".";
@@ -3470,6 +3475,9 @@ recv_init_missing_space(dberr_t err, const recv_spaces_t::const_iterator& i)
 	}
 
 	return(err);
+#endif
+
+	return(DB_SUCCESS);
 }
 
 UNIV_INTERN

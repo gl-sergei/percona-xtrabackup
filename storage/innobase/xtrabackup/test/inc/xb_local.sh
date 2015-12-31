@@ -19,6 +19,8 @@ load_dbase_data sakila
 xtrabackup_options=${xtrabackup_options:-""}
 xtrabackup_options="${xtrabackup_options} --no-timestamp"
 
+[ -d ${mysql_datadir}/test ] || mkdir ${mysql_datadir}/test
+
 # Take backup
 backup_dir=${topdir}/backup
 xtrabackup $xtrabackup_options --backup --target-dir=$backup_dir

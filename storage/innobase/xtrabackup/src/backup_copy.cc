@@ -1514,6 +1514,8 @@ copy_back()
 	}
 	innobase_data_file_path_copy = strdup(innobase_data_file_path);
 
+	srv_sys_space.set_path(".");
+
 	if (!srv_sys_space.parse_params(innobase_data_file_path,
 				true, false)) {
 		msg("syntax error in innodb_data_file_path\n");

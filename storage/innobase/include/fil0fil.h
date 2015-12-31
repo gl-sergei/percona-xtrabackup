@@ -1668,6 +1668,25 @@ void fil_no_punch_hole(fil_node_t* node);
 void test_make_filepath();
 #endif /* UNIV_ENABLE_UNIT_TEST_MAKE_FILEPATH */
 
+/*******************************************************************//**
+Returns TRUE if a single-table tablespace exists in the memory cache.
+@return	TRUE if exists */
+// static
+ibool
+fil_tablespace_exists_in_mem(
+/*=========================*/
+	ulint	id);	/*!< in: space id */
+
+/*******************************************************************//**
+Checks if a single-table tablespace for a given table name exists in the
+tablespace memory cache.
+@return	space id, ULINT_UNDEFINED if not found */
+ulint
+fil_get_space_id_for_table(
+/*=======================*/
+	const char*	tablename);	/*!< in: table name in the standard
+				'databasename/tablename' format */
+
 #ifndef UNIV_NONINL
 #include "fil0fil.ic"
 #endif

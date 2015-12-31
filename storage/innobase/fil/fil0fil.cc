@@ -2287,7 +2287,6 @@ fil_recreate_tablespace(
 /*******************************************************************//**
 Returns TRUE if a single-table tablespace exists in the memory cache.
 @return	TRUE if exists */
-static
 ibool
 fil_tablespace_exists_in_mem(
 /*=========================*/
