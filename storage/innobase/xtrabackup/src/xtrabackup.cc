@@ -1665,7 +1665,7 @@ innodb_init_param(void)
 	msg("xtrabackup:   innodb_log_group_home_dir = %s\n",
 	    srv_log_group_home_dir);
 
-	os_normalize_path_for_win(srv_log_group_home_dir);
+	os_normalize_path(srv_log_group_home_dir);
 
 	if (strchr(srv_log_group_home_dir, ';')) {
 
@@ -3090,7 +3090,7 @@ xb_load_single_table_tablespaces(bool (*pred)(const char*, const char*))
 		}
 		ut_snprintf(dbpath, dbpath_len,
 			    "%s/%s", fil_path_to_mysql_datadir, dbinfo.name);
-		os_normalize_path_for_win(dbpath);
+		os_normalize_path(dbpath);
 
 		/* We want wrong directory permissions to be a fatal error for
 		XtraBackup. */
@@ -3638,7 +3638,7 @@ open_or_create_log_file(
 
 	*log_file_created = FALSE;
 
-	os_normalize_path_for_win(srv_log_group_home_dir);
+	os_normalize_path(srv_log_group_home_dir);
 
 	dirnamelen = strlen(srv_log_group_home_dir);
 	ut_a(dirnamelen < (sizeof name) - 10 - sizeof "ib_logfile");
@@ -4483,7 +4483,7 @@ xtrabackup_stats_func(void)
 		snprintf(logname, sizeof(logname), "%s%c%s%lu",
 			srv_log_group_home_dir, OS_PATH_SEPARATOR,
 			"ib_logfile", (ulong) n);
-		os_normalize_path_for_win(logname);
+		os_normalize_path(logname);
 
 		if (!os_file_status(logname, &exists, &type) || !exists ||
 		    type != OS_FILE_TYPE_FILE) {
@@ -4711,8 +4711,8 @@ xtrabackup_init_temp_log(void)
 			XB_LOG_FILENAME);
 	}
 
-	os_normalize_path_for_win(dst_path);
-	os_normalize_path_for_win(src_path);
+	os_normalize_path(dst_path);
+	os_normalize_path(src_path);
 retry:
 	src_file = os_file_create_simple_no_error_handling(0, src_path,
 							   OS_FILE_OPEN,
@@ -5210,12 +5210,12 @@ xb_delta_open_matching_space(
 	if (dbname) {
 		snprintf(dest_dir, FN_REFLEN, "%s/%s",
 			xtrabackup_target_dir, dbname);
-		os_normalize_path_for_win(dest_dir);
+		os_normalize_path(dest_dir);
 
 		snprintf(dest_space_name, FN_REFLEN, "%s/%s", dbname, name);
 	} else {
 		snprintf(dest_dir, FN_REFLEN, "%s", xtrabackup_target_dir);
-		os_normalize_path_for_win(dest_dir);
+		os_normalize_path(dest_dir);
 
 		snprintf(dest_space_name, FN_REFLEN, "%s", name);
 	}
@@ -5223,7 +5223,7 @@ xb_delta_open_matching_space(
 	snprintf(real_name, real_name_len,
 		 "%s/%s",
 		 xtrabackup_target_dir, dest_space_name);
-	os_normalize_path_for_win(real_name);
+	os_normalize_path(real_name);
 	/* Truncate ".ibd" */
 	dest_space_name[strlen(dest_space_name) - 4] = '\0';
 
@@ -5427,9 +5427,9 @@ xtrabackup_apply_delta(
 		goto error;
 	}
 
-	os_normalize_path_for_win(dst_path);
-	os_normalize_path_for_win(src_path);
-	os_normalize_path_for_win(meta_path);
+	os_normalize_path(dst_path);
+	os_normalize_path(src_path);
+	os_normalize_path(meta_path);
 
 	if (!xb_read_delta_metadata(meta_path, &info)) {
 		goto error;
@@ -5700,7 +5700,7 @@ next_file_item_1:
 
 		sprintf(dbpath, "%s/%s", path,
 								dbinfo.name);
-		os_normalize_path_for_win(dbpath);
+		os_normalize_path(dbpath);
 
 		dbdir = os_file_opendir(dbpath, false);
 
@@ -5785,8 +5785,8 @@ xtrabackup_close_temp_log(my_bool clear_flag)
 			XB_LOG_FILENAME);
 	}
 
-	os_normalize_path_for_win(dst_path);
-	os_normalize_path_for_win(src_path);
+	os_normalize_path(dst_path);
+	os_normalize_path(src_path);
 
 	success = os_file_rename(0, dst_path, src_path);
 	if (!success) {
@@ -6583,7 +6583,7 @@ skip_check:
 				n_index++;
 			}
 
-			os_normalize_path_for_win(info_file_path);
+			os_normalize_path(info_file_path);
 			info_file = os_file_create(
 				0,
 				info_file_path,

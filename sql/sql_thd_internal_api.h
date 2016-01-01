@@ -23,8 +23,12 @@
 */
 
 #include "my_global.h"
+#include "my_thread.h"
+#include "mysql/psi/psi.h"
 
 class THD;
+
+#ifdef HAVE_PSI_INTERFACE
 
 /**
   Set up various THD data for a new connection
@@ -32,8 +36,9 @@ class THD;
   @param              thd            THD object
   @param              stack_start    Start of stack for connection
   @param              bound          True if bound to a physical thread.
+  @param              psi_key        Instrumentation key for the thread.
 */
-int thd_init(THD *thd, char *stack_start, bool bound);
+int thd_init(THD *thd, char *stack_start, bool bound, PSI_thread_key psi_key);
 
 /**
   Create a THD and do proper initialization of it.
@@ -41,6 +46,7 @@ int thd_init(THD *thd, char *stack_start, bool bound);
   @param enable_plugins     Should dynamic plugin support be enabled?
   @param background_thread  Is this a background thread?
   @param bound              True if bound to a physical thread.
+  @param psi_key            Instrumentation key for the thread.
 
   @note Dynamic plugin support is only possible for THDs that
         are created after the server has initialized properly.
@@ -49,7 +55,9 @@ int thd_init(THD *thd, char *stack_start, bool bound);
         SHOW PROCESSLIST and the server will not wait for them to
         terminate during shutdown.
 */
-THD *create_thd(bool enable_plugins, bool background_thread, bool bound);
+THD *create_thd(bool enable_plugins, bool background_thread, bool bound, PSI_thread_key psi_key);
+
+#endif /*HAVE_PSI_INTERFACE*/
 
 /**
   Cleanup the THD object, remove it from the global list of THDs

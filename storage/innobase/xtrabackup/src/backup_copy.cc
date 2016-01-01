@@ -258,7 +258,7 @@ datadir_iter_next_database(datadir_iter_t *it)
 		ut_snprintf(it->dbpath, it->dbpath_len,
 			    "%s/%s", it->datadir_path,
 			    it->dbinfo.name);
-		os_normalize_path_for_win(it->dbpath);
+		os_normalize_path(it->dbpath);
 
 		if (it->dbinfo.type == OS_FILE_TYPE_FILE) {
 			it->is_file = true;
