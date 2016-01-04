@@ -646,9 +646,8 @@ fil_name_parse(
 		for other redo log records are not broken even for dirty
 		tablespaces during apply log */
 		if (!recv_is_making_a_backup) {
-			recv_spaces.insert(std::make_pair(space_id,
-						file_name_t(abs_file_path,
-						false)));
+			fil_name_process(
+				name, len, space_id, false);
 		}
 		break;
 	case MLOG_FILE_DELETE:
@@ -658,9 +657,6 @@ fil_name_parse(
 		if (recv_is_making_a_backup)
 			break;
 
-		fil_name_process(
-			name, len, space_id, true);
-
 		if (apply && recv_replay_file_ops
 			&& fil_space_get(space_id)) {
 			dberr_t	err = fil_delete_tablespace(
@@ -668,11 +664,16 @@ fil_name_parse(
 			ut_a(err == DB_SUCCESS);
 		}
 
+		fil_name_process(
+			name, len, space_id, true);
+
 		break;
 	case MLOG_FILE_CREATE2:
 		if (recv_is_making_a_backup
 		    || (!recv_replay_file_ops)
+#if 0
 		    || (is_intermediate_file(abs_file_path.c_str()))
+#endif
 		    || (fil_space_get(space_id))
 		    || (fil_space_get_id_by_name(
 				tablespace_name.c_str()) != ULINT_UNDEFINED)) {
@@ -731,8 +732,11 @@ fil_name_parse(
 
 		if (recv_is_making_a_backup
 		    || (!recv_replay_file_ops)
+#if 0
 		    || (is_intermediate_file(name))
-		    || (is_intermediate_file(new_table))) {
+		    || (is_intermediate_file(new_table))
+#endif
+		    ) {
 			/* Don't rename table while :-
 			1. scanning the redo logs during backup
 			2. apply-log on a partial backup

@@ -1561,8 +1561,7 @@ innodb_init_param(void)
 
 	/* It's better to use current lib, to keep paths short */
 	current_dir[0] = FN_CURLIB;
-	current_dir[1] = FN_LIBCHAR;
-	current_dir[2] = 0;
+	current_dir[1] = 0;
 	default_path = current_dir;
 
 	ut_a(default_path);
