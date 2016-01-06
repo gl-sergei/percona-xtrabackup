@@ -6336,7 +6336,9 @@ skip_check:
 	srv_page_size_shift = 14;
 	srv_page_size = (1 << srv_page_size_shift);
 	sync_check_init();
+#ifdef UNIV_DEBUG
 	sync_check_enable();
+#endif
 	os_thread_init();
 	// os_io_init_simple();
 	trx_pool_init();
@@ -6678,7 +6680,9 @@ next_node:
 
 	/* re-init necessary components */
 	sync_check_init();
+#ifdef UNIV_DEBUG
 	sync_check_enable();
+#endif
 	/* Reset the system variables in the recovery module. */
 	os_thread_init();
 	trx_pool_init();
