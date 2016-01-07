@@ -6950,7 +6950,9 @@ int main(int argc, char **argv)
 			}
 		}
 	}
-	load_defaults("my", xb_load_default_groups, &argc, &argv);
+	if (load_defaults("my", xb_load_default_groups, &argc, &argv)) {
+		exit(EXIT_FAILURE);
+	}
         argv_defaults = argv;
 
 	print_param_str <<
