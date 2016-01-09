@@ -52,6 +52,7 @@ Created 3/26/1996 Heikki Tuuri
 #include "ut0new.h"
 #include "ut0pool.h"
 #include "ut0vec.h"
+#include "xb0xb.h"
 
 #include <set>
 #include <new>
@@ -1009,8 +1010,13 @@ trx_lists_init_at_db_start(void)
 
 	for (ulint i = 0; i < TRX_SYS_N_RSEGS; ++i) {
 		trx_undo_t*	undo;
-		trx_rseg_t*	rseg = trx_sys->rseg_array[i];
-		// trx_rseg_t*	rseg = trx_rseg_get_on_id(i, true);
+		trx_rseg_t*	rseg;
+
+		if (redo_log_version == REDO_LOG_V0) {
+			rseg = trx_rseg_get_on_id(i, true);
+		} else {
+			rseg = trx_sys->rseg_array[i];
+		}
 
 		/* At this stage non-redo rseg slots are all NULL as they are
 		re-created on server start and existing slots are not read. */

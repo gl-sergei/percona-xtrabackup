@@ -2512,49 +2512,22 @@ innodb_log_checksum_func_update(
 	switch (algorithm) {
 	case SRV_CHECKSUM_ALGORITHM_STRICT_INNODB:
 	case SRV_CHECKSUM_ALGORITHM_INNODB:
-		// TODO: fix it once we support old algorithms
-		log_checksum_algorithm_ptr=log_block_calc_checksum_none;
+		log_checksum_algorithm_ptr = log_block_calc_checksum_innodb;
+		innodb_log_checksums = TRUE;
 		break;
 	case SRV_CHECKSUM_ALGORITHM_STRICT_CRC32:
 	case SRV_CHECKSUM_ALGORITHM_CRC32:
 		log_checksum_algorithm_ptr=log_block_calc_checksum_crc32;
+		innodb_log_checksums = TRUE;
 		break;
 	case SRV_CHECKSUM_ALGORITHM_STRICT_NONE:
 	case SRV_CHECKSUM_ALGORITHM_NONE:
 		log_checksum_algorithm_ptr=log_block_calc_checksum_none;
+		innodb_log_checksums = TRUE;
 		break;
 	default:
 		ut_a(0);
 	}
-}
-
-/****************************************************************//**
-On update hook for the innodb_log_checksum_algorithm variable. */
-static
-void
-innodb_log_checksum_algorithm_update(
-/*=================================*/
-	THD*				thd,	/*!< in: thread handle */
-	struct st_mysql_sys_var*	var,	/*!< in: pointer to
-						system variable */
-	void*				var_ptr,/*!< out: where the
-						formal string goes */
-	const void*			save)	/*!< in: immediate result
-						from check function */
-{
-	srv_checksum_algorithm_t	algorithm;
-
-	algorithm = (srv_checksum_algorithm_t)
-		(*static_cast<const ulong*>(save));
-
-	/* Make sure we are the only log user */
-	mutex_enter(&log_sys->mutex);
-
-	innodb_log_checksum_func_update(algorithm);
-
-	srv_log_checksum_algorithm = algorithm;
-
-	mutex_exit(&log_sys->mutex);
 }
 
 /*********************************************************************//**

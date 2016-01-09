@@ -240,6 +240,36 @@ log_block_calc_checksum_crc32(
 	return(ut_crc32(block, OS_FILE_LOG_BLOCK_SIZE - LOG_BLOCK_TRL_SIZE));
 }
 
+/** Calculates the checksum for a log block using the default InnoDB algorithm.
+@param[in]	block	log block
+@return	checksum */
+UNIV_INLINE
+ulint
+log_block_calc_checksum_innodb(
+/*===========================*/
+	const byte*	block)	/*!< in: log block */
+{
+	ulint	sum;
+	ulint	sh;
+	ulint	i;
+
+	sum = 1;
+	sh = 0;
+
+	for (i = 0; i < OS_FILE_LOG_BLOCK_SIZE - LOG_BLOCK_TRL_SIZE; i++) {
+		ulint	b = (ulint) block[i];
+		sum &= 0x7FFFFFFFUL;
+		sum += b;
+		sum += b << sh;
+		sh++;
+		if (sh > 24) {
+			sh = 0;
+		}
+	}
+
+	return(sum);
+}
+
 /** Calculates the checksum for a log block using the "no-op" algorithm.
 @param[in]     block   log block
 @return        checksum */

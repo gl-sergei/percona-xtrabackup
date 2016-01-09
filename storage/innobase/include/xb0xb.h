@@ -28,6 +28,9 @@ extern "C" {
 extern ibool srv_compact_backup;
 extern ibool srv_rebuild_indexes;
 
+typedef enum {REDO_LOG_V0, REDO_LOG_V1} redo_log_version_t;
+extern redo_log_version_t redo_log_version;
+
 /******************************************************************************
 Callback used in buf_page_io_complete() to detect compacted pages.
 @return TRUE if the page is marked as compacted, FALSE otherwise. */

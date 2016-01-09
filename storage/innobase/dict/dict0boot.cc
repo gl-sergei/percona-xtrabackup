@@ -40,6 +40,7 @@ Created 4/18/1996 Heikki Tuuri
 #include "buf0flu.h"
 #include "log0recv.h"
 #include "os0file.h"
+#include "xb0xb.h"
 
 /**********************************************************************//**
 Gets a pointer to the dictionary header and x-latches its page.
@@ -421,6 +422,8 @@ dict_boot(void)
 
 	/*-------------------------*/
 	table = dict_mem_table_create("SYS_INDEXES", DICT_HDR_SPACE,
+				      redo_log_version == REDO_LOG_V0 ?
+				      DICT_NUM_COLS__SYS_INDEXES - 1 :
 				      DICT_NUM_COLS__SYS_INDEXES, 0, 0, 0);
 
 	dict_mem_table_add_col(table, heap, "TABLE_ID", DATA_BINARY, 0, 8);
@@ -430,7 +433,10 @@ dict_boot(void)
 	dict_mem_table_add_col(table, heap, "TYPE", DATA_INT, 0, 4);
 	dict_mem_table_add_col(table, heap, "SPACE", DATA_INT, 0, 4);
 	dict_mem_table_add_col(table, heap, "PAGE_NO", DATA_INT, 0, 4);
-	dict_mem_table_add_col(table, heap, "MERGE_THRESHOLD", DATA_INT, 0, 4);
+	if (redo_log_version != REDO_LOG_V0) {
+		dict_mem_table_add_col(table, heap, "MERGE_THRESHOLD",
+				       DATA_INT, 0, 4);
+	}
 
 	table->id = DICT_INDEXES_ID;
 

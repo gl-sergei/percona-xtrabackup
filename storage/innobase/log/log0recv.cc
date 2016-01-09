@@ -1189,6 +1189,7 @@ recv_find_max_checkpoint_0(
 	return(DB_ERROR);
 }
 
+#if 0
 /** Determine if a pre-5.7.9 redo log is clean.
 @param[in]	lsn	checkpoint LSN
 @return error code
@@ -1248,6 +1249,7 @@ recv_log_format_0_recover(lsn_t lsn)
 	log_sys->next_checkpoint_no = 0;
 	return(DB_SUCCESS);
 }
+#endif
 
 /** Find the latest checkpoint in the log header.
 @param[out]	max_group	log group, or NULL
@@ -1438,7 +1440,6 @@ recv_read_checkpoint_info_for_backup(
 block.
 @param[in]	log block
 @return whether the checksum matches */
-static
 bool
 log_block_checksum_is_ok(
 	const byte*	block)	/*!< in: pointer to a log block */
@@ -4095,8 +4096,6 @@ recv_recovery_from_checkpoint_start(
 	contiguous_lsn = checkpoint_lsn;
 	switch (group->format) {
 	case 0:
-		log_mutex_exit();
-		return(recv_log_format_0_recover(checkpoint_lsn));
 	case LOG_HEADER_FORMAT_CURRENT:
 		break;
 	default:

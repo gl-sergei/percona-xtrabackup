@@ -92,6 +92,7 @@ Place, Suite 330, Boston, MA 02111-1307 USA
 #include "backup_mysql.h"
 #include "backup_copy.h"
 #include "backup_mysql.h"
+#include "xb0xb.h"
 
 /* TODO: replace with appropriate macros used in InnoDB 5.6 */
 #define PAGE_ZIP_MIN_SIZE_SHIFT	10
@@ -342,6 +343,7 @@ static longlong	innobase_log_file_size_save;
 command argument */
 bool xtrabackup_innodb_data_file_path_explicit = false;
 bool xtrabackup_innodb_log_file_size_explicit = false;
+bool innodb_log_checksum_algorithm_specified = false;
 
 /* String buffer used by --print-param to accumulate server options as they are
 parsed from the defaults file */
@@ -390,6 +392,8 @@ uint opt_safe_slave_backup_timeout = 0;
 
 const char *opt_history = NULL;
 my_bool opt_decrypt = FALSE;
+
+redo_log_version_t redo_log_version = REDO_LOG_V0;
 
 /* Simple datasink creation tracking...add datasinks in the reverse order you
 want them destroyed. */
@@ -1368,6 +1372,7 @@ xb_get_one_option(int optid,
     ut_a(srv_log_checksum_algorithm <= SRV_CHECKSUM_ALGORITHM_STRICT_NONE);
 
     ADD_PRINT_PARAM_OPT(innodb_checksum_algorithm_names[srv_log_checksum_algorithm]);
+    innodb_log_checksum_algorithm_specified = true;
     break;
 
   case OPT_INNODB_BUFFER_POOL_FILENAME:
@@ -2487,8 +2492,7 @@ xtrabackup_copy_logfile(lsn_t from_lsn, my_bool is_last)
 		ulint	no = log_block_get_hdr_no(log_block);
 		ulint	scanned_no = log_block_convert_lsn_to_no(scanned_lsn);
 		ibool	checksum_is_ok = true;
-			// TODO: handle checksums properly
-			// log_block_checksum_is_ok_or_old_format(log_block);
+			log_block_checksum_is_ok(log_block);
 
 		if (no != scanned_no && checksum_is_ok) {
 			ulint blocks_in_group;
@@ -4667,6 +4671,133 @@ end:
 
 /* ================= prepare ================= */
 
+static
+bool
+check_log_header_checksum_0(
+/*========================*/
+	const byte*	buf)	/*!< in: buffer containing checkpoint info */
+{
+	/** Offset of the first checkpoint checksum */
+	static const uint CHECKSUM_1 = 288;
+	/** Offset of the second checkpoint checksum */
+	static const uint CHECKSUM_2 = CHECKSUM_1 + 4;
+
+	if (static_cast<uint32_t>(ut_fold_binary(buf, CHECKSUM_1))
+	    != mach_read_from_4(buf + CHECKSUM_1)
+	    || static_cast<uint32_t>(
+		    ut_fold_binary(buf + LOG_CHECKPOINT_LSN,
+				   CHECKSUM_2 - LOG_CHECKPOINT_LSN))
+	    != mach_read_from_4(buf + CHECKSUM_2)) {
+		return(false);
+	}
+
+	return(true);
+}
+
+static
+bool
+check_log_checkpoint_checksum(
+/*========================*/
+	const byte*	buf)	/*!< in: buffer containing checkpoint info */
+{
+	/** Offset of the first checkpoint checksum */
+	static const uint CHECKSUM_1 = 288;
+	/** Offset of the second checkpoint checksum */
+	static const uint CHECKSUM_2 = CHECKSUM_1 + 4;
+
+	if (static_cast<uint32_t>(ut_fold_binary(buf, CHECKSUM_1))
+	    != mach_read_from_4(buf + CHECKSUM_1)
+	    || static_cast<uint32_t>(
+		    ut_fold_binary(buf + LOG_CHECKPOINT_LSN,
+				   CHECKSUM_2 - LOG_CHECKPOINT_LSN))
+	    != mach_read_from_4(buf + CHECKSUM_2)) {
+		return(false);
+	}
+
+	return(true);
+}
+
+static
+void
+update_log_temp_checkpoint_0(
+	byte*	buf,
+	lsn_t	lsn)
+{
+	/** Offset of the first checkpoint checksum */
+	static const uint CHECKSUM_1 = 288;
+	/** Offset of the second checkpoint checksum */
+	static const uint CHECKSUM_2 = CHECKSUM_1 + 4;
+	/** Most significant bits of the checkpoint offset */
+	static const uint OFFSET_HIGH32 = CHECKSUM_2 + 12;
+	/** Least significant bits of the checkpoint offset */
+	static const uint OFFSET_LOW32 = 16;
+
+	ulint		fold;
+
+	mach_write_to_8(buf + LOG_CHECKPOINT_1 + LOG_CHECKPOINT_LSN, lsn);
+	mach_write_to_4(buf + LOG_CHECKPOINT_1 + OFFSET_LOW32,
+			LOG_FILE_HDR_SIZE +
+			(lsn -
+			 ut_uint64_align_down(lsn, OS_FILE_LOG_BLOCK_SIZE)));
+	mach_write_to_4(buf + LOG_CHECKPOINT_1 + OFFSET_HIGH32, 0);
+	fold = ut_fold_binary(buf + LOG_CHECKPOINT_1, CHECKSUM_1);
+	mach_write_to_4(buf + LOG_CHECKPOINT_1 + CHECKSUM_1, fold);
+
+	fold = ut_fold_binary(buf + LOG_CHECKPOINT_1 + LOG_CHECKPOINT_LSN,
+		CHECKSUM_2 - LOG_CHECKPOINT_LSN);
+	mach_write_to_4(buf + LOG_CHECKPOINT_1 + CHECKSUM_2, fold);
+
+	mach_write_to_8(buf + LOG_CHECKPOINT_2 + LOG_CHECKPOINT_LSN, lsn);
+	mach_write_to_4(buf + LOG_CHECKPOINT_2 + OFFSET_LOW32,
+			LOG_FILE_HDR_SIZE +
+			(lsn -
+			 ut_uint64_align_down(lsn,
+					      OS_FILE_LOG_BLOCK_SIZE)));
+	mach_write_to_4(buf + LOG_CHECKPOINT_2
+			    + LOG_CHECKPOINT_OFFSET_HIGH32, 0);
+        fold = ut_fold_binary(buf + LOG_CHECKPOINT_2, CHECKSUM_1);
+        mach_write_to_4(buf + LOG_CHECKPOINT_2 + CHECKSUM_1, fold);
+
+        fold = ut_fold_binary(buf + LOG_CHECKPOINT_2 + LOG_CHECKPOINT_LSN,
+			      CHECKSUM_2 - LOG_CHECKPOINT_LSN);
+        mach_write_to_4(buf + LOG_CHECKPOINT_2 + CHECKSUM_2, fold);
+}
+
+static
+void
+update_log_temp_checkpoint(
+	byte*	buf,
+	lsn_t	lsn)
+{
+	if (redo_log_version == REDO_LOG_V0) {
+		update_log_temp_checkpoint_0(buf, lsn);
+		return;
+	}
+
+	/* Overwrite the both checkpoint area. */
+
+	lsn_t lsn_offset;
+
+	lsn_offset = LOG_FILE_HDR_SIZE + (lsn -
+			ut_uint64_align_down(lsn, OS_FILE_LOG_BLOCK_SIZE));
+
+	mach_write_to_8(buf + LOG_CHECKPOINT_1 + LOG_CHECKPOINT_LSN,
+			lsn);
+	mach_write_to_8(buf + LOG_CHECKPOINT_1 + LOG_CHECKPOINT_OFFSET,
+			lsn_offset);
+
+	mach_write_to_8(buf + LOG_CHECKPOINT_2 + LOG_CHECKPOINT_LSN,
+			lsn);
+	mach_write_to_8(buf + LOG_CHECKPOINT_2 + LOG_CHECKPOINT_OFFSET,
+			lsn_offset);
+
+	log_block_set_checksum(buf, log_block_calc_checksum_crc32(buf));
+	log_block_set_checksum(buf + LOG_CHECKPOINT_1,
+		log_block_calc_checksum_crc32(buf + LOG_CHECKPOINT_1));
+	log_block_set_checksum(buf + LOG_CHECKPOINT_2,
+		log_block_calc_checksum_crc32(buf + LOG_CHECKPOINT_2));
+}
+
 static my_bool
 xtrabackup_init_temp_log(void)
 {
@@ -4796,12 +4927,25 @@ retry:
 	for (field = LOG_CHECKPOINT_1; field <= LOG_CHECKPOINT_2;
 			field += LOG_CHECKPOINT_2 - LOG_CHECKPOINT_1) {
 
-		// TODO: here we must verify checkpoint consistency
-		// and log version
-
-		// if (!recv_check_cp_is_consistent(const_cast<const byte *>
-		// 				 (log_buf + field)))
-		// 	goto not_consistent;
+		/* checkpoint checksum is always crc32 for MySQL 5.7.9+ */
+		if (log_block_get_checksum(log_buf + field)
+		    == log_block_calc_checksum_crc32(log_buf + field) &&
+		    mach_read_from_4(log_buf + LOG_HEADER_FORMAT)
+		    == LOG_HEADER_FORMAT_CURRENT) {
+			redo_log_version = REDO_LOG_V1;
+			if (!innodb_log_checksum_algorithm_specified) {
+				srv_log_checksum_algorithm =
+					SRV_CHECKSUM_ALGORITHM_CRC32;
+			}
+		} else if (check_log_header_checksum_0(log_buf + field)) {
+			redo_log_version = REDO_LOG_V0;
+			if (!innodb_log_checksum_algorithm_specified) {
+				srv_log_checksum_algorithm =
+					SRV_CHECKSUM_ALGORITHM_INNODB;
+			}
+		} else {
+			goto not_consistent;
+		}
 
 		checkpoint_no = mach_read_from_8(log_buf + field +
 						 LOG_CHECKPOINT_NO);
@@ -4822,29 +4966,10 @@ not_consistent:
 		goto error;
 	}
 
-
-	/* It seems to be needed to overwrite the both checkpoint area. */
-
-	lsn_t lsn_offset;
-
-	lsn_offset = LOG_FILE_HDR_SIZE + (max_lsn -
-			ut_uint64_align_down(max_lsn, OS_FILE_LOG_BLOCK_SIZE));
-
-	mach_write_to_8(log_buf + LOG_CHECKPOINT_1 + LOG_CHECKPOINT_LSN,
-			max_lsn);
-	mach_write_to_8(log_buf + LOG_CHECKPOINT_1 + LOG_CHECKPOINT_OFFSET,
-			lsn_offset);
-
-	mach_write_to_8(log_buf + LOG_CHECKPOINT_2 + LOG_CHECKPOINT_LSN,
-			max_lsn);
-	mach_write_to_8(log_buf + LOG_CHECKPOINT_2 + LOG_CHECKPOINT_OFFSET,
-			lsn_offset);
-
-	log_block_set_checksum(log_buf, log_block_calc_checksum_crc32(log_buf));
-	log_block_set_checksum(log_buf + LOG_CHECKPOINT_1,
-		log_block_calc_checksum_crc32(log_buf + LOG_CHECKPOINT_1));
-	log_block_set_checksum(log_buf + LOG_CHECKPOINT_2,
-		log_block_calc_checksum_crc32(log_buf + LOG_CHECKPOINT_2));
+	mach_write_to_4(log_buf + LOG_HEADER_FORMAT,
+			redo_log_version == REDO_LOG_V0 ?
+			0 : LOG_HEADER_FORMAT_CURRENT);
+	update_log_temp_checkpoint(log_buf, max_lsn);
 
 	success = os_file_write(write_request, src_path, src_file, log_buf, 0,
 				LOG_FILE_HDR_SIZE);

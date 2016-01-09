@@ -54,6 +54,7 @@ Created 12/9/1995 Heikki Tuuri
 #include "srv0mon.h"
 #include "sync0sync.h"
 #endif /* !UNIV_HOTBACKUP */
+#include "xb0xb.h"
 
 /*
 General philosophy of InnoDB redo-logs:
@@ -936,6 +937,68 @@ log_io_complete(
 Writes a log file header to a log file space. */
 static
 void
+log_group_file_header_flush_0(
+/*========================*/
+	log_group_t*	group,		/*!< in: log group */
+	ulint		nth_file,	/*!< in: header to the nth file in the
+					log file space */
+	lsn_t		start_lsn)	/*!< in: log file data starts at this
+					lsn */
+{
+	byte*	buf;
+	lsn_t	dest_offset;
+
+	/* log group number */
+	static const uint GROUP_ID = 16;
+	/* lsn of the start of data in this log file */
+	static const uint FILE_START_LSN = 4;
+
+	ut_ad(mutex_own(&(log_sys->mutex)));
+	ut_ad(!recv_no_log_write);
+	ut_a(nth_file < group->n_files);
+
+	buf = *(group->file_header_bufs + nth_file);
+
+	mach_write_to_4(buf + GROUP_ID, group->id);
+	mach_write_to_8(buf + FILE_START_LSN, start_lsn);
+
+	/* Wipe over possible label of mysqlbackup --restore */
+	memcpy(buf + LOG_HEADER_CREATOR, "    ", 4);
+
+	if (srv_log_block_size > 512) {
+		mach_write_to_4(buf + LOG_FILE_OS_FILE_LOG_BLOCK_SIZE,
+				srv_log_block_size);
+	}
+
+	dest_offset = nth_file * group->file_size;
+
+	DBUG_PRINT("ib_log", ("write " LSN_PF
+			      " group " ULINTPF
+			      " file " ULINTPF " header",
+			      start_lsn, group->id, nth_file));
+
+	log_sys->n_log_ios++;
+
+	MONITOR_INC(MONITOR_LOG_IO);
+
+	srv_stats.os_log_pending_writes.inc();
+
+	const ulint	page_no
+		= (ulint) (dest_offset / univ_page_size.physical());
+
+	fil_io(IORequestLogWrite, true,
+	       page_id_t(group->space_id, page_no),
+	       univ_page_size,
+	       (ulint) (dest_offset % univ_page_size.physical()),
+	       OS_FILE_LOG_BLOCK_SIZE, buf, group);
+
+	srv_stats.os_log_pending_writes.dec();
+}
+
+/******************************************************//**
+Writes a log file header to a log file space. */
+static
+void
 log_group_file_header_flush(
 /*========================*/
 	log_group_t*	group,		/*!< in: log group */
@@ -951,6 +1014,11 @@ log_group_file_header_flush(
 	ut_ad(!recv_no_log_write);
 	ut_ad(group->id == 0);
 	ut_a(nth_file < group->n_files);
+
+	if (redo_log_version == REDO_LOG_V0) {
+		log_group_file_header_flush_0(group, nth_file, start_lsn);
+		return;
+	}
 
 	buf = *(group->file_header_bufs + nth_file);
 
@@ -1531,6 +1599,73 @@ log_io_complete_checkpoint(void)
 	log_mutex_exit();
 }
 
+static
+void
+log_group_checkpoint_0(
+/*===================*/
+	log_group_t*	group)	/*!< in: log group */
+{
+	ulint		fold;
+	byte*		buf;
+	lsn_t		lsn_offset;
+
+	/** Offset of the first checkpoint checksum */
+	static const uint CHECKSUM_1 = 288;
+	/** Offset of the second checkpoint checksum */
+	static const uint CHECKSUM_2 = CHECKSUM_1 + 4;
+	/** Most significant bits of the checkpoint offset */
+	static const uint OFFSET_HIGH32 = CHECKSUM_2 + 12;
+	/** Least significant bits of the checkpoint offset */
+	static const uint OFFSET_LOW32 = 16;
+
+	buf = group->checkpoint_buf;
+
+	mach_write_to_8(buf + LOG_CHECKPOINT_NO, log_sys->next_checkpoint_no);
+	mach_write_to_8(buf + LOG_CHECKPOINT_LSN, log_sys->next_checkpoint_lsn);
+
+	lsn_offset = log_group_calc_lsn_offset(log_sys->next_checkpoint_lsn,
+					       group);
+	mach_write_to_4(buf + OFFSET_LOW32, lsn_offset & 0xFFFFFFFFUL);
+	mach_write_to_4(buf + OFFSET_HIGH32, lsn_offset >> 32);
+
+	mach_write_to_4(buf + LOG_CHECKPOINT_LOG_BUF_SIZE, log_sys->buf_size);
+
+	fold = ut_fold_binary(buf, CHECKSUM_1);
+	mach_write_to_4(buf + CHECKSUM_1, fold);
+
+	fold = ut_fold_binary(buf + LOG_CHECKPOINT_LSN,
+			      CHECKSUM_2 - LOG_CHECKPOINT_LSN);
+	mach_write_to_4(buf + CHECKSUM_2, fold);
+
+	MONITOR_INC(MONITOR_PENDING_CHECKPOINT_WRITE);
+
+	log_sys->n_log_ios++;
+
+	MONITOR_INC(MONITOR_LOG_IO);
+
+	if (log_sys->n_pending_checkpoint_writes++ == 0) {
+		rw_lock_x_lock_gen(&log_sys->checkpoint_lock,
+				   LOG_CHECKPOINT);
+	}
+
+	/* Note: We alternate the physical place of the checkpoint info.
+	See the (next_checkpoint_no & 1) below. */
+
+	/* We send as the last parameter the group machine address
+	added with 1, as we want to distinguish between a normal log
+	file write and a checkpoint field write */
+
+	fil_io(IORequestLogWrite, false,
+	       page_id_t(group->space_id, 0),
+	       univ_page_size,
+	       (log_sys->next_checkpoint_no & 1)
+	       ? LOG_CHECKPOINT_2 : LOG_CHECKPOINT_1,
+	       OS_FILE_LOG_BLOCK_SIZE,
+	       buf, (byte*) group + 1);
+
+	ut_ad(((ulint) group & 0x1UL) == 0);
+}
+
 /******************************************************//**
 Writes the checkpoint info to a log group header. */
 static
@@ -1551,6 +1686,11 @@ log_group_checkpoint(
 			      log_sys->next_checkpoint_no,
 			      log_sys->next_checkpoint_lsn,
 			      group->id));
+
+	if (redo_log_version == REDO_LOG_V0) {
+		log_group_checkpoint_0(group);
+		return;
+	}
 
 	buf = group->checkpoint_buf;
 	memset(buf, 0, OS_FILE_LOG_BLOCK_SIZE);

@@ -49,6 +49,7 @@ Created 1/8/1996 Heikki Tuuri
 #include "fsp0space.h"
 #include "fsp0sysspace.h"
 #include "srv0start.h"
+#include "xb0xb.h"
 
 /*****************************************************************//**
 Based on a table object, this function builds the entry to be inserted
@@ -627,7 +628,11 @@ dict_create_sys_indexes_tuple(
 	table = dict_table_get_low(index->table_name);
 
 	entry = dtuple_create(
-		heap, DICT_NUM_COLS__SYS_INDEXES + DATA_N_SYS_COLS);
+		heap,
+		(redo_log_version == REDO_LOG_V0 ?
+			DICT_NUM_COLS__SYS_INDEXES - 1 :
+			DICT_NUM_COLS__SYS_INDEXES) +
+		DATA_N_SYS_COLS);
 
 	dict_table_copy_types(entry, sys_indexes);
 
@@ -706,13 +711,15 @@ dict_create_sys_indexes_tuple(
 
 	/* 9: MERGE_THRESHOLD ----------------*/
 
-	dfield = dtuple_get_nth_field(
-		entry, DICT_COL__SYS_INDEXES__MERGE_THRESHOLD);
+	if (redo_log_version != REDO_LOG_V0) {
+		dfield = dtuple_get_nth_field(
+			entry, DICT_COL__SYS_INDEXES__MERGE_THRESHOLD);
 
-	ptr = static_cast<byte*>(mem_heap_alloc(heap, 4));
-	mach_write_to_4(ptr, DICT_INDEX_MERGE_THRESHOLD_DEFAULT);
+		ptr = static_cast<byte*>(mem_heap_alloc(heap, 4));
+		mach_write_to_4(ptr, DICT_INDEX_MERGE_THRESHOLD_DEFAULT);
 
-	dfield_set_data(dfield, ptr, 4);
+		dfield_set_data(dfield, ptr, 4);
+	}
 
 	/*--------------------------------*/
 

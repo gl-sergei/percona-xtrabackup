@@ -63,7 +63,7 @@ function call_mysql_install_db()
             exit -1
         fi
 
-        mkdir ${MYSQLD_DATADIR}/test
+        [ -d ${MYSQLD_DATADIR}/test ] || mkdir ${MYSQLD_DATADIR}/test
 
         cd - >/dev/null 2>&1
 }
