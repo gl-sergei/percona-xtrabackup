@@ -322,6 +322,21 @@ static struct my_option my_long_options[] =
 	{0, 0, 0, 0, 0, 0, GET_NO_ARG, NO_ARG, 0, 0, 0, 0, 0, 0}
 };
 
+/* The values of these arguments should be masked
+   on the command line */
+static const char * const masked_args[] = {
+        "--swift-password",
+        "--swift-key",
+        "--swift-auth-url",
+        "--swift-storage-url",
+        "--swift-container",
+        "--swift-user",
+        "--swift-tenant",
+        "--swift-user-id",
+        "--swift-tenant-id",
+        0
+};
+
 static map<string, ulonglong> file_chunk_count;
 
 static
@@ -371,6 +386,34 @@ get_one_option(int optid, const struct my_option *opt __attribute__((unused)),
 
 static const char *load_default_groups[]=
 	{ "xbcloud", 0 };
+
+/*********************************************************************//**
+mask sensitive values on the command line */
+static
+void
+mask_args(int argc, char **argv)
+{
+        int i;
+        for (i = 0; i < argc-1; i++) {
+                int j = 0;
+                if (argv[i]) while (masked_args[j]) {
+                        char *p;
+                        if ((p = strstr(argv[i], masked_args[j]))) {
+                                p += strlen(masked_args[j]);
+                                while (*p && *p != '=') {
+                                        p++;
+                                }
+                                if (*p == '=') {
+                                        p++;
+                                        while (*p) {
+                                                *p++ = 'x';
+                                        }
+                                }
+                        }
+                        j++;
+                }
+        }
+}
 
 static
 int parse_args(int argc, char **argv)
@@ -602,9 +645,19 @@ cleanup:
 
 static
 size_t
-write_null_cb(char *buffer, size_t size, size_t nmemb, void *stream) {
-	return nmemb * size;
+write_null_cb(char *buffer, size_t size, size_t nmemb, void *stream)
+{
+	return fwrite(buffer, size, nmemb, stderr);
 }
+
+
+static
+size_t
+read_null_cb(char *ptr, size_t size, size_t nmemb, void *data)
+{
+	return 0;
+}
+
 
 static
 int
@@ -632,6 +685,8 @@ swift_create_container(swift_auth_info *info, const char *name)
 		curl_easy_setopt(curl, CURLOPT_FOLLOWLOCATION, 1L);
 		curl_easy_setopt(curl, CURLOPT_HTTPHEADER, slist);
 		curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, write_null_cb);
+		curl_easy_setopt(curl, CURLOPT_READFUNCTION, read_null_cb);
+		curl_easy_setopt(curl, CURLOPT_INFILESIZE, 0L);
 		curl_easy_setopt(curl, CURLOPT_PUT, 1L);
 		if (opt_cacert != NULL)
 			curl_easy_setopt(curl, CURLOPT_CAINFO, opt_cacert);
@@ -1118,7 +1173,7 @@ static int conn_upload_start(connection_info *conn)
 	}
 	curl_easy_setopt(conn->easy, CURLOPT_URL, object_url);
 	curl_easy_setopt(conn->easy, CURLOPT_READFUNCTION,
-							swift_upload_read_cb);
+				     swift_upload_read_cb);
 	curl_easy_setopt(conn->easy, CURLOPT_READDATA, conn);
 	curl_easy_setopt(conn->easy, CURLOPT_VERBOSE, opt_verbose);
 	curl_easy_setopt(conn->easy, CURLOPT_ERRORBUFFER, conn->error);
@@ -1129,8 +1184,10 @@ static int conn_upload_start(connection_info *conn)
 	curl_easy_setopt(conn->easy, CURLOPT_PUT, 1L);
 	curl_easy_setopt(conn->easy, CURLOPT_HTTPHEADER, conn->slist);
 	curl_easy_setopt(conn->easy, CURLOPT_HEADERFUNCTION,
-			 upload_header_read_cb);
+				     upload_header_read_cb);
 	curl_easy_setopt(conn->easy, CURLOPT_HEADERDATA, conn);
+	curl_easy_setopt(conn->easy, CURLOPT_INFILESIZE,
+				     (long) conn->chunk_size);
 	if (opt_cacert != NULL)
 		curl_easy_setopt(conn->easy, CURLOPT_CAINFO, opt_cacert);
 	if (opt_insecure)
@@ -2560,9 +2617,17 @@ int main(int argc, char **argv)
 
 	MY_INIT(argv[0]);
 
+        /* handle_options in parse_args is destructive so
+         * we make a copy of our argument pointers so we can
+         * mask the sensitive values afterwards */
+        char **mask_argv = (char **)malloc(sizeof(char *) * (argc - 1));
+        memcpy(mask_argv, argv + 1, sizeof(char *) * (argc - 1));
+
 	if (parse_args(argc, argv)) {
 		return(EXIT_FAILURE);
 	}
+
+        mask_args(argc, mask_argv);  /* mask args on cmdline */
 
 	curl_global_init(CURL_GLOBAL_ALL);
 

@@ -43,6 +43,7 @@ Created 9/17/2000 Heikki Tuuri
 #include "dict0load.h"
 #include "dict0stats.h"
 #include "dict0stats_bg.h"
+#include "dict0priv.h"
 #include "fil0fil.h"
 #include "fsp0file.h"
 #include "fsp0sysspace.h"
@@ -4584,20 +4585,28 @@ row_drop_table_for_mysql(
 			"END LOOP;\n"
 			"CLOSE cur_idx;\n";
 
-		sql +=	"DELETE FROM SYS_COLUMNS\n"
-			"WHERE TABLE_ID = table_id;\n"
-			"DELETE FROM SYS_TABLES\n"
-			"WHERE NAME = :table_name;\n";
+		/* SYS_DATAFILES and SYS_TABLESPACES do not necessarily exist
+		on XtraBackup recovery. See comments around
+		dict_create_or_check_foreign_constraint_tables() in
+		innobase_start_or_create_for_mysql(). */
+		if (dict_table_get_low("SYS_DATAFILES") != NULL) {
+			sql +=	"DELETE FROM SYS_COLUMNS\n"
+				"WHERE TABLE_ID = table_id;\n"
+				"DELETE FROM SYS_TABLES\n"
+				"WHERE NAME = :table_name;\n";
 
-		if (dict_table_is_file_per_table(table)) {
-			sql += "DELETE FROM SYS_TABLESPACES\n"
-				"WHERE SPACE = space_id;\n"
-				"DELETE FROM SYS_DATAFILES\n"
-				"WHERE SPACE = space_id;\n";
+			if (dict_table_is_file_per_table(table)) {
+				sql += "DELETE FROM SYS_TABLESPACES\n"
+					"WHERE SPACE = space_id;\n"
+					"DELETE FROM SYS_DATAFILES\n"
+					"WHERE SPACE = space_id;\n";
+			}
 		}
 
-		sql +=	"DELETE FROM SYS_VIRTUAL\n"
-			"WHERE TABLE_ID = table_id;\n";
+		if (dict_table_get_low("SYS_VIRTUAL") != NULL) {
+			sql +=	"DELETE FROM SYS_VIRTUAL\n"
+				"WHERE TABLE_ID = table_id;\n";
+		}
 
 		sql += "END;\n";
 

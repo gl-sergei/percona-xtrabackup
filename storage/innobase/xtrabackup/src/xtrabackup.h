@@ -1,5 +1,5 @@
 /******************************************************
-Copyright (c) 2011-2014 Percona LLC and/or its affiliates.
+Copyright (c) 2011-2015 Percona LLC and/or its affiliates.
 
 Declarations for xtrabackup.cc
 
@@ -104,8 +104,9 @@ extern long		innobase_log_files_in_group;
 extern const char	*xtrabackup_encrypt_algo_names[];
 extern TYPELIB		xtrabackup_encrypt_algo_typelib;
 
-extern bool		xtrabackup_innodb_data_file_path_explicit;
-extern bool		xtrabackup_innodb_log_file_size_explicit;
+extern bool		innodb_data_file_path_specified;
+extern bool		innodb_log_file_size_specified;
+extern bool		datadir_specified;
 extern bool		innodb_log_checksum_algorithm_specified;
 
 extern int		xtrabackup_parallel;
@@ -168,6 +169,11 @@ extern uint		opt_safe_slave_backup_timeout;
 
 extern const char	*opt_history;
 extern my_bool		opt_decrypt;
+
+enum binlog_info_enum { BINLOG_INFO_OFF, BINLOG_INFO_LOCKLESS, BINLOG_INFO_ON,
+			BINLOG_INFO_AUTO};
+
+extern ulong opt_binlog_info;
 
 void xtrabackup_io_throttling(void);
 my_bool xb_write_delta_metadata(const char *filename,

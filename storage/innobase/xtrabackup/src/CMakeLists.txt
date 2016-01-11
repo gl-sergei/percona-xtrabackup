@@ -24,6 +24,13 @@ FIND_GCRYPT()
 FIND_CURL()
 FIND_EV()
 
+# xxd is needed to embed version_check script
+FIND_PROGRAM(XXD_PATH xxd)
+
+IF(NOT XXD_PATH)
+  MESSAGE(FATAL_ERROR "xxd not found. Try to install vim-common.")
+ENDIF(NOT XXD_PATH)
+
 INCLUDE_DIRECTORIES(
   ${CMAKE_SOURCE_DIR}/include
   ${CMAKE_SOURCE_DIR}/storage/innobase/include
@@ -43,9 +50,13 @@ INCLUDE_DIRECTORIES(
 CONFIGURE_FILE(${CMAKE_CURRENT_SOURCE_DIR}/xtrabackup_version.h.in
                ${CMAKE_CURRENT_BINARY_DIR}/xtrabackup_version.h )
 
-EXECUTE_PROCESS(COMMAND xxd --include version_check.pl
-                ${CMAKE_CURRENT_BINARY_DIR}/version_check_pl.h
-                WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR})
+ADD_CUSTOM_COMMAND(OUTPUT ${CMAKE_CURRENT_BINARY_DIR}/version_check_pl.h
+                   COMMAND ${XXD_PATH} --include version_check.pl
+                   ${CMAKE_CURRENT_BINARY_DIR}/version_check_pl.h
+                   WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR})
+
+ADD_CUSTOM_TARGET(GenVersionCheck
+                  DEPENDS ${CMAKE_CURRENT_BINARY_DIR}/version_check_pl.h)
 
 
 MYSQL_ADD_EXECUTABLE(xtrabackup
@@ -82,13 +93,15 @@ TARGET_LINK_LIBRARIES(xtrabackup
   archive_static
   )
 
+ADD_DEPENDENCIES(xtrabackup GenVersionCheck)
 
 ########################################################################
 # innobackupex symlink
 ########################################################################
 ADD_CUSTOM_COMMAND(TARGET xtrabackup
-                   COMMAND ln -sf xtrabackup innobackupex)
-#INSTALL_SYMLINK(xtrabackup xtrabackup innobackupex bin runtime)
+                   COMMAND ${CMAKE_COMMAND} ARGS -E create_symlink
+                           xtrabackup innobackupex)
+INSTALL(FILES ${CMAKE_CURRENT_BINARY_DIR}/innobackupex DESTINATION bin)
 
 ########################################################################
 # xbstream binary

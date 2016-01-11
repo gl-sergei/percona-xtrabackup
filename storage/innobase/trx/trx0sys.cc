@@ -308,11 +308,9 @@ trx_sys_print_mysql_binlog_offset(void)
 		  sys_header + TRX_SYS_MYSQL_LOG_INFO
 		  + TRX_SYS_MYSQL_LOG_NAME, TRX_SYS_MYSQL_LOG_NAME_LEN);
 
-	ib::info() << "Last MySQL binlog file position "
-		<< trx_sys_mysql_bin_log_pos_high << " "
-		<< trx_sys_mysql_bin_log_pos_low << ", file name "
-		<< sys_header + TRX_SYS_MYSQL_LOG_INFO
-		+ TRX_SYS_MYSQL_LOG_NAME;
+	ib::info() << "xtrabackup: Last MySQL binlog file position "
+		<< trx_sys_mysql_bin_log_pos << ", file name "
+		<< trx_sys_mysql_bin_log_name;
 
 	mtr_commit(&mtr);
 }

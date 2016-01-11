@@ -1335,26 +1335,25 @@ recv_find_max_checkpoint(
 
 			group->lsn = mach_read_from_8(
 				buf + LOG_CHECKPOINT_LSN);
-#if 0
-			group->lsn_offset = mach_read_from_4(
-				buf + LOG_CHECKPOINT_OFFSET_LOW32);
-			group->lsn_offset_alt = group->lsn_offset;
-			if (group->file_size * group->n_files >
-				4294967296ULL /* 4GiB */) {
-				group->lsn_offset |= ((lsn_t) mach_read_from_4(
-					buf + LOG_CHECKPOINT_OFFSET_HIGH32))
-					<< 32;
-				group->lsn_offset_alt =
-					((lsn_t) mach_read_from_8(
-					buf + LOG_CHECKPOINT_ARCHIVED_LSN));
-				if (group->alt_offset_chosen) {
-					group->lsn_offset =
-						group->lsn_offset_alt;
-				}
-			}
-#endif
+
 			group->lsn_offset = mach_read_from_8(
 				buf + LOG_CHECKPOINT_OFFSET);
+
+			group->lsn_offset_ps55 = group->lsn_offset;
+			group->lsn_offset_ms56 = group->lsn_offset;
+			if (group->file_size * group->n_files >
+				4294967296ULL /* 4GiB */) {
+				group->lsn_offset_ms56 |= mach_read_from_4(
+					buf + LOG_CHECKPOINT_OFFSET);
+				group->lsn_offset_ms56 |=
+					((lsn_t) mach_read_from_4(
+					buf + LOG_CHECKPOINT_OFFSET_HIGH32))
+					<< 32;
+				group->lsn_offset_ps55 =
+					((lsn_t) mach_read_from_8(
+					buf + LOG_CHECKPOINT_LOG_BUF_SIZE));
+			}
+
 			checkpoint_no = mach_read_from_8(
 				buf + LOG_CHECKPOINT_NO);
 

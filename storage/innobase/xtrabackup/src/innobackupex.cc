@@ -911,7 +911,7 @@ make_backup_dir()
 	time_t t = time(NULL);
 	char buf[100];
 
-	if (!opt_ibx_notimestamp) {
+	if (!opt_ibx_notimestamp && !ibx_xtrabackup_stream_str) {
 		strftime(buf, sizeof(buf), "%Y-%m-%d_%H-%M-%S", localtime(&t));
 		ut_a(asprintf(&ibx_backup_directory, "%s/%s",
 				ibx_position_arg, buf) != -1);
@@ -1092,6 +1092,11 @@ ibx_init()
 			return(false);
 		}
 	}
+
+	/* --binlog-info is xtrabackup only, so force
+	--binlog-info=ON. i.e. behavior before the feature had been
+	implemented */
+	opt_binlog_info = BINLOG_INFO_ON;
 
 	switch (ibx_mode) {
 	case IBX_MODE_APPLY_LOG:

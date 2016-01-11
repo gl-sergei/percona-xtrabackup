@@ -43,7 +43,7 @@ bool
 get_mysql_vars(MYSQL *connection);
 
 bool
-detect_mysql_capabilities_for_backup();
+detect_mysql_capabilities_for_backup(const char *version);
 
 MYSQL *
 xb_mysql_connect();
@@ -68,7 +68,7 @@ bool
 write_backup_config_file();
 
 bool
-lock_binlog(MYSQL *connection);
+lock_binlog_maybe(MYSQL *connection);
 
 bool
 lock_tables(MYSQL *connection);

@@ -168,6 +168,7 @@ static int
 buffer_close(ds_file_t *file)
 {
 	ds_buffer_file_t	*buffer_file;
+	int			ret;
 
 	buffer_file = (ds_buffer_file_t *) file->ptr;
 	if (buffer_file->pos > 0) {
@@ -175,11 +176,11 @@ buffer_close(ds_file_t *file)
 			 buffer_file->pos);
 	}
 
-	ds_close(buffer_file->dst_file);
+	ret = ds_close(buffer_file->dst_file);
 
 	my_free(file);
 
-	return 0;
+	return ret;
 }
 
 static void

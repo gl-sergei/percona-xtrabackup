@@ -332,6 +332,7 @@ my_bool xb_close_files= FALSE;
 /* Datasinks */
 ds_ctxt_t       *ds_data     = NULL;
 ds_ctxt_t       *ds_meta     = NULL;
+ds_ctxt_t       *ds_redo     = NULL;
 
 static bool	innobackupex_mode = false;
 
@@ -341,8 +342,9 @@ static longlong	innobase_log_file_size_save;
 
 /* set true if corresponding variable set as option config file or 
 command argument */
-bool xtrabackup_innodb_data_file_path_explicit = false;
-bool xtrabackup_innodb_log_file_size_explicit = false;
+bool innodb_data_file_path_specified = false;
+bool innodb_log_file_size_specified = false;
+bool datadir_specified = false;
 bool innodb_log_checksum_algorithm_specified = false;
 
 /* String buffer used by --print-param to accumulate server options as they are
@@ -362,6 +364,12 @@ my_bool opt_force_non_empty_dirs = FALSE;
 my_bool opt_noversioncheck = FALSE;
 my_bool opt_no_backup_locks = FALSE;
 my_bool opt_decompress = FALSE;
+
+static const char *binlog_info_values[] = {"off", "lockless", "on", "auto",
+					   NullS};
+static TYPELIB binlog_info_typelib = {array_elements(binlog_info_values)-1, "",
+				      binlog_info_values, NULL};
+ulong opt_binlog_info;
 
 char *opt_incremental_history_name = NULL;
 char *opt_incremental_history_uuid = NULL;
@@ -393,7 +401,11 @@ uint opt_safe_slave_backup_timeout = 0;
 const char *opt_history = NULL;
 my_bool opt_decrypt = FALSE;
 
-redo_log_version_t redo_log_version = REDO_LOG_V0;
+/* Whether xtrabackup_binlog_info should be created on recovery */
+static bool recover_binlog_info;
+
+/* Redo log format version */
+redo_log_version_t redo_log_version = REDO_LOG_V1;
 
 /* Simple datasink creation tracking...add datasinks in the reverse order you
 want them destroyed. */
@@ -599,7 +611,8 @@ enum options_xtrabackup
   OPT_LOCK_WAIT_TIMEOUT,
   OPT_LOCK_WAIT_THRESHOLD,
   OPT_DEBUG_SLEEP_BEFORE_UNLOCK,
-  OPT_SAFE_SLAVE_BACKUP_TIMEOUT
+  OPT_SAFE_SLAVE_BACKUP_TIMEOUT,
+  OPT_BINLOG_INFO
 };
 
 struct my_option xb_long_options[] =
@@ -1181,6 +1194,12 @@ Disable with --skip-innodb-doublewrite.", (G_PTR*) &innobase_use_doublewrite,
    (uchar*) &opt_safe_slave_backup_timeout, 0, GET_UINT,
    REQUIRED_ARG, 300, 0, 0, 0, 0, 0},
 
+  {"binlog-info", OPT_BINLOG_INFO,
+   "This option controls how XtraBackup should retrieve server's binary log "
+   "coordinates corresponding to the backup. Possible values are OFF, ON, "
+   "LOCKLESS and AUTO. See the XtraBackup manual for more information",
+   &opt_binlog_info, &opt_binlog_info,
+   &binlog_info_typelib, GET_ENUM, OPT_ARG, BINLOG_INFO_AUTO, 0, 0, 0, 0, 0},
 
   { 0, 0, 0, 0, 0, 0, GET_NO_ARG, NO_ARG, 0, 0, 0, 0, 0, 0}
 };
@@ -1256,7 +1275,7 @@ static void usage(void)
 {
   puts("Open source backup tool for InnoDB and XtraDB\n\
 \n\
-Copyright (C) 2009-2013 Percona LLC and/or its affiliates.\n\
+Copyright (C) 2009-2015 Percona LLC and/or its affiliates.\n\
 Portions Copyright (C) 2000, 2011, MySQL AB & Innobase Oy. All Rights Reserved.\n\
 \n\
 This program is free software; you can redistribute it and/or\n\
@@ -1291,6 +1310,7 @@ xb_get_one_option(int optid,
     mysql_data_home= mysql_real_data_home;
 
     ADD_PRINT_PARAM_OPT(mysql_real_data_home);
+    datadir_specified = true;
     break;
 
   case 't':
@@ -1306,7 +1326,7 @@ xb_get_one_option(int optid,
   case OPT_INNODB_DATA_FILE_PATH:
 
     ADD_PRINT_PARAM_OPT(innobase_data_file_path);
-    xtrabackup_innodb_data_file_path_explicit = true;
+    innodb_data_file_path_specified = true;
     break;
 
   case OPT_INNODB_LOG_GROUP_HOME_DIR:
@@ -1322,7 +1342,7 @@ xb_get_one_option(int optid,
   case OPT_INNODB_LOG_FILE_SIZE:
 
     ADD_PRINT_PARAM_OPT(innobase_log_file_size);
-    xtrabackup_innodb_log_file_size_explicit = true;
+    innodb_log_file_size_specified = true;
     break;
 
   case OPT_INNODB_FLUSH_METHOD:
@@ -1430,6 +1450,13 @@ xb_get_one_option(int optid,
     break;
   case (int) OPT_CORE_FILE:
     test_flags |= TEST_CORE_ON_SIGNAL;
+    break;
+  case OPT_HISTORY:
+    if (argument) {
+      opt_history = argument;
+    } else {
+      opt_history = "";
+    }
     break;
   case '?':
     usage();
@@ -1909,11 +1936,16 @@ xtrabackup_read_metadata(char *filename)
 			!= 1) {
 		metadata_last_lsn = 0;
 	}
-	/* Optional field */
+	/* Optional fields */
+
 	if (fscanf(fp, "compact = %d\n", &t) == 1) {
 		xtrabackup_compact = (t == 1);
 	} else {
 		xtrabackup_compact = 0;
+	}
+
+	if (fscanf(fp, "recover_binlog_info = %d\n", &t) == 1) {
+		recover_binlog_info = (t == 1);
 	}
 end:
 	fclose(fp);
@@ -1934,12 +1966,14 @@ xtrabackup_print_metadata(char *buf, size_t buf_len)
 		 "from_lsn = " UINT64PF "\n"
 		 "to_lsn = " UINT64PF "\n"
 		 "last_lsn = " UINT64PF "\n"
-		 "compact = %d\n",
+		 "compact = %d\n"
+		 "recover_binlog_info = %d\n",
 		 metadata_type,
 		 metadata_from_lsn,
 		 metadata_to_lsn,
 		 metadata_last_lsn,
-		 xtrabackup_compact == TRUE);
+		 MY_TEST(xtrabackup_compact == TRUE),
+		 MY_TEST(opt_binlog_info == BINLOG_INFO_LOCKLESS));
 }
 
 /***********************************************************************
@@ -1953,6 +1987,7 @@ xtrabackup_stream_metadata(ds_ctxt_t *ds_ctxt)
 	size_t		len;
 	ds_file_t	*stream;
 	MY_STAT		mystat;
+	my_bool		rc = TRUE;
 
 	xtrabackup_print_metadata(buf, sizeof(buf));
 
@@ -1969,13 +2004,14 @@ xtrabackup_stream_metadata(ds_ctxt_t *ds_ctxt)
 	}
 
 	if (ds_write(stream, buf, len)) {
-		ds_close(stream);
-		return(FALSE);
+		rc = FALSE;
 	}
 
-	ds_close(stream);
+	if (ds_close(stream)) {
+		rc = FALSE;
+	}
 
-	return(TRUE);
+	return(rc);
 }
 
 /***********************************************************************
@@ -2088,7 +2124,9 @@ xb_write_delta_metadata(const char *filename, const xb_delta_info_t *info)
 
 	ret = (ds_write(f, buf, len) == 0);
 
-	ds_close(f);
+	if (ds_close(f)) {
+		ret = FALSE;
+	}
 
 	return(ret);
 }
@@ -2312,6 +2350,7 @@ xtrabackup_copy_datafile(fil_node_t* node, uint thread_n)
 	const char		*action;
 	xb_read_filt_t		*read_filter;
 	ibool			is_system;
+	my_bool			rc = FALSE;
 
 	/* Get the name and the path for the tablespace. node->name always
 	contains the path (which may be absolute for remote tablespaces in
@@ -2377,10 +2416,10 @@ xtrabackup_copy_datafile(fil_node_t* node, uint thread_n)
 	action = xb_get_copy_action();
 
 	if (xtrabackup_stream) {
-		msg("[%02u] %s %s\n", thread_n, action, node_path);
+		msg_ts("[%02u] %s %s\n", thread_n, action, node_path);
 	} else {
-		msg("[%02u] %s %s to %s\n", thread_n, action,
-		    node_path, dstfile->path);
+		msg_ts("[%02u] %s %s to %s\n", thread_n, action,
+		       node_path, dstfile->path);
 	}
 
 	/* The main copy loop */
@@ -2400,13 +2439,15 @@ xtrabackup_copy_datafile(fil_node_t* node, uint thread_n)
 	}
 
 	/* close */
-	msg("[%02u]        ...done\n", thread_n);
+	msg_ts("[%02u]        ...done\n", thread_n);
 	xb_fil_cur_close(&cursor);
-	ds_close(dstfile);
+	if (ds_close(dstfile)) {
+		rc = TRUE;
+	}
 	if (write_filter && write_filter->deinit) {
 		write_filter->deinit(&write_filt_ctxt);
 	}
-	return(FALSE);
+	return(rc);
 
 error:
 	xb_fil_cur_close(&cursor);
@@ -2436,59 +2477,110 @@ skip:
 	return(FALSE);
 }
 
-static my_bool
-xtrabackup_copy_logfile(lsn_t from_lsn, my_bool is_last)
+static
+void
+xtrabackup_choose_lsn_offset(lsn_t start_lsn, lsn_t lsn_offset_alt)
 {
-	/* definition from recv_recovery_from_checkpoint_start() */
-	log_group_t*	group;
-	lsn_t		group_scanned_lsn;
-	lsn_t		contiguous_lsn;
+	ulint no, alt_no, expected_no;
+	ulint blocks_in_group;
+	lsn_t tmp_offset, end_lsn;
+	int lsn_chosen = 0;
+	log_group_t *group;
 
-	ut_a(dst_log_file != NULL);
-
-	/* read from checkpoint_lsn_start to current */
-	contiguous_lsn = ut_uint64_align_down(from_lsn, OS_FILE_LOG_BLOCK_SIZE);
-
-	/* TODO: We must check the contiguous_lsn still exists in log file.. */
+	start_lsn = ut_uint64_align_down(start_lsn, OS_FILE_LOG_BLOCK_SIZE);
+	end_lsn = start_lsn + RECV_SCAN_SIZE;
 
 	group = UT_LIST_GET_FIRST(log_sys->log_groups);
 
-	while (group) {
-		ibool	finished;
-		lsn_t	start_lsn;
-		lsn_t	end_lsn;
+	if (lsn_offset_alt == group->lsn_offset ||
+	    lsn_offset_alt == (lsn_t) -1) {
+		/* we have only one option */
+		return;
+	}
 
-		/* reference recv_group_scan_log_recs() */
-	finished = FALSE;
+	no = alt_no = (ulint) -1;
+	lsn_chosen = 0;
 
-	start_lsn = contiguous_lsn;
+	blocks_in_group = log_block_convert_lsn_to_no(
+		log_group_get_capacity(group)) - 1;
 
-	while (!finished) {
-		end_lsn = start_lsn + RECV_SCAN_SIZE;
+	/* read log block number from usual offset */
+	if (group->lsn_offset < group->file_size * group->n_files &&
+	    (log_group_calc_lsn_offset(start_lsn, group) %
+	     UNIV_PAGE_SIZE) % OS_MIN_LOG_BLOCK_SIZE == 0) {
+		log_group_read_log_seg(log_sys->buf, group, start_lsn, end_lsn);
+		no = log_block_get_hdr_no(log_sys->buf);
+	}
 
-		xtrabackup_io_throttling();
+	/* read log block number from Percona Server 5.5 offset */
+	tmp_offset = group->lsn_offset;
+	group->lsn_offset = lsn_offset_alt;
 
-		mutex_enter(&log_sys->mutex);
+	if (group->lsn_offset < group->file_size * group->n_files &&
+	    (log_group_calc_lsn_offset(start_lsn, group) %
+	     UNIV_PAGE_SIZE) % OS_MIN_LOG_BLOCK_SIZE == 0) {
+		log_group_read_log_seg(log_sys->buf, group, start_lsn, end_lsn);
+		alt_no = log_block_get_hdr_no(log_sys->buf);
+	}
 
-// retry_read:
-		log_group_read_log_seg(log_sys->buf,
-				       group, start_lsn, end_lsn);
+	expected_no = log_block_convert_lsn_to_no(start_lsn);
 
+	ut_a(!(no == expected_no && alt_no == expected_no));
 
-		/* reference recv_scan_log_recs() */
-		{
-	byte*	log_block;
-	lsn_t	scanned_lsn;
-	ulint	data_len;
+	group->lsn_offset = tmp_offset;
 
-	ulint	scanned_checkpoint_no = 0;
+	if ((no <= expected_no &&
+		((expected_no - no) % blocks_in_group) == 0) ||
+	    ((expected_no | 0x40000000UL) - no) % blocks_in_group == 0) {
+		/* default offset looks ok */
+		++lsn_chosen;
+	}
 
-	finished = FALSE;
+	if ((alt_no <= expected_no &&
+		((expected_no - alt_no) % blocks_in_group) == 0) ||
+	    ((expected_no | 0x40000000UL) - alt_no) % blocks_in_group == 0) {
+		/* PS 5.5 style offset looks ok */
+		++lsn_chosen;
+		group->lsn_offset = lsn_offset_alt;
+	}
 
-	log_block = log_sys->buf;
+	/* We are in trouble, because we can not make a
+	decision to choose one over the other. Die just
+	like a Buridan's ass */
+	ut_a(lsn_chosen == 1);
+}
+
+/*******************************************************//**
+Scans log from a buffer and writes new log data to the outpud datasinc.
+@return true if success */
+static
+bool
+xtrabackup_scan_log_recs(
+/*===============*/
+	log_group_t*	group,		/*!< in: log group */
+	bool		is_last,	/*!< in: whether it is last segment
+					to copy */
+	lsn_t		start_lsn,	/*!< in: buffer start lsn */
+	lsn_t*		contiguous_lsn,	/*!< in/out: it is known that all log
+					groups contain contiguous log data up
+					to this lsn */
+	lsn_t*		group_scanned_lsn,/*!< out: scanning succeeded up to
+					this lsn */
+	bool*		finished)	/*!< out: false if is not able to scan
+					any more in this log group */
+{
+	lsn_t		scanned_lsn;
+	ulint		data_len;
+	ulint		write_size;
+	const byte*	log_block;
+
+	ulint		scanned_checkpoint_no = 0;
+
+	*finished = false;
 	scanned_lsn = start_lsn;
+	log_block = log_sys->buf;
 
-	while (log_block < log_sys->buf + RECV_SCAN_SIZE && !finished) {
+	while (log_block < log_sys->buf + RECV_SCAN_SIZE && !*finished) {
 		ulint	no = log_block_get_hdr_no(log_block);
 		ulint	scanned_no = log_block_convert_lsn_to_no(scanned_lsn);
 		ibool	checksum_is_ok = true;
@@ -2500,23 +2592,15 @@ xtrabackup_copy_logfile(lsn_t from_lsn, my_bool is_last)
 			blocks_in_group = log_block_convert_lsn_to_no(
 				log_group_get_capacity(group)) - 1;
 
-			/* Can be just wrong lsn_offset. Is it PS 5.5 with large
-			log files? */
-			// if (!group->alt_offset_chosen &&
-			//     group->lsn_offset != group->lsn_offset_alt) {
-			// 	group->lsn_offset = group->lsn_offset_alt;
-			// 	group->alt_offset_chosen = TRUE;
-			// 	goto retry_read;
-			// }
-
-			if (no < scanned_no ||
+			if ((no < scanned_no &&
+			    ((scanned_no - no) % blocks_in_group) == 0) ||
+			    no == 0 ||
 			    /* Log block numbers wrap around at 0x3FFFFFFF */
 			    ((scanned_no | 0x40000000UL) - no) %
 			    blocks_in_group == 0) {
 
 				/* old log block, do nothing */
-				finished = TRUE;
-
+				*finished = true;
 				break;
 			}
 
@@ -2535,7 +2619,7 @@ xtrabackup_copy_logfile(lsn_t from_lsn, my_bool is_last)
 				    " log files being too small.\n");
 			}
 
-			goto error;
+			return(false);
 		} else if (!checksum_is_ok) {
 			/* Garbage or an incompletely written log block */
 
@@ -2549,7 +2633,7 @@ xtrabackup_copy_logfile(lsn_t from_lsn, my_bool is_last)
 			msg("xtrabackup: warning: this is possible when the "
 			    "log block has not been fully written by the "
 			    "server, will retry later.\n");
-			finished = TRUE;
+			*finished = true;
 			break;
 		}
 
@@ -2561,9 +2645,9 @@ xtrabackup_copy_logfile(lsn_t from_lsn, my_bool is_last)
 			we know that log data is contiguous up to scanned_lsn
 			in all non-corrupt log groups. */
 
-			if (scanned_lsn > contiguous_lsn) {
+			if (scanned_lsn > *contiguous_lsn) {
 
-				contiguous_lsn = scanned_lsn;
+				*contiguous_lsn = scanned_lsn;
 			}
 		}
 
@@ -2580,7 +2664,7 @@ xtrabackup_copy_logfile(lsn_t from_lsn, my_bool is_last)
 			/* Garbage from a log buffer flush which was made
 			before the most recent database recovery */
 
-			finished = TRUE;
+			*finished = true;
 			break;
 		}
 
@@ -2590,54 +2674,88 @@ xtrabackup_copy_logfile(lsn_t from_lsn, my_bool is_last)
 		if (data_len < OS_FILE_LOG_BLOCK_SIZE) {
 			/* Log data for this group ends here */
 
-			finished = TRUE;
+			*finished = true;
 		} else {
 			log_block += OS_FILE_LOG_BLOCK_SIZE;
 		}
-	} /* while (log_block < log_sys->buf + RECV_SCAN_SIZE && !finished) */
-
-	group_scanned_lsn = scanned_lsn;
-
-
-
-		}
-
-		/* ===== write log to 'xtrabackup_logfile' ====== */
-		{
-		ulint 	write_size;
-
-		if (!finished) {
-			write_size = RECV_SCAN_SIZE;
-		} else {
-			write_size = ut_uint64_align_up(group_scanned_lsn,
-							OS_FILE_LOG_BLOCK_SIZE) -
-				start_lsn;
-			if (!is_last &&
-			    group_scanned_lsn % OS_FILE_LOG_BLOCK_SIZE
-			    )
-				write_size -= OS_FILE_LOG_BLOCK_SIZE;
-		}
-
-
-		if (ds_write(dst_log_file, log_sys->buf, write_size)) {
-			msg("xtrabackup: Error: write to logfile failed\n");
-			goto error;
-		}
-
-
-		}
-
-		mutex_exit(&log_sys->mutex);
-
-		start_lsn = end_lsn;
 	}
 
+	*group_scanned_lsn = scanned_lsn;
 
+	/* ===== write log to 'xtrabackup_logfile' ====== */
+	if (!*finished) {
+		write_size = RECV_SCAN_SIZE;
+	} else {
+		write_size = ut_uint64_align_up(scanned_lsn,
+					OS_FILE_LOG_BLOCK_SIZE) - start_lsn;
+		if (!is_last && scanned_lsn % OS_FILE_LOG_BLOCK_SIZE) {
+			write_size -= OS_FILE_LOG_BLOCK_SIZE;
+		}
+	}
+
+	if (ds_write(dst_log_file, log_sys->buf, write_size)) {
+		msg("xtrabackup: Error: "
+		    "write to logfile failed\n");
+		return(false);
+	}
+
+	return(true);
+}
+
+static my_bool
+xtrabackup_copy_logfile(lsn_t from_lsn, my_bool is_last)
+{
+	/* definition from recv_recovery_from_checkpoint_start() */
+	log_group_t*	group;
+	lsn_t		group_scanned_lsn;
+	lsn_t		contiguous_lsn;
+
+	ut_a(dst_log_file != NULL);
+
+	/* read from checkpoint_lsn_start to current */
+	contiguous_lsn = ut_uint64_align_down(from_lsn, OS_FILE_LOG_BLOCK_SIZE);
+
+	/* TODO: We must check the contiguous_lsn still exists in log file.. */
+
+	group = UT_LIST_GET_FIRST(log_sys->log_groups);
+
+	while (group) {
+		bool	finished;
+		lsn_t	start_lsn;
+		lsn_t	end_lsn;
+
+		/* reference recv_group_scan_log_recs() */
+		finished = false;
+
+		start_lsn = contiguous_lsn;
+
+		while (!finished) {
+
+			end_lsn = start_lsn + RECV_SCAN_SIZE;
+
+			xtrabackup_io_throttling();
+
+			mutex_enter(&log_sys->mutex);
+
+			log_group_read_log_seg(log_sys->buf,
+					       group, start_lsn, end_lsn);
+
+			 if (!xtrabackup_scan_log_recs(group, is_last,
+				start_lsn, &contiguous_lsn, &group_scanned_lsn,
+				&finished)) {
+				goto error;
+			 }
+
+			mutex_exit(&log_sys->mutex);
+
+			start_lsn = end_lsn;
+
+		}
 
 		group->scanned_lsn = group_scanned_lsn;
 
-		msg(">> log scanned up to (" LSN_PF ")\n",
-		    group->scanned_lsn);
+		msg_ts(">> log scanned up to (" LSN_PF ")\n",
+		       group->scanned_lsn);
 
 		group = UT_LIST_GET_NEXT(log_groups, group);
 
@@ -2839,12 +2957,12 @@ xtrabackup_init_datasinks(void)
 	/* Start building out the pipelines from the terminus back */
 	if (xtrabackup_stream) {
 		/* All streaming goes to stdout */
-		ds_data = ds_meta = ds_create(xtrabackup_target_dir,
-					      DS_TYPE_STDOUT);
+		ds_data = ds_meta = ds_redo = ds_create(xtrabackup_target_dir,
+						        DS_TYPE_STDOUT);
 	} else {
 		/* Local filesystem */
-		ds_data = ds_meta = ds_create(xtrabackup_target_dir,
-					      DS_TYPE_LOCAL);
+		ds_data = ds_meta = ds_redo = ds_create(xtrabackup_target_dir,
+						        DS_TYPE_LOCAL);
 	}
 
 	/* Track it for destruction */
@@ -2870,11 +2988,12 @@ xtrabackup_init_datasinks(void)
 		if (xtrabackup_stream_fmt != XB_STREAM_FMT_XBSTREAM) {
 
 			/* 'tar' does not allow parallel streams */
-			ds_meta = ds_create(xtrabackup_target_dir, DS_TYPE_TMPFILE);
+			ds_redo = ds_meta = ds_create(xtrabackup_target_dir,
+						      DS_TYPE_TMPFILE);
 			xtrabackup_add_datasink(ds_meta);
 			ds_set_pipe(ds_meta, ds);
 		} else {
-			ds_meta = ds_data;
+			ds_redo = ds_meta = ds_data;
 		}
 	}
 
@@ -2886,10 +3005,19 @@ xtrabackup_init_datasinks(void)
 		xtrabackup_add_datasink(ds);
 
 		ds_set_pipe(ds, ds_data);
-		ds_data = ds_meta = ds;
+		if (ds_data != ds_meta) {
+			ds_data = ds;
+			ds = ds_create(xtrabackup_target_dir, DS_TYPE_ENCRYPT);
+			xtrabackup_add_datasink(ds);
+
+			ds_set_pipe(ds, ds_meta);
+			ds_redo = ds_meta = ds;
+		} else {
+			ds_redo = ds_data = ds_meta = ds;
+		}
 	}
 
-	/* Compression for ds_data */
+	/* Compression for ds_data and ds_redo */
 	if (xtrabackup_compress) {
 		ds_ctxt_t	*ds;
 
@@ -2898,12 +3026,29 @@ xtrabackup_init_datasinks(void)
 		ds_buffer_set_size(ds, 1024 * 1024);
 		xtrabackup_add_datasink(ds);
 		ds_set_pipe(ds, ds_data);
-		ds_data = ds;
+		if (ds_data != ds_redo) {
+			ds_data = ds;
+			ds = ds_create(xtrabackup_target_dir, DS_TYPE_BUFFER);
+			ds_buffer_set_size(ds, 1024 * 1024);
+			xtrabackup_add_datasink(ds);
+			ds_set_pipe(ds, ds_redo);
+			ds_redo = ds;
+		} else {
+			ds_redo = ds_data = ds;
+		}
 
 		ds = ds_create(xtrabackup_target_dir, DS_TYPE_COMPRESS);
 		xtrabackup_add_datasink(ds);
 		ds_set_pipe(ds, ds_data);
-		ds_data = ds;
+		if (ds_data != ds_redo) {
+			ds_data = ds;
+			ds = ds_create(xtrabackup_target_dir, DS_TYPE_COMPRESS);
+			xtrabackup_add_datasink(ds);
+			ds_set_pipe(ds, ds_redo);
+			ds_redo = ds;
+		} else {
+			ds_redo = ds_data = ds;
+		}
 	}
 }
 
@@ -2920,6 +3065,7 @@ static void xtrabackup_destroy_datasinks(void)
 	}
 	ds_data = NULL;
 	ds_meta = NULL;
+	ds_redo = NULL;
 }
 
 #define SRV_N_PENDING_IOS_PER_THREAD 	OS_AIO_N_PENDING_IOS_PER_THREAD
@@ -3246,6 +3392,8 @@ xb_load_tablespaces(void)
 	if (err != DB_SUCCESS) {
 		return(err);
 	}
+
+	debug_sync_point("xtrabackup_load_tablespaces_pause");
 
 	return(DB_SUCCESS);
 }
@@ -4037,7 +4185,7 @@ reread_log_header:
 
 	/* open the log file */
 	memset(&stat_info, 0, sizeof(MY_STAT));
-	dst_log_file = ds_open(ds_meta, XB_LOG_FILENAME, &stat_info);
+	dst_log_file = ds_open(ds_redo, XB_LOG_FILENAME, &stat_info);
 	if (dst_log_file == NULL) {
 		msg("xtrabackup: error: failed to open the target stream for "
 		    "'%s'.\n", XB_LOG_FILENAME);
@@ -4072,6 +4220,13 @@ reread_log_header:
 		os_thread_create(io_watching_thread, NULL, &io_watching_thread_id);
 	}
 
+	mutex_enter(&log_sys->mutex);
+	log_group_t *group = UT_LIST_GET_FIRST(log_sys->log_groups);
+	xtrabackup_choose_lsn_offset(checkpoint_lsn_start,
+				     group->lsn_offset_ms56);
+	xtrabackup_choose_lsn_offset(checkpoint_lsn_start,
+				     group->lsn_offset_ps55);
+	mutex_exit(&log_sys->mutex);
 
 	/* copy log file by current position */
 	if(xtrabackup_copy_logfile(checkpoint_lsn_start, FALSE))
@@ -4181,6 +4336,12 @@ reread_log_header:
 
 		log_group_header_read(max_cp_group, max_cp_field);
 
+		log_group_t *group = UT_LIST_GET_FIRST(log_sys->log_groups);
+		xtrabackup_choose_lsn_offset(checkpoint_lsn_start,
+					     group->lsn_offset_ms56);
+		xtrabackup_choose_lsn_offset(checkpoint_lsn_start,
+					     group->lsn_offset_ps55);
+
 		latest_cp = mach_read_from_8(log_sys->checkpoint_buf +
 					     LOG_CHECKPOINT_LSN);
 
@@ -4201,7 +4362,9 @@ skip_last_cp:
 	msg("\n");
 
 	os_event_destroy(log_copying_stop);
-	ds_close(dst_log_file);
+	if (ds_close(dst_log_file)) {
+		exit(EXIT_FAILURE);
+	}
 
 	if(!xtrabackup_incremental) {
 		strcpy(metadata_type, "full-backuped");
@@ -4242,6 +4405,14 @@ skip_last_cp:
 	xb_filters_free();
 
 	xb_data_files_close();
+
+	/* Make sure that the latest checkpoint made it to xtrabackup_logfile */
+	if (latest_cp > log_copy_scanned_lsn) {
+		msg("xtrabackup: error: last checkpoint LSN (" LSN_PF
+		    ") is larger than last copied LSN (" LSN_PF ").\n",
+		    latest_cp, log_copy_scanned_lsn);
+		exit(EXIT_FAILURE);
+	}
 }
 
 /* ================= stats ================= */
@@ -6385,6 +6556,35 @@ innodb_free_param()
 	free_tmpdir(&mysql_tmpdir_list);
 }
 
+
+/**************************************************************************
+Store the current binary log coordinates in a specified file.
+@return 'false' on error. */
+static bool
+store_binlog_info(
+/*==============*/
+	const char *filename)	/*!< in: output file name */
+{
+	FILE *fp;
+
+	if (trx_sys_mysql_bin_log_name[0] == '\0') {
+		return(true);
+	}
+
+	fp = fopen(filename, "w");
+
+	if (!fp) {
+		msg("xtrabackup: failed to open '%s'\n", filename);
+		return(false);
+	}
+
+	fprintf(fp, "%s\t" UINT64PF "\n",
+		trx_sys_mysql_bin_log_name, trx_sys_mysql_bin_log_pos);
+	fclose(fp);
+
+	return(true);
+}
+
 static void
 xtrabackup_prepare_func(void)
 {
@@ -6744,29 +6944,19 @@ next_node:
 		ut_free(buf);
 	}
 
-	/* print binlog position (again?) */
-	msg("\n[notice (again)]\n"
-	    "  If you use binary log and don't use any hack of group commit,\n"
-	    "  the binary log position seems to be:\n");
+	/* print the binary log position  */
 	trx_sys_print_mysql_binlog_offset();
 	msg("\n");
 
-	/* output to xtrabackup_binlog_pos_innodb */
-	if (*trx_sys_mysql_bin_log_name != '\0') {
-		FILE *fp;
+	/* output to xtrabackup_binlog_pos_innodb and (if
+	backup_safe_binlog_info was available on the server) to
+	xtrabackup_binlog_info. In the latter case xtrabackup_binlog_pos_innodb
+	becomes redundant and is created only for compatibility. */
+	if (!store_binlog_info("xtrabackup_binlog_pos_innodb") ||
+	    (recover_binlog_info &&
+	     !store_binlog_info(XTRABACKUP_BINLOG_INFO))) {
 
-		fp = fopen("xtrabackup_binlog_pos_innodb", "w");
-		if (fp) {
-			/* Use UINT64PF instead of LSN_PF here, as we have to
-			maintain the file format. */
-			fprintf(fp, "%s\t" UINT64PF "\n",
-				trx_sys_mysql_bin_log_name,
-				trx_sys_mysql_bin_log_pos);
-			fclose(fp);
-		} else {
-			msg("xtrabackup: failed to open "
-			    "'xtrabackup_binlog_pos_innodb'\n");
-		}
+		exit(EXIT_FAILURE);
 	}
 
 	if (innobase_log_arch_dir)
@@ -6774,24 +6964,21 @@ next_node:
 
 	/* Check whether the log is applied enough or not. */
 	if ((xtrabackup_incremental
-	     && srv_start_lsn < incremental_last_lsn)
+	     && srv_start_lsn < incremental_to_lsn)
 	    ||(!xtrabackup_incremental
-	       && srv_start_lsn < metadata_last_lsn)) {
-		msg(
-"xtrabackup: ########################################################\n"
-"xtrabackup: # !!ERROR!!                                            #\n"
-"xtrabackup: # The transaction log file is corrupted.               #\n"
-"xtrabackup: # The log was not applied to the intended LSN!         #\n"
-"xtrabackup: ########################################################\n"
-		    );
+	       && srv_start_lsn < metadata_to_lsn)) {
+		msg("xtrabackup: error: "
+		    "The transaction log file is corrupted.\n"
+		    "xtrabackup: error: "
+		    "The log was not applied to the intended LSN!\n");
 		msg("xtrabackup: Log applied to lsn " LSN_PF "\n",
 		    srv_start_lsn);
 		if (xtrabackup_incremental) {
 			msg("xtrabackup: The intended lsn is " LSN_PF "\n",
-			    incremental_last_lsn);
+			    incremental_to_lsn);
 		} else {
 			msg("xtrabackup: The intended lsn is " LSN_PF "\n",
-			    metadata_last_lsn);
+			    metadata_to_lsn);
 		}
 		exit(EXIT_FAILURE);
 	}
@@ -7014,10 +7201,6 @@ xb_init()
 			return(false);
 		}
 
-		if (!detect_mysql_capabilities_for_backup()) {
-			return(false);
-		}
-
 		history_start_time = time(NULL);
 
 	}
@@ -7102,14 +7285,23 @@ int main(int argc, char **argv)
 		}
 	}
 
-	/* Throw a descriptive error if --defaults-file is not the first command
-	line argument */
+	/* Throw a descriptive error if --defaults-file or --defaults-extra-file
+	is not the first command line argument */
 	for (int i = 2 ; i < argc ; i++) {
 		char *optend = strcend((argv)[i], '=');
 
 		if (!strncmp(argv[i], "--defaults-file", optend - argv[i])) {
 
 			msg("xtrabackup: Error: --defaults-file "
+			    "must be specified first on the command "
+			    "line\n");
+			exit(EXIT_FAILURE);
+		}
+
+		if (!strncmp(argv[i], "--defaults-extra-file",
+			     optend - argv[i])) {
+
+			msg("xtrabackup: Error: --defaults-extra-file "
 			    "must be specified first on the command "
 			    "line\n");
 			exit(EXIT_FAILURE);
@@ -7151,6 +7343,22 @@ int main(int argc, char **argv)
 	fn_format(xtrabackup_real_target_dir, xtrabackup_target_dir,
 		  "", "", MY_UNPACK_FILENAME | MY_RETURN_REAL_PATH);
 	xtrabackup_target_dir= xtrabackup_real_target_dir;
+
+	/* get default temporary directory */
+	if (!opt_mysql_tmpdir || !opt_mysql_tmpdir[0]) {
+		opt_mysql_tmpdir = getenv("TMPDIR");
+#if defined(__WIN__)
+		if (!opt_mysql_tmpdir) {
+			opt_mysql_tmpdir = getenv("TEMP");
+		}
+		if (!opt_mysql_tmpdir) {
+			opt_mysql_tmpdir = getenv("TMP");
+		}
+#endif
+		if (!opt_mysql_tmpdir || !opt_mysql_tmpdir[0]) {
+			opt_mysql_tmpdir = const_cast<char*>(DEFAULT_TMPDIR);
+		}
+	}
 
 	/* temporary setting of enough size */
 	srv_page_size_shift = UNIV_PAGE_SIZE_SHIFT_MAX;
@@ -7310,9 +7518,12 @@ int main(int argc, char **argv)
 
 	xb_regex_end();
 
-	msg("completed OK!\n");
+	msg_ts("completed OK!\n");
 
-        free_defaults(argv_defaults);
+	free_defaults(argv_defaults);
+
+	if (THR_THD)
+		(void) pthread_key_delete(THR_THD);
 
 	if (THR_THD_initialized) {
 		THR_THD_initialized = false;

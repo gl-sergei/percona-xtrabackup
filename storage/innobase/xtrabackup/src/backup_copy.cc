@@ -65,6 +65,8 @@ using std::min;
 /* list of files to sync for --rsync mode */
 std::set<std::string> rsync_list;
 
+/* Whether LOCK BINLOG FOR BACKUP has been issued during backup */
+bool binlog_locked;
 
 /************************************************************************
 Struct represents file or directory. */
@@ -773,7 +775,7 @@ datafile_copy_backup(const char *filepath, uint thread_n)
 	of the filters value. */
 
 	if (check_if_skip_table(filepath)) {
-		msg("[%02u] Skipping %s.\n", thread_n, filepath);
+		msg_ts("[%02u] Skipping %s.\n", thread_n, filepath);
 		return(true);
 	}
 
@@ -846,7 +848,7 @@ backup_file_vprintf(const char *filename, const char *fmt, va_list ap)
 	}
 
 	action = xb_get_copy_action("Writing");
-	msg("[%02u] %s %s\n", 0, action, filename);
+	msg_ts("[%02u] %s %s\n", 0, action, filename);
 
 	if (buf_len == -1) {
 		goto error;
@@ -857,9 +859,13 @@ backup_file_vprintf(const char *filename, const char *fmt, va_list ap)
 	}
 
 	/* close */
-	msg("[%02u]        ...done\n", 0);
+	msg_ts("[%02u]        ...done\n", 0);
 	free(buf);
-	ds_close(dstfile);
+
+	if (ds_close(dstfile)) {
+		goto error_close;
+	}
+
 	return(true);
 
 error:
@@ -867,6 +873,8 @@ error:
 	if (dstfile != NULL) {
 		ds_close(dstfile);
 	}
+
+error_close:
 	msg("[%02u] Error: backup file failed.\n", 0);
 	return(false); /*ERROR*/
 }
@@ -965,8 +973,8 @@ copy_file(const char *src_file_path, const char *dst_file_path, uint thread_n)
 	}
 
 	action = xb_get_copy_action();
-	msg("[%02u] %s %s to %s\n",
-		thread_n, action, src_file_path, dstfile->path);
+	msg_ts("[%02u] %s %s to %s\n",
+	       thread_n, action, src_file_path, dstfile->path);
 
 	/* The main copy loop */
 	while ((res = datafile_read(&cursor)) == XB_FIL_CUR_SUCCESS) {
@@ -981,9 +989,11 @@ copy_file(const char *src_file_path, const char *dst_file_path, uint thread_n)
 	}
 
 	/* close */
-	msg("[%02u]        ...done\n", thread_n);
+	msg_ts("[%02u]        ...done\n", thread_n);
 	datafile_close(&cursor);
-	ds_close(dstfile);
+	if (ds_close(dstfile)) {
+		goto error_close;
+	}
 	return(true);
 
 error:
@@ -991,6 +1001,8 @@ error:
 	if (dstfile != NULL) {
 		ds_close(dstfile);
 	}
+
+error_close:
 	msg("[%02u] Error: copy_file() failed.\n", thread_n);
 	return(false); /*ERROR*/
 }
@@ -1002,7 +1014,8 @@ different devices fall back to copy and unlink.
 @return true in case of success. */
 static
 bool
-move_file(const char *src_file_path, const char *dst_file_path, uint thread_n)
+move_file(const char *src_file_path, const char *dst_file_path,
+	  const char *dst_dir, uint thread_n)
 {
 	char errbuf[MYSYS_STRERROR_SIZE];
 	char dst_file_path_abs[FN_REFLEN];
@@ -1010,7 +1023,7 @@ move_file(const char *src_file_path, const char *dst_file_path, uint thread_n)
 	size_t dirname_length;
 
 	ut_snprintf(dst_file_path_abs, sizeof(dst_file_path_abs),
-			"%s/%s", mysql_data_home, dst_file_path);
+			"%s/%s", dst_dir, dst_file_path);
 
 	dirname_part(dst_dir_abs, dst_file_path_abs, &dirname_length);
 
@@ -1025,16 +1038,15 @@ move_file(const char *src_file_path, const char *dst_file_path, uint thread_n)
 		return(false);
 	}
 
-	msg("[%02u] Moving %s to %s\n",
-		thread_n, src_file_path, dst_file_path_abs);
+	msg_ts("[%02u] Moving %s to %s\n",
+	       thread_n, src_file_path, dst_file_path_abs);
 
 	if (my_rename(src_file_path, dst_file_path_abs, MYF(0)) != 0) {
 		if (my_errno() == EXDEV) {
 			bool ret;
 			ret = copy_file(src_file_path,
 					dst_file_path, thread_n);
-			msg("[%02u] Removing %s\n",
-					thread_n, src_file_path);
+			msg_ts("[%02u] Removing %s\n", thread_n, src_file_path);
 			if (unlink(src_file_path) != 0) {
 				msg("Error: unlink %s failed: %s\n",
 					src_file_path,
@@ -1049,7 +1061,7 @@ move_file(const char *src_file_path, const char *dst_file_path, uint thread_n)
 		return(false);
 	}
 
-	msg("[%02u]        ...done\n", thread_n);
+	msg_ts("[%02u]        ...done\n", thread_n);
 
 	return(true);
 }
@@ -1061,11 +1073,13 @@ Copy or move file depending on current mode.
 static
 bool
 copy_or_move_file(const char *src_file_path,
-			const char *dst_file_path, uint thread_n)
+		  const char *dst_file_path,
+		  const char *dst_dir,
+		  uint thread_n)
 {
 	return(xtrabackup_copy_back ?
 		copy_file(src_file_path, dst_file_path, thread_n) :
-		move_file(src_file_path, dst_file_path, thread_n));
+		move_file(src_file_path, dst_file_path, dst_dir, thread_n));
 }
 
 
@@ -1097,31 +1111,26 @@ backup_files(const char *from, bool prep_mode)
 		}
 	}
 
-	msg("Starting %s non-InnoDB tables and files\n",
-		prep_mode ? "prep copy of" : "to backup");
+	msg_ts("Starting %s non-InnoDB tables and files\n",
+	       prep_mode ? "prep copy of" : "to backup");
 
 	datadir_node_init(&node);
 	it = datadir_iter_new(from);
 
 	while (datadir_iter_next(it, &node)) {
 
-		if (opt_rsync) {
-			if (!node.is_empty_dir) {
-				datafile_rsync_backup(node.filepath, !prep_mode,
-						rsync_tmpfile);
-			} else {
-				fprintf(rsync_tmpfile, "%s\n", node.filepath);
-			}
-			continue;
-		}
-
 		if (!node.is_empty_dir) {
-			if (!(ret = datafile_copy_backup(node.filepath, 1))) {
-				msg("Failed to copy file %s\n",
-					node.filepath);
+			if (opt_rsync) {
+				ret = datafile_rsync_backup(node.filepath,
+					!prep_mode, rsync_tmpfile);
+			} else {
+				ret = datafile_copy_backup(node.filepath, 1);
+			}
+			if (!ret) {
+				msg("Failed to copy file %s\n", node.filepath);
 				goto out;
 			}
-		} else {
+		} else if (!prep_mode) {
 			/* backup fake file into empty directory */
 			char path[FN_REFLEN];
 			ut_snprintf(path, sizeof(path),
@@ -1153,13 +1162,12 @@ backup_files(const char *from, bool prep_mode)
 		cmd << "rsync -t . --files-from=" << rsync_tmpfile_name
 		    << " " << xtrabackup_target_dir;
 
-		msg("Starting rsync as: %s\n", cmd.str().c_str());
+		msg_ts("Starting rsync as: %s\n", cmd.str().c_str());
 		if ((err = system(cmd.str().c_str()) && !prep_mode) != 0) {
-			msg("Error: rsync failed with error code %d\n",
-				err);
+			msg_ts("Error: rsync failed with error code %d\n", err);
 			goto out;
 		}
-		msg("rsync finished successfully.\n");
+		msg_ts("rsync finished successfully.\n");
 
 		if (!prep_mode && !opt_no_lock) {
 			char path[FN_REFLEN];
@@ -1190,7 +1198,7 @@ backup_files(const char *from, bool prep_mode)
 					snprintf(dst_path, sizeof(dst_path),
 						"%s/%s", xtrabackup_target_dir,
 						path);
-					msg("Removing %s\n", dst_path);
+					msg_ts("Removing %s\n", dst_path);
 					unlink(dst_path);
 				}
 			}
@@ -1200,8 +1208,8 @@ backup_files(const char *from, bool prep_mode)
 		}
 	}
 
-	msg("Finished %s non-InnoDB tables and files\n",
-		prep_mode ? "a prep copy of" : "backing up");
+	msg_ts("Finished %s non-InnoDB tables and files\n",
+	       prep_mode ? "a prep copy of" : "backing up");
 
 out:
 	datadir_iter_free(it);
@@ -1248,11 +1256,11 @@ backup_start()
 				return(false);
 			}
 		}
-	} else {
-		lock_binlog(mysql_connection);
 	}
 
 	if (opt_slave_info) {
+		lock_binlog_maybe(mysql_connection);
+
 		if (!write_slave_info(mysql_connection)) {
 			return(false);
 		}
@@ -1271,10 +1279,14 @@ backup_start()
 		write_current_binlog_file(mysql_connection);
 	}
 
-	write_binlog_info(mysql_connection);
+	if (opt_binlog_info == BINLOG_INFO_ON) {
+
+		lock_binlog_maybe(mysql_connection);
+		write_binlog_info(mysql_connection);
+	}
 
 	if (have_flush_engine_logs) {
-		msg("Executing FLUSH NO_WRITE_TO_BINLOG ENGINE LOGS...\n");
+		msg_ts("Executing FLUSH NO_WRITE_TO_BINLOG ENGINE LOGS...\n");
 		xb_mysql_query(mysql_connection,
 			"FLUSH NO_WRITE_TO_BINLOG ENGINE LOGS", false);
 	}
@@ -1313,7 +1325,7 @@ backup_finish()
 		}
 	}
 
-	msg("Backup created in directory '%s'\n", xtrabackup_target_dir);
+	msg_ts("Backup created in directory '%s'\n", xtrabackup_target_dir);
 	if (mysql_binlog_position != NULL) {
 		msg("MySQL binlog position: %s\n", mysql_binlog_position);
 	}
@@ -1341,10 +1353,17 @@ ibx_copy_incremental_over_full()
 	const char *ext_list[] = {"frm", "isl", "MYD", "MYI", "MAD", "MAI",
 		"MRG", "TRG", "TRN", "ARM", "ARZ", "CSM", "CSV", "opt", "par",
 		NULL};
+	const char *sup_files[] = {"xtrabackup_binlog_info",
+				   "xtrabackup_galera_info",
+				   "xtrabackup_slave_info",
+				   "xtrabackup_info",
+				   "ib_lru_dump",
+				   NULL};
 	datadir_iter_t *it = NULL;
 	datadir_node_t node;
 	bool ret = true;
 	char path[FN_REFLEN];
+	int i;
 
 	datadir_node_init(&node);
 
@@ -1395,12 +1414,20 @@ ibx_copy_incremental_over_full()
 			}
 		}
 
-		snprintf(path, sizeof(path), "%s/%s",
-			xtrabackup_incremental_dir,
-			"ib_lru_dump");
+		/* copy supplementary files */
 
-		if (file_exists(path)) {
-			copy_file(path, "ib_lru_dump", 0);
+		for (i = 0; sup_files[i]; i++) {
+			snprintf(path, sizeof(path), "%s/%s",
+				xtrabackup_incremental_dir,
+				sup_files[i]);
+
+			if (file_exists(sup_files[i])) {
+				unlink(sup_files[i]);
+			}
+
+			if (file_exists(path)) {
+				copy_file(path, sup_files[i], 0);
+			}
 		}
 
 	}
@@ -1433,24 +1460,21 @@ ibx_cleanup_full_backup()
 	sure non-InnoDB files are cleaned up from full backup dir before
 	we copy files from incremental dir. */
 
-	if (xtrabackup_incremental) {
+	it = datadir_iter_new(xtrabackup_target_dir);
 
-		it = datadir_iter_new(xtrabackup_target_dir);
+	while (datadir_iter_next(it, &node)) {
 
-		while (datadir_iter_next(it, &node)) {
+		if (node.is_empty_dir) {
+			rmdir(node.filepath);
+		}
 
-			if (node.is_empty_dir
-			    || filename_matches(node.filepath, ext_list)) {
-				continue;
-			}
-
+		if (xtrabackup_incremental && !node.is_empty_dir
+		    && !filename_matches(node.filepath, ext_list)) {
 			unlink(node.filepath);
 		}
 	}
 
-	if (it != NULL) {
-		datadir_iter_free(it);
-	}
+	datadir_iter_free(it);
 
 	datadir_node_free(&node);
 
@@ -1476,6 +1500,7 @@ copy_back()
 	bool ret;
 	datadir_iter_t *it = NULL;
 	datadir_node_t node;
+	char *dst_dir;
 
 	if (!opt_force_non_empty_dirs) {
 		if (!directory_exists_and_empty(mysql_data_home,
@@ -1533,14 +1558,16 @@ copy_back()
 	/* copy undo tablespaces */
 	if (srv_undo_tablespaces > 0) {
 
-		ds_data = ds_create((srv_undo_dir && *srv_undo_dir)
-					? srv_undo_dir : mysql_data_home,
-				DS_TYPE_LOCAL);
+		dst_dir = (srv_undo_dir && *srv_undo_dir)
+				? srv_undo_dir : mysql_data_home;
+
+		ds_data = ds_create(dst_dir, DS_TYPE_LOCAL);
 
 		for (i = 1; i <= srv_undo_tablespaces; i++) {
 			char filename[20];
 			sprintf(filename, "undo%03lu", i);
-			if (!(ret = copy_or_move_file(filename, filename, 1))) {
+			if (!(ret = copy_or_move_file(filename, filename,
+				                      dst_dir, 1))) {
 				goto cleanup;
 			}
 		}
@@ -1551,9 +1578,10 @@ copy_back()
 
 	/* copy redo logs */
 
-	ds_data = ds_create((srv_log_group_home_dir && *srv_log_group_home_dir)
-				? srv_log_group_home_dir : mysql_data_home,
-			DS_TYPE_LOCAL);
+	dst_dir = (srv_log_group_home_dir && *srv_log_group_home_dir)
+				? srv_log_group_home_dir : mysql_data_home;
+
+	ds_data = ds_create(dst_dir, DS_TYPE_LOCAL);
 
 	for (i = 0; i < (ulong)innobase_log_files_in_group; i++) {
 		char filename[20];
@@ -1563,7 +1591,8 @@ copy_back()
 			continue;
 		}
 
-		if (!(ret = copy_or_move_file(filename, filename, 1))) {
+		if (!(ret = copy_or_move_file(filename, filename,
+					      dst_dir, 1))) {
 			goto cleanup;
 		}
 	}
@@ -1573,9 +1602,10 @@ copy_back()
 
 	/* copy innodb system tablespace(s) */
 
-	ds_data = ds_create((innobase_data_home_dir && *innobase_data_home_dir)
-				? innobase_data_home_dir : mysql_data_home,
-			DS_TYPE_LOCAL);
+	dst_dir = (innobase_data_home_dir && *innobase_data_home_dir)
+				? innobase_data_home_dir : mysql_data_home;
+
+	ds_data = ds_create(dst_dir, DS_TYPE_LOCAL);
 
 	for (Tablespace::files_t::iterator
 	     iter(srv_sys_space.files_begin()),
@@ -1584,7 +1614,8 @@ copy_back()
 	     ++iter) {
 		const char *filename = base_name(iter->name());
 
-		if (!(ret = copy_or_move_file(filename, iter->name(), 1))) {
+		if (!(ret = copy_or_move_file(filename, iter->name(),
+					      dst_dir, 1))) {
 			goto cleanup;
 		}
 	}
@@ -1616,8 +1647,7 @@ copy_back()
 			snprintf(path, sizeof(path), "%s/%s",
 				mysql_data_home, node.filepath_rel);
 
-			msg("[%02u] Creating directory %s\n", 1,
-				path);
+			msg_ts("[%02u] Creating directory %s\n", 1, path);
 
 			if (mkdirp(path, 0777, MYF(0)) < 0) {
 				char errbuf[MYSYS_STRERROR_SIZE];
@@ -1631,7 +1661,7 @@ copy_back()
 
 			}
 
-			msg("[%02u] ...done.", 1);
+			msg_ts("[%02u] ...done.", 1);
 
 			continue;
 		}
@@ -1669,8 +1699,8 @@ copy_back()
 			continue;
 		}
 
-		if (!(ret = copy_or_move_file(node.filepath,
-						node.filepath_rel, 1))) {
+		if (!(ret = copy_or_move_file(node.filepath, node.filepath_rel,
+					      mysql_data_home, 1))) {
 			goto cleanup;
 		}
 	}
@@ -1758,7 +1788,7 @@ decrypt_decompress_file(const char *filepath, uint thread_n)
 
  	if (needs_action) {
 
-	 	msg("[%02u] %s\n", thread_n, message.str().c_str());
+		msg_ts("[%02u] %s\n", thread_n, message.str().c_str());
 
 	 	if (system(cmd.str().c_str()) != 0) {
 	 		return(false);

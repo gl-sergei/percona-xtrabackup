@@ -60,6 +60,7 @@ char tool_args[2048];
 /* server capabilities */
 bool have_changed_page_bitmaps = false;
 bool have_backup_locks = false;
+bool have_backup_safe_binlog_info = false;
 bool have_lock_wait_timeout = false;
 bool have_galera_enabled = false;
 bool have_flush_engine_logs = false;
@@ -107,10 +108,10 @@ xb_mysql_connect()
 		return(NULL);
 	}
 
-	msg("Connecting to MySQL server host: %s, user: %s, password: %s, "
-		"port: %d, socket: %s\n", opt_host, opt_user,
-		opt_password ? "set" : "not set",
-		opt_port, opt_socket);
+	msg_ts("Connecting to MySQL server host: %s, user: %s, password: %s, "
+	       "port: %d, socket: %s\n", opt_host ? opt_host : "localhost",
+	       opt_user, opt_password ? "set" : "not set",
+	       opt_port, opt_socket);
 
 	if (!mysql_real_connect(connection,
 				opt_host ? opt_host : "localhost",
@@ -123,6 +124,9 @@ xb_mysql_connect()
 		mysql_close(connection);
 		return(NULL);
 	}
+
+	xb_mysql_query(connection, "SET SESSION wait_timeout=2147483",
+		       false, true);
 
 	return(connection);
 }
@@ -276,6 +280,20 @@ check_server_version(const char *version, const char *innodb_version)
 	return(true);
 }
 
+/*********************************************************************//**
+Convert MySQL version string to number.
+@return	version number. */
+static
+int
+mysql_version_number(const char *version_string)
+{
+	int version_major, version_minor, version_patch;
+
+	sscanf(version_string, "%d.%d.%d",
+	       &version_major, &version_minor, &version_patch);
+
+	return(version_major * 10000 + version_minor * 100 + version_patch);
+}
 
 /*********************************************************************//**
 Receive options important for XtraBackup from MySQL server.
@@ -287,6 +305,8 @@ get_mysql_vars(MYSQL *connection)
 	char *version_var = NULL;
 	char *innodb_version_var = NULL;
 	char *have_backup_locks_var = NULL;
+	char *have_backup_safe_binlog_info_var = NULL;
+	char *log_bin_var = NULL;
 	char *lock_wait_timeout_var= NULL;
 	char *wsrep_on_var = NULL;
 	char *slave_parallel_workers_var = NULL;
@@ -302,6 +322,9 @@ get_mysql_vars(MYSQL *connection)
 
 	mysql_variable mysql_vars[] = {
 		{"have_backup_locks", &have_backup_locks_var},
+		{"have_backup_safe_binlog_info",
+		 &have_backup_safe_binlog_info_var},
+		{"log_bin", &log_bin_var},
 		{"lock_wait_timeout", &lock_wait_timeout_var},
 		{"gtid_mode", &gtid_mode_var},
 		{"version", &version_var},
@@ -325,6 +348,24 @@ get_mysql_vars(MYSQL *connection)
 
 	if (have_backup_locks_var != NULL && !opt_no_backup_locks) {
 		have_backup_locks = true;
+	}
+
+	if (opt_binlog_info == BINLOG_INFO_AUTO) {
+
+		if (have_backup_safe_binlog_info_var != NULL)
+			opt_binlog_info = BINLOG_INFO_LOCKLESS;
+		else if (log_bin_var != NULL && !strcmp(log_bin_var, "ON"))
+			opt_binlog_info = BINLOG_INFO_ON;
+		else
+			opt_binlog_info = BINLOG_INFO_OFF;
+	}
+
+	if (have_backup_safe_binlog_info_var == NULL &&
+	    opt_binlog_info == BINLOG_INFO_LOCKLESS) {
+
+		msg("Error: --binlog-info=LOCKLESS is not supported by the "
+		    "server\n");
+		return(false);
 	}
 
 	if (lock_wait_timeout_var != NULL) {
@@ -359,8 +400,17 @@ get_mysql_vars(MYSQL *connection)
 
 	msg("Using server version %s\n", version_var);
 
+	if (!(ret = detect_mysql_capabilities_for_backup(version_var))) {
+		goto out;
+	}
+
 	/* make sure datadir value is the same in configuration file */
-	if (mysql_data_home != NULL && datadir_var != NULL) {
+	if (datadir_specified) {
+		if (!directory_exists(mysql_data_home, false)) {
+			msg("Error: option 'datadir' points to "
+			    "nonexistent directory '%s'\n", mysql_data_home);
+			goto out;
+		}
 		if (!(ret = equal_paths(mysql_data_home, datadir_var))) {
 			msg("Error: option 'datadir' has different "
 				"values:\n"
@@ -372,7 +422,12 @@ get_mysql_vars(MYSQL *connection)
 	}
 
 	/* get some default values is they are missing from my.cnf */
-	if (!xtrabackup_innodb_log_file_size_explicit) {
+	if (!datadir_specified) {
+		strmake(mysql_real_data_home, datadir_var, FN_REFLEN - 1);
+		mysql_data_home= mysql_real_data_home;
+	}
+
+	if (!innodb_log_file_size_specified) {
 		char *endptr;
 
 		innobase_log_file_size = strtoll(innodb_log_file_size_var,
@@ -404,7 +459,7 @@ get_mysql_vars(MYSQL *connection)
 		}
 	}
 
-	if (!xtrabackup_innodb_data_file_path_explicit) {
+	if (!innodb_data_file_path_specified) {
 		innobase_data_file_path = innobase_data_file_path_alloc
 					= strdup(innodb_data_file_path_var);
 	}
@@ -419,14 +474,11 @@ out:
 Query the server to find out what backup capabilities it supports.
 @return	true on success. */
 bool
-detect_mysql_capabilities_for_backup()
+detect_mysql_capabilities_for_backup(const char *version)
 {
-	/* MariaDB lists INNODB_CHANGED_PAGES in INFORMATION_SCHEMA.PLUGINS, but
-	it doesn't support FLUSH NO_WRITE_TO_BINLOG CHANGED_PAGE_BITMAPS */
 	const char *query = "SELECT 'INNODB_CHANGED_PAGES', COUNT(*) FROM "
 				"INFORMATION_SCHEMA.PLUGINS "
-			    "WHERE PLUGIN_NAME LIKE 'INNODB_CHANGED_PAGES'"
-				"AND NOT VERSION() LIKE '10.%MariaDB%'";
+			    "WHERE PLUGIN_NAME LIKE 'INNODB_CHANGED_PAGES'";
 	char *innodb_changed_pages = NULL;
 	mysql_variable vars[] = {
 		{"INNODB_CHANGED_PAGES", &innodb_changed_pages}, {NULL, NULL}};
@@ -438,6 +490,16 @@ detect_mysql_capabilities_for_backup()
 		ut_ad(innodb_changed_pages != NULL);
 
 		have_changed_page_bitmaps = (atoi(innodb_changed_pages) == 1);
+
+		/* INNODB_CHANGED_PAGES are listed in
+		INFORMATION_SCHEMA.PLUGINS in MariaDB, but
+		FLUSH NO_WRITE_TO_BINLOG CHANGED_PAGE_BITMAPS
+		is not supported for versions below 10.1.6
+		(see MDEV-7472) */
+		if (strstr(version, "MariaDB") != NULL &&
+		    mysql_version_number(version) < 100106) {
+			have_changed_page_bitmaps = false;
+		}
 
 		free_mysql_variables(vars);
 	}
@@ -621,8 +683,8 @@ have_queries_to_wait_for(MYSQL *connection, uint threshold)
 		    && duration >= (int)threshold
 		    && ((all_queries && is_query(info))
 		    	|| is_update_query(info))) {
-			msg("Waiting for query %s (duration %d sec): %s",
-				id, duration, info);
+			msg_ts("Waiting for query %s (duration %d sec): %s",
+			       id, duration, info);
 			return(true);
 		}
 	}
@@ -651,8 +713,8 @@ kill_long_queries(MYSQL *connection, uint timeout)
 		    duration >= (int)timeout &&
 		    ((all_queries && is_query(info)) ||
 		    	is_select_query(info))) {
-			msg("Killing query %s (duration %d sec): %s\n",
-				id, duration, info);
+			msg_ts("Killing query %s (duration %d sec): %s\n",
+			       id, duration, info);
 			ut_snprintf(kill_stmt, sizeof(kill_stmt),
 				    "KILL %s", id);
 			xb_mysql_query(connection, kill_stmt, false, false);
@@ -668,8 +730,8 @@ wait_for_no_updates(MYSQL *connection, uint timeout, uint threshold)
 
 	start_time = time(NULL);
 
-	msg("Waiting %u seconds for queries running longer than %u seconds "
-		"to finish\n", timeout, threshold);
+	msg_ts("Waiting %u seconds for queries running longer than %u seconds "
+	       "to finish\n", timeout, threshold);
 
 	while (time(NULL) <= (time_t)(start_time + timeout)) {
 		if (!have_queries_to_wait_for(connection, threshold)) {
@@ -678,7 +740,7 @@ wait_for_no_updates(MYSQL *connection, uint timeout, uint threshold)
 		os_thread_sleep(1000000);
 	}
 
-	msg("Unable to obtain lock. Please try again later.");
+	msg_ts("Unable to obtain lock. Please try again later.");
 
 	return(false);
 }
@@ -696,8 +758,8 @@ kill_query_thread(
 
 	os_event_set(kill_query_thread_started);
 
-	msg("Kill query timeout %d seconds.\n",
-		opt_kill_long_queries_timeout);
+	msg_ts("Kill query timeout %d seconds.\n",
+	       opt_kill_long_queries_timeout);
 
 	while (time(NULL) - start_time <
 				(time_t)opt_kill_long_queries_timeout) {
@@ -723,7 +785,7 @@ kill_query_thread(
 	mysql_close(mysql);
 
 stop_thread:
-	msg("Kill query thread stopped\n");
+	msg_ts("Kill query thread stopped\n");
 
 	os_event_set(kill_query_thread_stopped);
 
@@ -770,6 +832,7 @@ lock_tables(MYSQL *connection)
 	}
 
 	if (have_backup_locks) {
+		msg_ts("Executing LOCK TABLES FOR BACKUP...\n");
 		xb_mysql_query(connection, "LOCK TABLES FOR BACKUP", false);
 		return(true);
 	}
@@ -788,7 +851,10 @@ lock_tables(MYSQL *connection)
 		compatible with this trick.
 		*/
 
-		xb_mysql_query(connection, "FLUSH TABLES", false);
+		msg_ts("Executing FLUSH NO_WRITE_TO_BINLOG TABLES...\n");
+
+		xb_mysql_query(connection,
+			       "FLUSH NO_WRITE_TO_BINLOG TABLES", false);
 	}
 
 	if (opt_lock_wait_timeout) {
@@ -798,7 +864,7 @@ lock_tables(MYSQL *connection)
 		}
 	}
 
-	msg("Executing FLUSH TABLES WITH READ LOCK...\n");
+	msg_ts("Executing FLUSH TABLES WITH READ LOCK...\n");
 
 	if (opt_kill_long_queries_timeout) {
 		start_query_killer();
@@ -820,17 +886,21 @@ lock_tables(MYSQL *connection)
 
 
 /*********************************************************************//**
-If backup locks are used, execete LOCK BINLOG FOR BACKUP.
+If backup locks are used, execute LOCK BINLOG FOR BACKUP provided that we are
+not in the --no-lock mode and the lock has not been acquired already.
 @returns true if lock acquired */
 bool
-lock_binlog(MYSQL *connection)
+lock_binlog_maybe(MYSQL *connection)
 {
-	if (have_backup_locks) {
-		msg("Executing LOCK BINLOG FOR BACKUP...\n");
+	if (have_backup_locks && !opt_no_lock && !binlog_locked) {
+		msg_ts("Executing LOCK BINLOG FOR BACKUP...\n");
 		xb_mysql_query(connection, "LOCK BINLOG FOR BACKUP", false);
+		binlog_locked = true;
+
 		return(true);
 	}
-	return(true);
+
+	return(false);
 }
 
 
@@ -842,20 +912,20 @@ void
 unlock_all(MYSQL *connection)
 {
 	if (opt_debug_sleep_before_unlock) {
-		msg("Debug sleep for %u seconds\n",
-			opt_debug_sleep_before_unlock);
+		msg_ts("Debug sleep for %u seconds\n",
+		       opt_debug_sleep_before_unlock);
 		os_thread_sleep(opt_debug_sleep_before_unlock * 1000);
 	}
 
-	if (have_backup_locks) {
-		msg("Executing UNLOCK BINLOG\n");
+	if (binlog_locked) {
+		msg_ts("Executing UNLOCK BINLOG\n");
 		xb_mysql_query(connection, "UNLOCK BINLOG", false);
 	}
 
-	msg("Executing UNLOCK TABLES\n");
+	msg_ts("Executing UNLOCK TABLES\n");
 	xb_mysql_query(connection, "UNLOCK TABLES", false);
 
-	msg("All tables unlocked\n");
+	msg_ts("All tables unlocked\n");
 }
 
 
@@ -920,36 +990,36 @@ wait_for_safe_slave(MYSQL *connection)
 	}
 
 	open_temp_tables = get_open_temp_tables(connection);
-	msg("Slave open temp tables: %d\n", open_temp_tables);
+	msg_ts("Slave open temp tables: %d\n", open_temp_tables);
 
 	while (open_temp_tables && n_attempts--) {
-		msg("Starting slave SQL thread, waiting %d seconds, then "
-			"checking Slave_open_temp_tables again (%d attempts "
-			"remaining)...\n", sleep_time, n_attempts);
+		msg_ts("Starting slave SQL thread, waiting %d seconds, then "
+		       "checking Slave_open_temp_tables again (%d attempts "
+		       "remaining)...\n", sleep_time, n_attempts);
 
 		xb_mysql_query(connection, "START SLAVE SQL_THREAD", false);
 		os_thread_sleep(sleep_time * 1000);
 		xb_mysql_query(connection, "STOP SLAVE SQL_THREAD", false);
 
 		open_temp_tables = get_open_temp_tables(connection);
-		msg("Slave open temp tables: %d\n", open_temp_tables);
+		msg_ts("Slave open temp tables: %d\n", open_temp_tables);
 	}
 
 	/* Restart the slave if it was running at start */
 	if (open_temp_tables == 0) {
-		msg("Slave is safe to backup\n");
+		msg_ts("Slave is safe to backup\n");
 		goto cleanup;
 	}
 
 	result = false;
 
 	if (sql_thread_started) {
-		msg("Restarting slave SQL thread.\n");
+		msg_ts("Restarting slave SQL thread.\n");
 		xb_mysql_query(connection, "START SLAVE SQL_THREAD", false);
 	}
 
-	msg("Slave_open_temp_tables did not become zero after "
-	    "%d seconds\n", opt_safe_slave_backup_timeout);
+	msg_ts("Slave_open_temp_tables did not become zero after "
+	       "%d seconds\n", opt_safe_slave_backup_timeout);
 
 cleanup:
 	free_mysql_variables(status);
@@ -995,6 +1065,8 @@ write_slave_info(MYSQL *connection)
 		msg("This means that the server is not a "
 			"replication slave. Ignoring the --slave-info "
 			"option\n");
+		/* we still want to continue the backup */
+		result = true;
 		goto cleanup;
 	}
 
@@ -1130,6 +1202,8 @@ write_current_binlog_file(MYSQL *connection)
 	if (gtid_exists) {
 		size_t log_bin_dir_length;
 
+		lock_binlog_maybe(connection);
+
 		xb_mysql_query(connection, "FLUSH BINARY LOGS", false);
 
 		read_mysql_variables(connection, "SHOW MASTER STATUS",
@@ -1138,7 +1212,7 @@ write_current_binlog_file(MYSQL *connection)
 		if (log_bin_dir == NULL) {
 			/* log_bin_basename does not exist in MariaDB,
 			fallback to datadir */
-			log_bin_dir = datadir;
+			log_bin_dir = strdup(datadir);
 		}
 
 		dirname_part(log_bin_dir, log_bin_dir, &log_bin_dir_length);
@@ -1214,13 +1288,14 @@ write_binlog_info(MYSQL *connection)
 			"GTID of the last change '%s'",
 			filename, position, gtid) != -1);
 		result = backup_file_printf(XTRABACKUP_BINLOG_INFO,
-				"%s\t%s\t%s", filename, position, gtid);
+					    "%s\t%s\t%s\n", filename, position,
+					    gtid);
 	} else {
 		ut_a(asprintf(&mysql_binlog_position,
 			"filename '%s', position '%s'",
 			filename, position) != -1);
 		result = backup_file_printf(XTRABACKUP_BINLOG_INFO,
-				"%s\t%s", filename, position);
+					    "%s\t%s\n", filename, position);
 	}
 
 cleanup:
@@ -1301,7 +1376,8 @@ write_xtrabackup_info(MYSQL *connection)
 		buf_start_time,  /* start_time */
 		buf_end_time,  /* end_time */
 		history_lock_time, /* lock_time */
-		mysql_binlog_position,  /* binlog_pos */
+		mysql_binlog_position ?
+			mysql_binlog_position : "", /* binlog_pos */
 		incremental_lsn, /* innodb_from_lsn */
 		metadata_to_lsn, /* innodb_to_lsn */
 		(xtrabackup_tables /* partial */
@@ -1413,7 +1489,11 @@ write_xtrabackup_info(MYSQL *connection)
 	/* binlog_pos */
 	bind[idx].buffer_type = MYSQL_TYPE_STRING;
 	bind[idx].buffer = mysql_binlog_position;
-	bind[idx].buffer_length = strlen(mysql_binlog_position);
+	if (mysql_binlog_position != NULL) {
+		bind[idx].buffer_length = strlen(mysql_binlog_position);
+	} else {
+		bind[idx].is_null = &null;
+	}
 	++idx;
 
 	/* innodb_from_lsn */
