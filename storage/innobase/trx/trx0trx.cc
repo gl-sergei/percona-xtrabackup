@@ -259,8 +259,8 @@ struct TrxFactory {
 	static void destroy(trx_t* trx)
 	{
 		ut_a(trx->magic_n == TRX_MAGIC_N);
-		ut_ad(!trx->in_rw_trx_list);
-		ut_ad(!trx->in_mysql_trx_list);
+		ut_ad(srv_apply_log_only || !trx->in_rw_trx_list);
+		ut_ad(srv_apply_log_only || !trx->in_mysql_trx_list);
 
 		ut_a(trx->lock.wait_lock == NULL);
 		ut_a(trx->lock.wait_thr == NULL);
@@ -274,7 +274,8 @@ struct TrxFactory {
 			trx->lock.lock_heap = NULL;
 		}
 
-		ut_a(UT_LIST_GET_LEN(trx->lock.trx_locks) == 0);
+		ut_a(srv_apply_log_only ||
+		     UT_LIST_GET_LEN(trx->lock.trx_locks) == 0);
 
 		UT_DELETE(trx->xid);
 		ut_free(trx->detailed_error);

@@ -507,6 +507,11 @@ make_abs_file_path(
 	std::string path = fil_path_to_mysql_datadir;
 	size_t pos = std::string::npos;
 
+	pos = file_name.rfind(DOT_IBD);
+	if (pos == std::string::npos) {
+		file_name += DOT_IBD;
+	}
+
 	if (is_absolute_path(file_name.c_str())) {
 
 		pos = file_name.rfind(OS_PATH_SEPARATOR);
@@ -516,6 +521,9 @@ make_abs_file_path(
 		file_name = file_name.substr(pos, file_name.length());
 		path += OS_PATH_SEPARATOR + file_name;
 	} else {
+		if (file_name[0] != '.') {
+			file_name = "./" + file_name;
+		}
 		pos = file_name.find(OS_PATH_SEPARATOR);
 		++pos;
 		file_name = file_name.substr(pos, file_name.length());
@@ -606,13 +614,10 @@ fil_name_parse(
 	os_normalize_path(reinterpret_cast<char*>(ptr));
 
 	/* MLOG_FILE_* records should only be written for
-	user-created tablespaces. The name must be long enough
-	and end in .ibd. */
+	user-created tablespaces. The name can end with .ibd,
+	but sometimes it doesn't */
 	bool corrupt = is_predefined_tablespace(space_id)
-		|| first_page_no != 0 // TODO: multi-file user tablespaces
-		|| len < sizeof "/a.ibd\0"
-		|| memcmp(ptr + len - 5, DOT_IBD, 5) != 0
-		|| memchr(ptr, OS_PATH_SEPARATOR, len) == NULL;
+		|| first_page_no != 0; // TODO: multi-file user tablespaces
 
 	byte*	end_ptr = ptr + len;
 
@@ -4706,6 +4711,9 @@ get_mlog_string(mlog_id_t type)
 	case MLOG_COMP_PAGE_REORGANIZE:
 		return("MLOG_COMP_PAGE_REORGANIZE");
 
+	case MLOG_FILE_CREATE:
+		return("MLOG_FILE_CREATE");
+
 	case MLOG_FILE_CREATE2:
 		return("MLOG_FILE_CREATE2");
 
@@ -4726,6 +4734,9 @@ get_mlog_string(mlog_id_t type)
 
 	case MLOG_ZIP_PAGE_REORGANIZE:
 		return("MLOG_ZIP_PAGE_REORGANIZE");
+
+	case MLOG_FILE_RENAME:
+		return("MLOG_FILE_RENAME");
 
 	case MLOG_FILE_RENAME2:
 		return("MLOG_FILE_RENAME2");

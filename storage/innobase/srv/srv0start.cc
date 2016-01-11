@@ -2483,13 +2483,13 @@ files_checked:
 		return(srv_init_abort(err));
 	}
 	srv_sys_tablespaces_open = true;
-#endif
 
 	/* Create the SYS_VIRTUAL system table */
 	err = dict_create_or_check_sys_virtual();
 	if (err != DB_SUCCESS) {
 		return(srv_init_abort(err));
 	}
+#endif
 
 	srv_is_being_started = false;
 
@@ -2652,8 +2652,11 @@ files_checked:
 			srv_buffer_pool_load_at_startup = FALSE;
 		}
 
-		/* Create the buffer pool dump/load thread */
+		/* Don't create the buffer pool dump/load thread
+		for XtraBackup */
+#if 0
 		os_thread_create(buf_dump_thread, NULL, NULL);
+#endif
 
 		/* Create the dict stats gathering thread */
 		os_thread_create(dict_stats_thread, NULL, NULL);
