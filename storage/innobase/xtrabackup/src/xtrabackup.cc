@@ -405,7 +405,7 @@ my_bool opt_decrypt = FALSE;
 static bool recover_binlog_info;
 
 /* Redo log format version */
-redo_log_version_t redo_log_version = REDO_LOG_V1;
+ulint redo_log_version = REDO_LOG_V1;
 
 /* Simple datasink creation tracking...add datasinks in the reverse order you
 want them destroyed. */
@@ -612,7 +612,8 @@ enum options_xtrabackup
   OPT_LOCK_WAIT_THRESHOLD,
   OPT_DEBUG_SLEEP_BEFORE_UNLOCK,
   OPT_SAFE_SLAVE_BACKUP_TIMEOUT,
-  OPT_BINLOG_INFO
+  OPT_BINLOG_INFO,
+  OPT_REDO_LOG_VERSION
 };
 
 struct my_option xb_long_options[] =
@@ -1200,6 +1201,11 @@ Disable with --skip-innodb-doublewrite.", (G_PTR*) &innobase_use_doublewrite,
    "LOCKLESS and AUTO. See the XtraBackup manual for more information",
    &opt_binlog_info, &opt_binlog_info,
    &binlog_info_typelib, GET_ENUM, OPT_ARG, BINLOG_INFO_AUTO, 0, 0, 0, 0, 0},
+
+  {"redo-log-version", OPT_REDO_LOG_VERSION,
+   "Redo log version of the backup. For --prepare only.",
+   &redo_log_version, &redo_log_version, 0, GET_UINT,
+   REQUIRED_ARG, 1, 0, 0, 0, 0, 0},
 
   { 0, 0, 0, 0, 0, 0, GET_NO_ARG, NO_ARG, 0, 0, 0, 0, 0, 0}
 };
@@ -3167,6 +3173,10 @@ xb_load_single_table_tablespace(
 
 		if (srv_backup_mode && !srv_close_files) {
 			fil_space_open(space->name);
+		}
+	} else {
+		if (xtrabackup_backup) {
+			exit(EXIT_FAILURE);
 		}
 	}
 
@@ -7241,25 +7251,61 @@ int main(int argc, char **argv)
 	system_charset_info= &my_charset_utf8_general_ci;
 	key_map_full.set_all();
 
-	/* scan options for group to load defaults from */
+	/* scan options for group and config file to load defaults from */
 	{
 		int	i;
 		char*	optend;
+
+		char*	target_dir = NULL;
+		bool	prepare = false;
+
+		char	conf_file[FN_REFLEN];
+
 		for (i=1; i < argc; i++) {
+
 			optend = strcend(argv[i], '=');
+
 			if (strncmp(argv[i], "--defaults-group",
 				    optend - argv[i]) == 0) {
 				defaults_group = optend + 1;
 				append_defaults_group(defaults_group);
 			}
+
 			if (strncmp(argv[i], "--login-path",
 				    optend - argv[i]) == 0) {
 				append_defaults_group(optend + 1);
 			}
+
+			if (!strncmp(argv[i], "--prepare",
+				     optend - argv[i])) {
+				prepare = true;
+			}
+
+			if (!strncmp(argv[i], "--apply-log",
+				     optend - argv[i])) {
+				prepare = true;
+			}
+
+			if (!strncmp(argv[i], "--target-dir",
+				     optend - argv[i]) && *optend) {
+				target_dir = optend + 1;
+			}
+
+			if (!*optend && argv[i][0] != '-') {
+				target_dir = argv[i];
+			}
 		}
-	}
-	if (load_defaults("my", xb_load_default_groups, &argc, &argv)) {
-		exit(EXIT_FAILURE);
+
+		snprintf(conf_file, sizeof(conf_file), "my");
+
+		if (prepare && target_dir) {
+			snprintf(conf_file, sizeof(conf_file),
+				 "%s/backup-my.cnf", target_dir);
+		}
+		if (load_defaults(conf_file, xb_load_default_groups,
+				  &argc, &argv)) {
+			exit(EXIT_FAILURE);
+		}
 	}
         argv_defaults = argv;
 

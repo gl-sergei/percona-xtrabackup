@@ -1183,6 +1183,7 @@ recv_find_max_checkpoint_0(
 	}
 
 	if (*max_group != NULL) {
+		redo_log_version = REDO_LOG_V0;
 		return(DB_SUCCESS);
 	}
 
@@ -1384,6 +1385,8 @@ recv_find_max_checkpoint(
 			" as a last resort.";
 		return(DB_ERROR);
 	}
+
+	redo_log_version = REDO_LOG_V1;
 
 	return(DB_SUCCESS);
 }

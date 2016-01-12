@@ -49,6 +49,7 @@ Place, Suite 330, Boston, MA 02111-1307 USA
 #include "common.h"
 #include "xtrabackup.h"
 #include "xtrabackup_version.h"
+#include "xb0xb.h"
 #include "backup_copy.h"
 #include "backup_mysql.h"
 #include "mysqld.h"
@@ -1581,6 +1582,8 @@ write_backup_config_file()
 		"innodb_log_block_size=%lu\n"
 		"innodb_undo_directory=%s\n"
 		"innodb_undo_tablespaces=%lu\n"
+		"%s%s\n"
+		"redo_log_version=%lu\n"
 		"%s%s\n",
 		innodb_checksum_algorithm_names[srv_checksum_algorithm],
 		innodb_checksum_algorithm_names[srv_log_checksum_algorithm],
@@ -1593,7 +1596,12 @@ write_backup_config_file()
 		srv_undo_dir,
 		srv_undo_tablespaces,
 		innobase_doublewrite_file ? "innodb_doublewrite_file=" : "",
-		innobase_doublewrite_file ? innobase_doublewrite_file : "");
+		innobase_doublewrite_file ? innobase_doublewrite_file : "",
+		redo_log_version,
+		innobase_buffer_pool_filename ?
+			"innodb_buffer_pool_filename=" : "",
+		innobase_buffer_pool_filename ?
+			innobase_buffer_pool_filename : "");
 }
 
 
