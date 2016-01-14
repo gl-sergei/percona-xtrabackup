@@ -692,6 +692,12 @@ fil_name_parse(
 			if (itr == recv_spaces.end()
 				|| (itr->second.name != abs_file_path)) {
 
+				if (tablespace_name.find("/") !=
+				    std::string::npos) {
+					fil_create_directory_for_tablename(
+						tablespace_name.c_str());
+				}
+
 				dberr_t ret = fil_ibd_create(
 					space_id, tablespace_name.c_str(),
 					abs_file_path.c_str(),

@@ -2390,7 +2390,11 @@ xtrabackup_copy_datafile(fil_node_t* node, uint thread_n)
 		goto error;
 	}
 
-	strncpy(dst_name, cursor.rel_path, sizeof(dst_name));
+	if (!is_system) {
+		snprintf(dst_name, sizeof(dst_name), "%s.ibd", node_name);
+	} else {
+		strncpy(dst_name, cursor.rel_path, sizeof(dst_name));
+	}
 
 	/* Setup the page write filter */
 	if (xtrabackup_incremental) {
@@ -3135,20 +3139,28 @@ xb_load_single_table_tablespace(
 	/* The name ends in .ibd or .isl;
 	try opening the file */
 	char*	name;
-	size_t	dirlen		= strlen(dirname);
+	size_t	dirlen		= dirname == NULL ? 0 : strlen(dirname);
 	size_t	namelen		= strlen(filname);
-	ulint	pathlen		= dirlen + namelen + 2;
+	ulint	pathlen		= dirname == NULL ? namelen + 1: dirlen + namelen + 2;
 	lsn_t	flush_lsn;
 	fil_space_t	*space;
 
 	name = static_cast<char*>(ut_malloc_nokey(pathlen));
 
-	ut_snprintf(name, pathlen, "%s/%s", dirname, filname);
-	name[pathlen - 5] = 0;
+	if (dirname != NULL) {
+		ut_snprintf(name, pathlen, "%s/%s", dirname, filname);
+		name[pathlen - 5] = 0;
+	} else {
+		ut_snprintf(name, pathlen, "%s", filname);
+		name[pathlen - 5] = 0;
+	}
 
 	Datafile *file = xb_new_datafile(name, is_remote);
 
-	ut_a(file->open_read_only(true) == DB_SUCCESS);
+	if (file->open_read_only(true) != DB_SUCCESS) {
+		ut_free(name);
+		return;
+	}
 
 	if (file->validate_first_page(&flush_lsn) == DB_SUCCESS) {
 
@@ -3225,7 +3237,26 @@ xb_load_single_table_tablespaces(bool (*pred)(const char*, const char*))
 					 &dbinfo);
 	while (ret == 0) {
 		ulint len;
-		/* printf("Looking at %s in datadir\n", dbinfo.name); */
+
+		/* General tablespaces are always at the first level of the
+		data home dir */
+		if (dbinfo.type == OS_FILE_TYPE_FILE &&
+		    strlen(dbinfo.name) > 4 &&
+		    strcmp(dbinfo.name + strlen(dbinfo.name) - 4, ".isl")
+				== 0 &&
+		    !(pred && !pred(".", dbinfo.name))) {
+			xb_load_single_table_tablespace(NULL, dbinfo.name,
+							true);
+		}
+
+		if (dbinfo.type == OS_FILE_TYPE_FILE &&
+		    strlen(dbinfo.name) > 4 &&
+		    strcmp(dbinfo.name + strlen(dbinfo.name) - 4, ".ibd")
+				== 0 &&
+		    !(pred && !pred(".", dbinfo.name))) {
+			xb_load_single_table_tablespace(NULL, dbinfo.name,
+							false);
+		}
 
 		if (dbinfo.type == OS_FILE_TYPE_FILE
 		    || dbinfo.type == OS_FILE_TYPE_UNKNOWN) {
@@ -3352,8 +3383,7 @@ xb_load_tablespaces(void)
 
 	os_thread_sleep(200000); /*0.2 sec*/
 
-	err = srv_sys_space.check_file_spec(
-		&create_new_db, 5 * 1024 * 1024);
+	err = srv_sys_space.check_file_spec(&create_new_db, 0);
 
 	/* create_new_db must not be true. */
 	if (err != DB_SUCCESS || create_new_db) {
@@ -5506,10 +5536,6 @@ xb_delta_open_matching_space(
 	ulint			tablespace_flags;
 	xb_filter_entry_t*	table;
 
-	ut_a(dbname != NULL ||
-	     !fil_is_user_tablespace_id(space_id) ||
-	     space_id == ULINT_UNDEFINED);
-
 	*success = false;
 
 	if (dbname) {
@@ -5904,7 +5930,11 @@ rm_if_not_found(
 	char			name[FN_REFLEN];
 	xb_filter_entry_t*	table;
 
-	snprintf(name, FN_REFLEN, "%s/%s", db_name, file_name);
+	if (db_name != NULL) {
+		snprintf(name, FN_REFLEN, "%s/%s", db_name, file_name);
+	} else {
+		snprintf(name, FN_REFLEN, "%s", file_name);
+	}
 	/* Truncate ".ibd" */
 	name[strlen(name) - 4] = '\0';
 
@@ -5914,8 +5944,14 @@ rm_if_not_found(
 		    !strcmp(table->name, name));
 
 	if (!table) {
-		snprintf(name, FN_REFLEN, "%s/%s/%s", data_home_dir,
-						      db_name, file_name);
+		if (db_name != NULL) {
+			snprintf(name, FN_REFLEN, "%s/%s/%s", data_home_dir,
+				 db_name, file_name);
+		} else {
+			ut_error;
+			snprintf(name, FN_REFLEN, "%s/%s", data_home_dir,
+				 file_name);
+		}
 		return os_file_delete(0, name);
 	}
 
