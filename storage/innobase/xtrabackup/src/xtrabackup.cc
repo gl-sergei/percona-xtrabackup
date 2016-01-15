@@ -5233,10 +5233,10 @@ not_consistent:
 		}
 	}
 
-	/* make larger than 2MB */
-	if (file_size < 2*1024*1024L) {
+	/* make larger than 128 * UNIV_PAGE_SIZE_MAX */
+	if (file_size < 128 * UNIV_PAGE_SIZE_MAX) {
 		memset(log_buf, 0, UNIV_PAGE_SIZE_MAX);
-		while (file_size < 2*1024*1024L) {
+		while (file_size < 128 * UNIV_PAGE_SIZE_MAX) {
 			success = os_file_write(write_request, src_path,
 						src_file, log_buf,
 						file_size,
