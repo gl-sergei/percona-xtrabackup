@@ -4906,29 +4906,6 @@ check_log_header_checksum_0(
 }
 
 static
-bool
-check_log_checkpoint_checksum(
-/*========================*/
-	const byte*	buf)	/*!< in: buffer containing checkpoint info */
-{
-	/** Offset of the first checkpoint checksum */
-	static const uint CHECKSUM_1 = 288;
-	/** Offset of the second checkpoint checksum */
-	static const uint CHECKSUM_2 = CHECKSUM_1 + 4;
-
-	if (static_cast<uint32_t>(ut_fold_binary(buf, CHECKSUM_1))
-	    != mach_read_from_4(buf + CHECKSUM_1)
-	    || static_cast<uint32_t>(
-		    ut_fold_binary(buf + LOG_CHECKPOINT_LSN,
-				   CHECKSUM_2 - LOG_CHECKPOINT_LSN))
-	    != mach_read_from_4(buf + CHECKSUM_2)) {
-		return(false);
-	}
-
-	return(true);
-}
-
-static
 void
 update_log_temp_checkpoint_0(
 	byte*	buf,

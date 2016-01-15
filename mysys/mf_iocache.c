@@ -163,7 +163,7 @@ int inline_init_io_cache_ext(IO_CACHE *info, File file, size_t cachesize,
 #ifdef HAVE_PSI_FILE_INTERFACE
   info->file_key= file_key;
 #else
-  info->file_key= NULL;
+  info->file_key= 0;
 #endif
   info->type= TYPE_NOT_SET;	    /* Don't set it until mutex are created */
   info->pos_in_file= seek_offset;

@@ -937,8 +937,6 @@ make_backup_dir()
 bool
 ibx_handle_options(int *argc, char ***argv)
 {
-	char backup_config_path[FN_REFLEN];
-	const char *groups[] = {"mysqld", NULL};
 	int i;
 
 	if (handle_options(argc, argv, ibx_long_options, ibx_get_one_option)) {

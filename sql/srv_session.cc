@@ -123,8 +123,8 @@ public:
   */
   bool init()
   {
-    const char* category= "session";
 #ifdef HAVE_PSI_INTERFACE
+    const char* category= "session";
     PSI_mutex_info all_mutexes[]=
     {
       { &key_LOCK_collection, "LOCK_srv_session_threads", PSI_FLAG_GLOBAL}
@@ -351,8 +351,8 @@ public:
   */
   bool init()
   {
-    const char* category= "session";
 #ifdef HAVE_PSI_INTERFACE
+    const char* category= "session";
     PSI_rwlock_info all_rwlocks[]=
     {
       { &key_LOCK_collection, "LOCK_srv_session_collection", PSI_FLAG_GLOBAL}

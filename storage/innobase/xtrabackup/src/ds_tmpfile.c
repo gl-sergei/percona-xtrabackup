@@ -219,7 +219,7 @@ tmpfile_deinit(ds_ctxt_t *ctxt)
 		if (my_seek(tmp_file->fd, 0, SEEK_SET, MYF(0)) ==
 		    MY_FILEPOS_ERROR) {
 			msg("error: my_seek() failed for '%s', errno = %d.\n",
-			    tmp_file->file->path, my_errno);
+			    tmp_file->file->path, my_errno());
 			exit(EXIT_FAILURE);
 		}
 		offset = 0;

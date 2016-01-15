@@ -41,7 +41,7 @@ xb_crypt_read_key_file(const char *filename, void** key, uint *keylength)
 
 	if (!(fp = my_fopen(filename, O_RDONLY, MYF(0)))) {
 		msg("%s:%s: unable to open config file \"%s\", errno(%d)\n",
-			my_progname, __FUNCTION__, filename, my_errno);
+			my_progname, __FUNCTION__, filename, my_errno());
 		return FALSE;
 	}
 
