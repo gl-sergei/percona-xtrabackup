@@ -258,6 +258,9 @@ xb_fil_cur_open(
 	cursor->read_filter->init(&cursor->read_filter_ctxt, cursor,
 				  node->space->id);
 
+	cursor->scratch = static_cast<byte *>
+		(ut_malloc_nokey(cursor->page_size));
+
 	return(XB_FIL_CUR_SUCCESS);
 }
 
@@ -344,7 +347,20 @@ read_retry:
 	for (page = cursor->buf, i = 0; i < npages;
 	     page += cursor->page_size, i++) {
 
+		if (Compression::is_compressed_page(page)) {
+
+
+			if (os_file_decompress_page(false, page,
+			    cursor->scratch, cursor->page_size) != DB_SUCCESS) {
+				goto corruption;
+			}
+
+			memcpy(page, cursor->scratch, cursor->page_size);
+		}
+
 		if (buf_page_is_corrupted(TRUE, page, page_size, false)) {
+
+corruption:
 
 			ulint page_no = cursor->buf_page_no + i;
 
@@ -396,6 +412,9 @@ xb_fil_cur_close(
 {
 	cursor->read_filter->deinit(&cursor->read_filter_ctxt);
 
+	if (cursor->scratch != NULL) {
+		ut_free(cursor->scratch);
+	}
 	if (cursor->orig_buf != NULL) {
 		ut_free(cursor->orig_buf);
 	}

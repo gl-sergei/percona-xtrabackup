@@ -49,6 +49,8 @@ struct xb_fil_cur_t {
 					/*!< read filter context */
 	byte*		orig_buf;	/*!< read buffer */
 	byte*		buf;		/*!< aligned pointer for orig_buf */
+	byte*		scratch;	/*!< page to use for temporary
+					decompress */
 	ulint		buf_size;	/*!< buffer size in bytes */
 	ulint		buf_read;	/*!< number of read bytes in buffer
 					after the last cursor read */
