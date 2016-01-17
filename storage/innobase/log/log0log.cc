@@ -912,12 +912,12 @@ log_io_complete(
 		switch (srv_unix_file_flush_method) {
 		case SRV_UNIX_O_DSYNC:
 		case SRV_UNIX_NOSYNC:
+		case SRV_UNIX_ALL_O_DIRECT:
 			break;
 		case SRV_UNIX_FSYNC:
 		case SRV_UNIX_LITTLESYNC:
 		case SRV_UNIX_O_DIRECT:
 		case SRV_UNIX_O_DIRECT_NO_FSYNC:
-		case SRV_UNIX_ALL_O_DIRECT:
 			fil_flush(group->space_id);
 		}
 #endif /* _WIN32 */
@@ -1872,13 +1872,13 @@ log_checkpoint(
 #ifndef _WIN32
 	switch (srv_unix_file_flush_method) {
 	case SRV_UNIX_NOSYNC:
+	case SRV_UNIX_ALL_O_DIRECT:
 		break;
 	case SRV_UNIX_O_DSYNC:
 	case SRV_UNIX_FSYNC:
 	case SRV_UNIX_LITTLESYNC:
 	case SRV_UNIX_O_DIRECT:
 	case SRV_UNIX_O_DIRECT_NO_FSYNC:
-	case SRV_UNIX_ALL_O_DIRECT:
 		fil_flush_file_spaces(FIL_TYPE_TABLESPACE);
 	}
 #endif /* !_WIN32 */

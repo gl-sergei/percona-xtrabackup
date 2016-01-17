@@ -3159,7 +3159,7 @@ xb_load_single_table_tablespace(
 
 	if (file->open_read_only(true) != DB_SUCCESS) {
 		ut_free(name);
-		return;
+		exit(EXIT_FAILURE);
 	}
 
 	if (file->validate_first_page(&flush_lsn) == DB_SUCCESS) {
