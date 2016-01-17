@@ -1630,9 +1630,9 @@ log_group_checkpoint_0(
 	mach_write_to_4(buf + OFFSET_LOW32, lsn_offset & 0xFFFFFFFFUL);
 	mach_write_to_4(buf + OFFSET_HIGH32, lsn_offset >> 32);
 
-	mach_write_to_8(buf + ARCHIVED_LSN, lsn_offset);
-
 	mach_write_to_4(buf + LOG_CHECKPOINT_LOG_BUF_SIZE, log_sys->buf_size);
+
+	mach_write_to_8(buf + ARCHIVED_LSN, lsn_offset);
 
 	fold = ut_fold_binary(buf, CHECKSUM_1);
 	mach_write_to_4(buf + CHECKSUM_1, fold);

@@ -2258,6 +2258,8 @@ files_checked:
 			goto skip_processes;
 		}
 
+		/* do not create system tablespaces for xtrabackup */
+#if 0
 		if (srv_force_recovery < SRV_FORCE_NO_IBUF_MERGE) {
 			/* Open or Create SYS_TABLESPACES and SYS_DATAFILES
 			so that tablespace names and other metadata can be
@@ -2295,6 +2297,7 @@ files_checked:
 
 			dict_check_tablespaces_and_store_max_id(validate);
 		}
+#endif
 
 		/* Fix-up truncate of table if server crashed while truncate
 		was active. */

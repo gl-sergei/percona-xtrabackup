@@ -680,6 +680,68 @@ buf_page_is_checksum_valid_innodb(
 	return(true);
 }
 
+/** Checks if the page is in fast checksum format.
+@param[in]	read_buf	database page
+@param[in]	checksum_field1	new checksum field
+@param[in]	checksum_field2	old checksum field
+@param[in]	page_no		page number of given read_buf
+@param[in]	is_log_enabled	true if log option is enabled
+@param[in]	log_file	file pointer to log_file
+@param[in]	curr_algo	current checksum algorithm
+@return true if the page is in fast checksum format. */
+UNIV_INLINE
+bool
+buf_page_is_checksum_valid_fast_checksum(
+	const byte*			read_buf,
+	ulint				checksum_field1,
+	ulint				checksum_field2
+#ifdef UNIV_INNOCHECKSUM
+	,uintmax_t			page_no,
+	bool				is_log_enabled,
+	FILE*				log_file,
+	const srv_checksum_algorithm_t	curr_algo
+#endif /* UNIV_INNOCHECKSUM */
+	)
+{
+	ulint	checksum = buf_calc_page_new_checksum_32(read_buf);
+
+#ifdef UNIV_INNOCHECKSUM
+	if (is_log_enabled
+	    && curr_algo == SRV_CHECKSUM_ALGORITHM_INNODB) {
+		fprintf(log_file, "page::%" PRIuMAX ";"
+			" old style: calculated ="
+			" %lu; recorded = %lu\n",
+			page_no, old_checksum,
+			checksum_field2);
+		fprintf(log_file, "page::%" PRIuMAX ";"
+			" new style: calculated ="
+			" %lu; crc32 = %u; recorded = %lu\n",
+			page_no, new_checksum,
+			buf_calc_page_crc32(read_buf), checksum_field1);
+	}
+
+	if (is_log_enabled
+	    && curr_algo == SRV_CHECKSUM_ALGORITHM_STRICT_INNODB) {
+		fprintf(log_file, "page::%" PRIuMAX ";"
+			" old style: calculated ="
+			" %lu; recorded checksum = %lu\n",
+			page_no, old_checksum,
+			checksum_field2);
+		fprintf(log_file, "page::%" PRIuMAX ";"
+			" new style: calculated ="
+			" %lu; recorded checksum  = %lu\n",
+			page_no, new_checksum,
+			checksum_field1);
+	}
+#endif /* UNIV_INNOCHECKSUM */
+
+	if (srv_fast_checksum && checksum_field1 == checksum) {
+		return(true);
+	}
+
+	return(false);
+}
+
 /** Checks if the page is in none checksum format.
 @param[in]	read_buf	database page
 @param[in]	checksum_field1	new checksum field
@@ -1003,6 +1065,16 @@ buf_page_is_corrupted(
 			}
 #endif /* UNIV_INNOCHECKSUM */
 
+			return(FALSE);
+		}
+
+		if (buf_page_is_checksum_valid_fast_checksum(read_buf,
+			checksum_field1, checksum_field2
+#ifdef UNIV_INNOCHECKSUM
+			, page_no, is_log_enabled, log_file, curr_algo)) {
+#else /* UNIV_INNOCHECKSUM */
+		)) {
+#endif /* UNIV_INNOCHECKSUM */
 			return(FALSE);
 		}
 

@@ -594,7 +594,11 @@ SysTablespace::read_lsn_and_check_flags(lsn_t* flushed_lsn)
 
 		if (err != DB_SUCCESS
 		    && (retry == 1
-			|| it->restore_from_doublewrite(0) != DB_SUCCESS)) {
+			/* never restore from doublewrite */
+#if 0
+			|| it->restore_from_doublewrite(0) != DB_SUCCESS
+#endif
+		    )) {
 
 			it->close();
 
