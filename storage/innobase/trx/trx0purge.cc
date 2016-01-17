@@ -421,7 +421,7 @@ trx_purge_free_segment(
 		if (noredo) {
 			mtr.set_log_mode(MTR_LOG_NO_REDO);
 		}
-		ut_ad(noredo == trx_sys_is_noredo_rseg_slot(rseg->id));
+		// ut_ad(noredo == trx_sys_is_noredo_rseg_slot(rseg->id));
 
 		mutex_enter(&rseg->mutex);
 

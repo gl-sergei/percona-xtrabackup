@@ -1190,6 +1190,14 @@ recv_find_max_checkpoint_0(
 
 	if (*max_group != NULL) {
 		redo_log_version = REDO_LOG_V0;
+		if (!innodb_log_checksum_algorithm_specified &&
+		    srv_log_checksum_algorithm !=
+			SRV_CHECKSUM_ALGORITHM_INNODB) {
+			srv_log_checksum_algorithm =
+				SRV_CHECKSUM_ALGORITHM_INNODB;
+			innodb_log_checksum_func_update(
+				srv_log_checksum_algorithm);
+		}
 		return(DB_SUCCESS);
 	}
 

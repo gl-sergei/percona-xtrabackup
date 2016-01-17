@@ -107,7 +107,6 @@ extern TYPELIB		xtrabackup_encrypt_algo_typelib;
 extern bool		innodb_data_file_path_specified;
 extern bool		innodb_log_file_size_specified;
 extern bool		datadir_specified;
-extern bool		innodb_log_checksum_algorithm_specified;
 
 extern int		xtrabackup_parallel;
 
