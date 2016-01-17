@@ -1617,6 +1617,8 @@ log_group_checkpoint_0(
 	static const uint OFFSET_HIGH32 = CHECKSUM_2 + 12;
 	/** Least significant bits of the checkpoint offset */
 	static const uint OFFSET_LOW32 = 16;
+	/** Checkpoint offset read by PS 5.5 */
+	static const uint ARCHIVED_LSN = 24;
 
 	buf = group->checkpoint_buf;
 
@@ -1627,6 +1629,8 @@ log_group_checkpoint_0(
 					       group);
 	mach_write_to_4(buf + OFFSET_LOW32, lsn_offset & 0xFFFFFFFFUL);
 	mach_write_to_4(buf + OFFSET_HIGH32, lsn_offset >> 32);
+
+	mach_write_to_8(buf + ARCHIVED_LSN, lsn_offset);
 
 	mach_write_to_4(buf + LOG_CHECKPOINT_LOG_BUF_SIZE, log_sys->buf_size);
 
