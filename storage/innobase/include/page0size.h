@@ -109,6 +109,27 @@ public:
 
 			m_physical = phy;
 		}
+
+		if (m_logical != srv_page_size) {
+			/* PS 5.5 stored page size in page
+			in different format (see dict_tf_get_page_size) */
+			const ulint	zip_ssize = ((fsp_flags & 30) >> 1);
+
+			if (zip_ssize == 0) {
+				m_logical = srv_page_size;
+				m_physical = srv_page_size;
+				m_is_compressed = false;
+			} else {
+				const ulint	zip_size =
+					(UNIV_ZIP_SIZE_MIN >> 1) << zip_ssize;
+
+				ut_ad(zip_size <= UNIV_ZIP_SIZE_MAX);
+
+				m_logical = srv_page_size;
+				m_physical = zip_size;
+				m_is_compressed = true;
+			}
+		}
 	}
 
 	/** Retrieve the physical page size (on-disk).

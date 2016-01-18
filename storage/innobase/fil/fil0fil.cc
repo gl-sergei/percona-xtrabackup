@@ -688,6 +688,7 @@ fil_node_open_file(
 				<< ib::hex(space->flags) << ")!";
 		}
 
+#if 0
 		if (space->flags != flags) {
 
 			ib::fatal()
@@ -697,6 +698,7 @@ fil_node_open_file(
 				<< node->name << " are " << ib::hex(flags)
 				<< "!";
 		}
+#endif
 
 		{
 			ulint	size		= fsp_header_get_field(
@@ -1187,7 +1189,7 @@ fil_space_create(
 
 	ut_ad(fil_system);
 	ut_ad(fsp_flags_is_valid(flags));
-	ut_ad(srv_page_size == UNIV_PAGE_SIZE_ORIG || flags != 0);
+	// ut_ad(srv_page_size == UNIV_PAGE_SIZE_ORIG || flags != 0);
 
 	DBUG_EXECUTE_IF("fil_space_create_failure", return(NULL););
 
