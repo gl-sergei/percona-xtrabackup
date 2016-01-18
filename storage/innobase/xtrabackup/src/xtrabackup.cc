@@ -2494,7 +2494,6 @@ xtrabackup_choose_lsn_offset(lsn_t start_lsn, lsn_t lsn_offset_alt)
 	ulint no, alt_no, expected_no;
 	ulint blocks_in_group;
 	lsn_t tmp_offset, end_lsn;
-	int lsn_chosen = 0;
 	log_group_t *group;
 
 	start_lsn = ut_uint64_align_down(start_lsn, OS_FILE_LOG_BLOCK_SIZE);
@@ -2509,7 +2508,6 @@ xtrabackup_choose_lsn_offset(lsn_t start_lsn, lsn_t lsn_offset_alt)
 	}
 
 	no = alt_no = (ulint) -1;
-	lsn_chosen = 0;
 
 	blocks_in_group = log_block_convert_lsn_to_no(
 		log_group_get_capacity(group)) - 1;
@@ -2522,7 +2520,7 @@ xtrabackup_choose_lsn_offset(lsn_t start_lsn, lsn_t lsn_offset_alt)
 		no = log_block_get_hdr_no(log_sys->buf);
 	}
 
-	/* read log block number from Percona Server 5.5 offset */
+	/* read log block number from alternative offset */
 	tmp_offset = group->lsn_offset;
 	group->lsn_offset = lsn_offset_alt;
 
@@ -2543,21 +2541,15 @@ xtrabackup_choose_lsn_offset(lsn_t start_lsn, lsn_t lsn_offset_alt)
 		((expected_no - no) % blocks_in_group) == 0) ||
 	    ((expected_no | 0x40000000UL) - no) % blocks_in_group == 0) {
 		/* default offset looks ok */
-		++lsn_chosen;
+		return;
 	}
 
 	if ((alt_no <= expected_no &&
 		((expected_no - alt_no) % blocks_in_group) == 0) ||
 	    ((expected_no | 0x40000000UL) - alt_no) % blocks_in_group == 0) {
-		/* PS 5.5 style offset looks ok */
-		++lsn_chosen;
+		/* alternative offset looks ok */
 		group->lsn_offset = lsn_offset_alt;
 	}
-
-	/* We are in trouble, because we can not make a
-	decision to choose one over the other. Die just
-	like a Buridan's ass */
-	ut_a(lsn_chosen == 1);
 }
 
 /*******************************************************//**
