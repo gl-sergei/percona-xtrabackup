@@ -7427,6 +7427,13 @@ int main(int argc, char **argv)
 		exit(EXIT_FAILURE);
 	}
 
+	if (xtrabackup_compact) {
+		msg("Compact backups do not work at the moment. "
+		    "See https://bugs.launchpad.net/percona-xtrabackup"
+		    "/+bug/1192834 for reference.\n");
+		exit(EXIT_FAILURE);
+	}
+
 	/* Ensure target dir is not relative to datadir */
 	fn_format(xtrabackup_real_target_dir, xtrabackup_target_dir,
 		  "", "", MY_UNPACK_FILENAME | MY_RETURN_REAL_PATH);
