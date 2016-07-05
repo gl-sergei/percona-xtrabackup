@@ -229,10 +229,21 @@ fsp_flags_is_valid(
 	bool	is_shared = FSP_FLAGS_GET_SHARED(flags);
 	bool	is_temp = FSP_FLAGS_GET_TEMPORARY(flags);
 	bool	is_encryption = FSP_FLAGS_GET_ENCRYPTION(flags);
+	ulint	mariadb_unused =  FSP_FLAGS_GET_UNUSED_MARIADB(flags);
+	ulint	mariadb_page_ssize = FSP_FLAGS_GET_PAGE_SSIZE_MARIADB(flags);
 
 	ulint	unused = FSP_FLAGS_GET_UNUSED(flags);
 
 	DBUG_EXECUTE_IF("fsp_flags_is_valid_failure", return(false););
+
+	/* If there is flags that are MariaDB extended flags,
+	read unused and page size from MariaDB positions. */
+	if ((unused && mariadb_unused == 0) ||
+	    (page_ssize && (page_ssize < UNIV_PAGE_SIZE_MIN ||
+	     page_ssize > UNIV_PAGE_SIZE_MAX))) {
+		unused = mariadb_unused;
+		page_ssize = mariadb_page_ssize;
+	}
 
 	/* The Antelope row formats REDUNDANT and COMPACT did
 	not use tablespace flags, so the entire 4-byte field

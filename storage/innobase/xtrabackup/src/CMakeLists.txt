@@ -94,6 +94,7 @@ MYSQL_ADD_EXECUTABLE(xtrabackup
   xbstream_write.c
   backup_mysql.cc
   backup_copy.cc
+  mariadb.cc
   keyring.cc
   ../../../../plugin/keyring/keyring_impl.cc
   ../../../../plugin/keyring/keyring_key.cc
