@@ -34,6 +34,7 @@ Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA 02111-1307 USA
 #include "common.h"
 #include "read_filt.h"
 #include "xtrabackup.h"
+#include "mariadb.h"
 
 /* Size of read buffer in pages (640 pages = 10M for 16K sized pages) */
 #define XB_FIL_CUR_PAGES 640
@@ -257,6 +258,8 @@ xb_fil_cur_open(
 	cursor->read_filter = read_filter;
 	cursor->read_filter->init(&cursor->read_filter_ctxt, cursor,
 				  node->space->id);
+	cursor->encrypted = mariadb_check_tablespace_encryption(cursor->file,
+		cursor->abs_path, page_size);
 
 	cursor->scratch = static_cast<byte *>
 		(ut_malloc_nokey(cursor->page_size));
@@ -360,7 +363,10 @@ read_retry:
 	for (page = cursor->buf, i = 0; i < npages;
 	     page += cursor->page_size, i++) {
 
-		if (Encryption::is_encrypted_page(page)) {
+		bool mariadb_compressed = mariadb_check_compression(page);
+
+		if (!mariadb_compressed &&
+		    Encryption::is_encrypted_page(page)) {
 			dberr_t		ret;
 			Encryption	encryption(read_request.encryption_algorithm());
 
@@ -388,7 +394,8 @@ read_retry:
 
 		}
 
-		if (Compression::is_compressed_page(page)) {
+		if (!mariadb_compressed &&
+		    Compression::is_compressed_page(page)) {
 
 			if (os_file_decompress_page(false, page,
 			    cursor->scratch, cursor->page_size) != DB_SUCCESS) {
@@ -397,7 +404,12 @@ read_retry:
 
 		}
 
-		if (!Encryption::is_encrypted_page(page) &&
+		/* MariaDB tablespaces using compression do not have correct
+		checksum. Similarly, encrypted tablespaces. All other
+		tablespaces should have correct checksums. */
+		if (!cursor->encrypted &&
+		    !mariadb_compressed &&
+		    !Encryption::is_encrypted_page(page) &&
 		    buf_page_is_corrupted(TRUE, page, page_size, false)) {
 
 corruption:

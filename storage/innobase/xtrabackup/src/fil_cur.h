@@ -72,6 +72,7 @@ struct xb_fil_cur_t {
 					/*!< encryption key length */
 	unsigned char	encryption_iv[32];
 					/*!< encryption iv */
+	bool		encrypted;	/*!< true if tablespace encrypted */
 };
 
 typedef enum {
