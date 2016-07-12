@@ -238,9 +238,9 @@ fsp_flags_is_valid(
 
 	/* If there is flags that are MariaDB extended flags,
 	read unused and page size from MariaDB positions. */
-	if ((unused && mariadb_unused == 0) ||
-	    (page_ssize && (page_ssize < UNIV_PAGE_SIZE_MIN ||
-	     page_ssize > UNIV_PAGE_SIZE_MAX))) {
+	if ((unused != 0 && mariadb_unused == 0) ||
+	    (page_ssize != 0 && (page_ssize < UNIV_PAGE_SSIZE_MIN ||
+	     page_ssize > UNIV_PAGE_SSIZE_MAX))) {
 		unused = mariadb_unused;
 		page_ssize = mariadb_page_ssize;
 	}

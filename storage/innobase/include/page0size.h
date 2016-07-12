@@ -75,6 +75,12 @@ public:
 	explicit page_size_t(ulint fsp_flags)
 	{
 		ulint	ssize = FSP_FLAGS_GET_PAGE_SSIZE(fsp_flags);
+		ulint	mariadb_ssize = FSP_FLAGS_GET_PAGE_SSIZE_MARIADB(fsp_flags);
+
+		if (ssize != 0 && (ssize < UNIV_PAGE_SIZE_MIN ||
+				   ssize > UNIV_PAGE_SIZE_MAX)) {
+			ssize = mariadb_ssize;
+		}
 
 		/* If the logical page size is zero in fsp_flags, then use the
 		legacy 16k page size. */
