@@ -314,10 +314,14 @@ lsn_t xtrabackup_arch_last_file_lsn = 0ULL;
 ulong xb_open_files_limit= 0;
 my_bool xb_close_files= FALSE;
 
+my_bool xb_compress_page_compressed_tables	= TRUE;
+my_bool xb_compress_column_compressed_tables	= TRUE;
+
 /* Datasinks */
-ds_ctxt_t       *ds_data     = NULL;
-ds_ctxt_t       *ds_meta     = NULL;
-ds_ctxt_t       *ds_redo     = NULL;
+ds_ctxt_t	*ds_data		= NULL;
+ds_ctxt_t	*ds_uncompressed_data	= NULL;
+ds_ctxt_t	*ds_meta		= NULL;
+ds_ctxt_t	*ds_redo		= NULL;
 
 static bool	innobackupex_mode = false;
 
@@ -592,7 +596,9 @@ enum options_xtrabackup
   OPT_DEBUG_SLEEP_BEFORE_UNLOCK,
   OPT_SAFE_SLAVE_BACKUP_TIMEOUT,
   OPT_BINLOG_INFO,
-  OPT_XB_SECURE_AUTH
+  OPT_XB_SECURE_AUTH,
+  OPT_COMPRESS_COLUMN_COMPRESSED_TABLES,
+  OPT_COMPRESS_PAGE_COMPRESSED_TABLES
 };
 
 struct my_option xb_long_options[] =
@@ -1191,6 +1197,16 @@ Disable with --skip-innodb-doublewrite.", (G_PTR*) &innobase_use_doublewrite,
   {"secure-auth", OPT_XB_SECURE_AUTH, "Refuse client connecting to server if it"
     " uses old (pre-4.1.1) protocol.", &opt_secure_auth,
     &opt_secure_auth, 0, GET_BOOL, NO_ARG, 1, 0, 0, 0, 0, 0},
+
+  {"compress-column-compressed-tables", OPT_COMPRESS_COLUMN_COMPRESSED_TABLES,
+    "Compress InnoDB column compressed tablespaces.",
+    &xb_compress_column_compressed_tables, &xb_compress_column_compressed_tables,
+    0, GET_BOOL, NO_ARG, TRUE, 0, 0, 0, 0, NULL},
+
+  {"compress-page-compressed-tables", OPT_COMPRESS_PAGE_COMPRESSED_TABLES,
+    "Compress InnoDB page compressed or table compressed tablespaces.",
+    &xb_compress_page_compressed_tables, &xb_compress_page_compressed_tables,
+    0, GET_BOOL, NO_ARG, TRUE, 0, 0, 0, 0, NULL},
 
   { 0, 0, 0, 0, 0, 0, GET_NO_ARG, NO_ARG, 0, 0, 0, 0, 0, 0}
 };
@@ -2371,8 +2387,10 @@ xtrabackup_copy_datafile(fil_node_t* node, uint thread_n)
 		    "failed to initialize page write filter.\n", thread_n);
 		goto error;
 	}
-
-	dstfile = ds_open(ds_data, dst_name, &cursor.statinfo);
+	dstfile = ds_open((cursor.is_compressed &&
+			   !xb_compress_page_compressed_tables) ?
+			  ds_uncompressed_data : ds_data,
+			  dst_name, &cursor.statinfo);
 	if (dstfile == NULL) {
 		msg("[%02u] xtrabackup: error: "
 		    "cannot open the destination stream for %s\n",
@@ -2997,6 +3015,8 @@ xtrabackup_init_datasinks(void)
 		}
 	}
 
+	ds_uncompressed_data = ds_data;
+
 	/* Compression for ds_data and ds_redo */
 	if (xtrabackup_compress) {
 		ds_ctxt_t	*ds;
@@ -3046,6 +3066,7 @@ static void xtrabackup_destroy_datasinks(void)
 	ds_data = NULL;
 	ds_meta = NULL;
 	ds_redo = NULL;
+	ds_uncompressed_data = NULL;
 }
 
 #define SRV_N_PENDING_IOS_PER_THREAD 	OS_AIO_N_PENDING_IOS_PER_THREAD

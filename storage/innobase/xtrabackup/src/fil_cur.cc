@@ -239,6 +239,7 @@ xb_fil_cur_open(
 	cursor->page_size = page_size;
 	cursor->page_size_shift = page_size_shift;
 	cursor->zip_size = zip_size;
+	cursor->is_compressed = (zip_size != 0);
 
 	/* Allocate read buffer */
 	cursor->buf_size = XB_FIL_CUR_PAGES * page_size;

@@ -44,6 +44,7 @@ struct xb_fil_cur_t {
 					page_size */
 	my_bool		is_system;	/*!< TRUE for system tablespace, FALSE
 					otherwise */
+	my_bool		is_compressed;	/*!< TRUE for compressed tablespace */
 	xb_read_filt_t*	read_filter;	/*!< read filter */
 	xb_read_filt_ctxt_t	read_filter_ctxt;
 					/*!< read filter context */
