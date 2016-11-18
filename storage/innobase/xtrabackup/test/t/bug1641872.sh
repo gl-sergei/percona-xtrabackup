@@ -39,6 +39,7 @@ while ! mysql_n_dirty_pages ; do
 	sleep 1
 done
 
+ls -alh ${TEST_VAR_ROOT}/innohome
 ls -alh $mysql_datadir
 
 $MYSQL $MYSQL_ARGS -e 'FLUSH CHANGED_PAGE_BITMAPS' test
