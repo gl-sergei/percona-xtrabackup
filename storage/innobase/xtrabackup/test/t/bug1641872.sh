@@ -18,13 +18,6 @@ innodb-data-home-dir=${TEST_VAR_ROOT}/innohome
 
 start_server
 
-$MYSQL $MYSQL_ARGS -e 'CREATE TABLE t1 (a INT)' test
-$MYSQL $MYSQL_ARGS -e 'INSERT INTO t1 VALUES (1), (2), (3)' test
-
-xtrabackup --backup --target-dir=$topdir/backup
-
-$MYSQL $MYSQL_ARGS -e 'INSERT INTO t1 VALUES (11), (12), (13)' test
-
 function mysql_n_dirty_pages()
 {
 	result=$( $MYSQL $MYSQL_ARGS -se \
@@ -34,15 +27,27 @@ function mysql_n_dirty_pages()
 	return $result
 }
 
+$MYSQL $MYSQL_ARGS -e 'CREATE TABLE t1 (a INT)' test
+$MYSQL $MYSQL_ARGS -e 'INSERT INTO t1 VALUES (1), (2), (3)' test
+
 # wait for InnoDB to flush all dirty pages
 while ! mysql_n_dirty_pages ; do
 	sleep 1
 done
 
-ls -alh ${TEST_VAR_ROOT}/innohome
-ls -alh $mysql_datadir
+xtrabackup --backup --target-dir=$topdir/backup
+
+$MYSQL $MYSQL_ARGS -e 'INSERT INTO t1 VALUES (11), (12), (13)' test
+
+# wait for InnoDB to flush all dirty pages
+while ! mysql_n_dirty_pages ; do
+	sleep 1
+done
 
 $MYSQL $MYSQL_ARGS -e 'FLUSH CHANGED_PAGE_BITMAPS' test
+
+ls -alh ${TEST_VAR_ROOT}/innohome
+ls -alh $mysql_datadir
 
 xtrabackup --backup --target-dir=$topdir/backup1 --incremental-basedir=$topdir/backup
 
