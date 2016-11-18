@@ -23,10 +23,10 @@ $MYSQL $MYSQL_ARGS -e 'INSERT INTO t1 VALUES (1), (2), (3)' test
 
 xtrabackup --backup --target-dir=$topdir/backup
 
-$MYSQL $MYSQL_ARGS -e 'INSERT INTO t1 VALUES (11), (12), (13)' test
-
 shutdown_server
 start_server
+
+$MYSQL $MYSQL_ARGS -e 'INSERT INTO t1 VALUES (11), (12), (13)' test
 
 $MYSQL $MYSQL_ARGS -e 'FLUSH CHANGED_PAGE_BITMAPS' test
 
