@@ -22,6 +22,7 @@ Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA
 
 /* Changed page bitmap implementation */
 
+#include <os0file.h>
 #include "changed_page_bitmap.h"
 
 #include "common.h"
@@ -440,11 +441,21 @@ log_online_open_bitmap_file_read_only(
 	log_online_bitmap_file_t*	bitmap_file)	/*!<out: opened bitmap
 							file */
 {
-	bool	success	= FALSE;
+	size_t	srv_data_home_len;
+	bool	success	= false;
 
 	xb_ad(name[0] != '\0');
 
-	ut_snprintf(bitmap_file->name, FN_REFLEN, "%s/%s", srv_data_home, name);
+	srv_data_home_len = strlen(srv_data_home);
+
+	if (srv_data_home_len
+	    && srv_data_home[srv_data_home_len - 1] != OS_PATH_SEPARATOR) {
+		ut_snprintf(bitmap_file->name, FN_REFLEN, "%s%c%s",
+			    srv_data_home, OS_PATH_SEPARATOR, name);
+	} else {
+		ut_snprintf(bitmap_file->name, FN_REFLEN, "%s%s",
+			    srv_data_home, name);
+	}
 	bitmap_file->file
 		= os_file_create_simple_no_error_handling(0, bitmap_file->name,
 							  OS_FILE_OPEN,
