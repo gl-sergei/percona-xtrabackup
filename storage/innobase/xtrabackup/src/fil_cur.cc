@@ -219,7 +219,8 @@ xb_fil_cur_open(
 	posix_fadvise(cursor->file, 0, 0, POSIX_FADV_SEQUENTIAL);
 
 	/* Determine the page size */
-	page_size.copy_from(xb_get_zip_size(cursor->file, &success));
+	success = xb_get_space_and_zip_size(cursor->file, cursor->space_id,
+					    page_size);
 	if (!success) {
 		xb_fil_cur_close(cursor);
 		return(XB_FIL_CUR_SKIP);

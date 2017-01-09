@@ -202,7 +202,14 @@ void xb_data_files_close(void);
 /***********************************************************************
 Reads the space flags from a given data file and returns the compressed
 page size, or 0 if the space is not compressed. */
-const page_size_t xb_get_zip_size(os_file_t file, bool *success);
+bool
+xb_get_space_and_zip_size(
+	os_file_t file,
+	ulint &space_id,
+	page_size_t &page_size);
+
+const fil_space_t *
+copied_datafiles_list_get(ulint space_id);
 
 /************************************************************************
 Checks if a table specified as a name in the form "database/name" (InnoDB 5.6)

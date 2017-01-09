@@ -2377,14 +2377,16 @@ check_if_skip_table(
 /***********************************************************************
 Reads the space flags from a given data file and returns the
 page size. */
-const page_size_t
-xb_get_zip_size(os_file_t file, bool *success)
+bool
+xb_get_space_and_zip_size(
+	os_file_t file,
+	ulint &space_id,
+	page_size_t &page_size)
 {
 	byte		*buf;
 	byte		*page;
-	page_size_t	page_size(0, 0, false);
+	bool		success;
 	ibool		ret;
-	ulint		space;
 	IORequest	read_request(IORequest::READ);
 
 	buf = static_cast<byte *>(ut_malloc_nokey(2 * UNIV_PAGE_SIZE_MAX));
@@ -2392,21 +2394,21 @@ xb_get_zip_size(os_file_t file, bool *success)
 
 	ret = os_file_read(read_request, file, page, 0, UNIV_PAGE_SIZE_MIN);
 	if (!ret) {
-		*success = false;
+		success = false;
 		goto end;
 	}
 
-	space = mach_read_from_4(page + FIL_PAGE_ARCH_LOG_NO_OR_SPACE_ID);
-	if (space == 0) {
+	space_id = mach_read_from_4(page + FIL_PAGE_ARCH_LOG_NO_OR_SPACE_ID);
+	if (space_id == 0) {
 		page_size.copy_from(univ_page_size);
 	} else {
 		page_size.copy_from(page_size_t(fsp_header_get_flags(page)));
 	}
-	*success = true;
+	success = true;
 end:
 	ut_free(buf);
 
-	return(page_size);
+	return(success);
 }
 
 const char*
@@ -2441,6 +2443,55 @@ xb_get_copy_action(const char *dflt)
 	}
 
 	return(action);
+}
+
+
+static std::map<ulint, const fil_space_t *> copied_datafiles_list;
+static ib_mutex_t copied_datafiles_list_mutex;
+
+static
+void
+copied_datafiles_list_init()
+{
+	mutex_create(LATCH_ID_XTRA_DATAFILES_ITER_MUTEX,
+		     &copied_datafiles_list_mutex);
+}
+
+static
+void
+copied_datafiles_list_free()
+{
+	copied_datafiles_list.clear();
+	mutex_free(&copied_datafiles_list_mutex);
+}
+
+static
+void
+copied_datafiles_list_add(ulint space_id, const fil_space_t *space)
+{
+	mutex_enter(&copied_datafiles_list_mutex);
+
+	copied_datafiles_list[space_id] = space;
+
+	mutex_exit(&copied_datafiles_list_mutex);
+}
+
+const fil_space_t *
+copied_datafiles_list_get(ulint space_id)
+{
+	const fil_space_t *space = NULL;
+
+	mutex_enter(&copied_datafiles_list_mutex);
+
+	std::map<ulint, const fil_space_t *>::iterator i;
+	i = copied_datafiles_list.find(space_id);
+	if (i != copied_datafiles_list.end()) {
+		space = i->second;
+	}
+
+	mutex_exit(&copied_datafiles_list_mutex);
+
+	return space;
 }
 
 /* TODO: We may tune the behavior (e.g. by fil_aio)*/
@@ -2491,6 +2542,8 @@ xtrabackup_copy_datafile(fil_node_t* node, uint thread_n)
 	} else if (res == XB_FIL_CUR_ERROR) {
 		goto error;
 	}
+
+	copied_datafiles_list_add(cursor.space_id, node->space);
 
 	if (!is_system) {
 		snprintf(dst_name, sizeof(dst_name), "%s.ibd", node_name);
@@ -4496,6 +4549,7 @@ reread_log_header:
                                 xtrabackup_parallel);
 	count = xtrabackup_parallel;
 	mutex_create(LATCH_ID_XTRA_COUNT_MUTEX, &count_mutex);
+	copied_datafiles_list_init();
 
 	for (i = 0; i < (uint) xtrabackup_parallel; i++) {
 		data_threads[i].it = it;
@@ -4517,6 +4571,7 @@ reread_log_header:
 		mutex_exit(&count_mutex);
 	}
 
+	copied_datafiles_list_free();
 	mutex_free(&count_mutex);
 	ut_free(data_threads);
 	datafiles_iter_free(it);
