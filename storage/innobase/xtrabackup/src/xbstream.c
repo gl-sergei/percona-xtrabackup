@@ -427,6 +427,12 @@ mode_extract(int argc __attribute__((unused)),
 			continue;
 		}
 
+		if (chunk.type == XB_CHUNK_TYPE_TRUNCATE) {
+			ds_truncate(entry->file);
+
+			continue;
+		}
+
 		if (entry->offset != chunk.offset) {
 			msg("%s: out-of-order chunk: real offset = 0x%llx, "
 			    "expected offset = 0x%llx\n", my_progname,

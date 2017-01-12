@@ -48,7 +48,9 @@ struct datasink_struct {
 	ds_ctxt_t *(*init)(const char *root);
 	ds_file_t *(*open)(ds_ctxt_t *ctxt, const char *path, MY_STAT *stat);
 	int (*write)(ds_file_t *file, const void *buf, size_t len);
+	int (*truncate)(ds_file_t *file);
 	int (*close)(ds_file_t *file);
+	int (*remove)(ds_ctxt_t *ctxt, const char *path);
 	void (*deinit)(ds_ctxt_t *ctxt);
 };
 
@@ -78,9 +80,18 @@ Write to a datasink file.
 int ds_write(ds_file_t *file, const void *buf, size_t len);
 
 /************************************************************************
+Truncate datasink file.
+@return 0 on success, 1 on error. */
+int ds_truncate(ds_file_t *file);
+
+/************************************************************************
 Close a datasink file.
 @return 0 on success, 1, on error. */
 int ds_close(ds_file_t *file);
+
+/************************************************************************
+Remove a datasink file */
+int ds_remove(ds_ctxt_t *ctxt, const char *path);
 
 /************************************************************************
 Destroy a datasink handle */

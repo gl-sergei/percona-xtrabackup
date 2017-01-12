@@ -31,14 +31,18 @@ static ds_ctxt_t *stdout_init(const char *root);
 static ds_file_t *stdout_open(ds_ctxt_t *ctxt, const char *path,
 			     MY_STAT *mystat);
 static int stdout_write(ds_file_t *file, const void *buf, size_t len);
+static int stdout_truncate(ds_file_t *file);
 static int stdout_close(ds_file_t *file);
+static int stdout_remove(ds_ctxt_t *ctxt, const char *path);
 static void stdout_deinit(ds_ctxt_t *ctxt);
 
 datasink_t datasink_stdout = {
 	&stdout_init,
 	&stdout_open,
 	&stdout_write,
+	&stdout_truncate,
 	&stdout_close,
+	&stdout_remove,
 	&stdout_deinit
 };
 
@@ -101,6 +105,21 @@ stdout_write(ds_file_t *file, const void *buf, size_t len)
 		return 0;
 	}
 
+	return 1;
+}
+
+static
+int
+stdout_truncate(ds_file_t *file __attribute__((unused)))
+{
+	return 1;
+}
+
+static
+int
+stdout_remove(ds_ctxt_t *ctxt __attribute__((unused)),
+	      const char *path __attribute__((unused)))
+{
 	return 1;
 }
 

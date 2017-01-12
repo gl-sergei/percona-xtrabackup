@@ -46,14 +46,18 @@ static ds_ctxt_t *buffer_init(const char *root);
 static ds_file_t *buffer_open(ds_ctxt_t *ctxt, const char *path,
 			      MY_STAT *mystat);
 static int buffer_write(ds_file_t *file, const void *buf, size_t len);
+static int buffer_truncate(ds_file_t *file);
 static int buffer_close(ds_file_t *file);
+static int buffer_remove(ds_ctxt_t *ctxt, const char *path);
 static void buffer_deinit(ds_ctxt_t *ctxt);
 
 datasink_t datasink_buffer = {
 	&buffer_init,
 	&buffer_open,
 	&buffer_write,
+	&buffer_truncate,
 	&buffer_close,
+	&buffer_remove,
 	&buffer_deinit
 };
 
@@ -165,6 +169,20 @@ buffer_write(ds_file_t *file, const void *buf, size_t len)
 }
 
 static int
+buffer_truncate(ds_file_t *file)
+{
+	ds_buffer_file_t	*buffer_file;
+
+	buffer_file = (ds_buffer_file_t *) file->ptr;
+	if (buffer_file->pos > 0) {
+		ds_write(buffer_file->dst_file, buffer_file->buf,
+			 buffer_file->pos);
+	}
+
+	return ds_truncate(buffer_file->dst_file);
+}
+
+static int
 buffer_close(ds_file_t *file)
 {
 	ds_buffer_file_t	*buffer_file;
@@ -181,6 +199,17 @@ buffer_close(ds_file_t *file)
 	my_free(file);
 
 	return ret;
+}
+
+static int
+buffer_remove(ds_ctxt_t *ctxt, const char *path)
+{
+	ds_ctxt_t		*pipe_ctxt;
+
+	pipe_ctxt = ctxt->pipe_ctxt;
+	xb_a(pipe_ctxt != NULL);
+
+	return ds_remove(pipe_ctxt, path);
 }
 
 static void

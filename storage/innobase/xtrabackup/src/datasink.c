@@ -105,12 +105,30 @@ ds_write(ds_file_t *file, const void *buf, size_t len)
 }
 
 /************************************************************************
+Truncate a datasink file.
+@return 0 on success, 1 on error. */
+int
+ds_truncate(ds_file_t *file)
+{
+	return file->datasink->truncate(file);
+}
+
+/************************************************************************
 Close a datasink file.
 @return 0 on success, 1, on error. */
 int
 ds_close(ds_file_t *file)
 {
 	return file->datasink->close(file);
+}
+
+/************************************************************************
+Remove a datasink file.
+@return 0 on success, 1, on error. */
+int
+ds_remove(ds_ctxt_t *ctxt, const char *path)
+{
+	return ctxt->datasink->remove(ctxt, path);
 }
 
 /************************************************************************

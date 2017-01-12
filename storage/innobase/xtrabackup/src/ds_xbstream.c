@@ -42,14 +42,18 @@ static ds_ctxt_t *xbstream_init(const char *root);
 static ds_file_t *xbstream_open(ds_ctxt_t *ctxt, const char *path,
 			      MY_STAT *mystat);
 static int xbstream_write(ds_file_t *file, const void *buf, size_t len);
+static int xbstream_truncate(ds_file_t *file);
 static int xbstream_close(ds_file_t *file);
+static int xbstream_remove(ds_ctxt_t *ctxt, const char *path);
 static void xbstream_deinit(ds_ctxt_t *ctxt);
 
 datasink_t datasink_xbstream = {
 	&xbstream_init,
 	&xbstream_open,
 	&xbstream_write,
+	&xbstream_truncate,
 	&xbstream_close,
+	&xbstream_remove,
 	&xbstream_deinit
 };
 
@@ -188,6 +192,22 @@ xbstream_write(ds_file_t *file, const void *buf, size_t len)
 
 static
 int
+xbstream_truncate(ds_file_t *file)
+{
+	ds_stream_file_t	*stream_file;
+	int			rc = 0;
+
+	stream_file = (ds_stream_file_t *)file->ptr;
+
+	rc = xb_stream_write_truncate(stream_file->xbstream_file);
+
+	my_free(file);
+
+	return rc;
+}
+
+static
+int
 xbstream_close(ds_file_t *file)
 {
 	ds_stream_file_t	*stream_file;
@@ -200,6 +220,19 @@ xbstream_close(ds_file_t *file)
 	my_free(file);
 
 	return rc;
+}
+
+static
+int
+xbstream_remove(ds_ctxt_t *ctxt, const char *path)
+{
+	ds_ctxt_t		*dest_ctxt;
+
+
+	xb_ad(ctxt->pipe_ctxt != NULL);
+	dest_ctxt = ctxt->pipe_ctxt;
+
+	return ds_remove(dest_ctxt, path);
 }
 
 static

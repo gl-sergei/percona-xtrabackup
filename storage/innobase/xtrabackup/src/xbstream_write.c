@@ -46,7 +46,8 @@ struct xb_wstream_file_struct {
 static int xb_stream_flush(xb_wstream_file_t *file);
 static int xb_stream_write_chunk(xb_wstream_file_t *file,
 				 const void *buf, size_t len);
-static int xb_stream_write_eof(xb_wstream_file_t *file);
+static int xb_stream_write_ctl_chunk(xb_chunk_type_t chunk_type,
+				     xb_wstream_file_t *file);
 
 static
 ssize_t
@@ -131,10 +132,21 @@ xb_stream_write_data(xb_wstream_file_t *file, const void *buf, size_t len)
 }
 
 int
+xb_stream_write_truncate(xb_wstream_file_t *file)
+{
+	if (xb_stream_flush(file) ||
+	    xb_stream_write_ctl_chunk(XB_CHUNK_TYPE_TRUNCATE, file)) {
+		return 1;
+	}
+
+	return 0;
+}
+
+int
 xb_stream_write_close(xb_wstream_file_t *file)
 {
 	if (xb_stream_flush(file) ||
-	    xb_stream_write_eof(file)) {
+	    xb_stream_write_ctl_chunk(XB_CHUNK_TYPE_EOF, file)) {
 		my_free(file);
 		return 1;
 	}
@@ -238,7 +250,7 @@ err:
 
 static
 int
-xb_stream_write_eof(xb_wstream_file_t *file)
+xb_stream_write_ctl_chunk(xb_chunk_type_t chunk_type, xb_wstream_file_t *file)
 {
 	/* Chunk magic + flags + chunk type + path_len + path */
 	uchar		tmpbuf[sizeof(XB_STREAM_CHUNK_MAGIC) - 1 + 1 + 1 + 4 +
@@ -257,7 +269,7 @@ xb_stream_write_eof(xb_wstream_file_t *file)
 
 	*ptr++ = 0;                              /* Chunk flags */
 
-	*ptr++ = (uchar) XB_CHUNK_TYPE_EOF;      /* Chunk type */
+	*ptr++ = (uchar) chunk_type;      /* Chunk type */
 
 	int4store(ptr, file->path_len);          /* Path length */
 	ptr += 4;

@@ -83,14 +83,18 @@ static ds_ctxt_t *encrypt_init(const char *root);
 static ds_file_t *encrypt_open(ds_ctxt_t *ctxt, const char *path,
 				MY_STAT *mystat);
 static int encrypt_write(ds_file_t *file, const void *buf, size_t len);
+static int encrypt_truncate(ds_file_t *file);
 static int encrypt_close(ds_file_t *file);
+static int encrypt_remove(ds_ctxt_t *ctxt, const char *path);
 static void encrypt_deinit(ds_ctxt_t *ctxt);
 
 datasink_t datasink_encrypt = {
 	&encrypt_init,
 	&encrypt_open,
 	&encrypt_write,
+	&encrypt_truncate,
 	&encrypt_close,
+	&encrypt_remove,
 	&encrypt_deinit
 };
 
@@ -371,6 +375,24 @@ encrypt_write(ds_file_t *file, const void *buf, size_t len)
 
 static
 int
+encrypt_truncate(ds_file_t *file)
+{
+	ds_encrypt_file_t	*crypt_file;
+	ds_file_t		*dest_file;
+	int			rc = 0;
+
+	crypt_file = (ds_encrypt_file_t *) file->ptr;
+	dest_file = crypt_file->dest_file;
+
+	rc = ds_truncate(dest_file);
+
+	my_free(file);
+
+	return rc;
+}
+
+static
+int
 encrypt_close(ds_file_t *file)
 {
 	ds_encrypt_file_t	*crypt_file;
@@ -382,13 +404,23 @@ encrypt_close(ds_file_t *file)
 
 	rc = xb_crypt_write_close(crypt_file->xbcrypt_file);
 
-	if (ds_close(dest_file)) {
-		rc = 1;
-	}
+	rc = rc || ds_close(dest_file);
 
 	my_free(file);
 
 	return rc;
+}
+
+static
+int
+encrypt_remove(ds_ctxt_t *ctxt, const char *path)
+{
+	ds_ctxt_t		*dest_ctxt;
+
+	xb_ad(ctxt->pipe_ctxt != NULL);
+	dest_ctxt = ctxt->pipe_ctxt;
+
+	return ds_remove(dest_ctxt, path);
 }
 
 static

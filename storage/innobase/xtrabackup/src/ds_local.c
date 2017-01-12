@@ -33,14 +33,18 @@ static ds_ctxt_t *local_init(const char *root);
 static ds_file_t *local_open(ds_ctxt_t *ctxt, const char *path,
 			     MY_STAT *mystat);
 static int local_write(ds_file_t *file, const void *buf, size_t len);
+static int local_truncate(ds_file_t *file);
 static int local_close(ds_file_t *file);
+static int local_remove(ds_ctxt_t *ctxt, const char *path);
 static void local_deinit(ds_ctxt_t *ctxt);
 
 datasink_t datasink_local = {
 	&local_init,
 	&local_open,
 	&local_write,
+	&local_truncate,
 	&local_close,
+	&local_remove,
 	&local_deinit
 };
 
@@ -133,6 +137,15 @@ local_write(ds_file_t *file, const void *buf, size_t len)
 
 static
 int
+local_truncate(ds_file_t *file)
+{
+	File fd = ((ds_local_file_t *) file->ptr)->fd;
+
+	return my_chsize(fd, 0, 0, MYF(MY_WME));
+}
+
+static
+int
 local_close(ds_file_t *file)
 {
 	File fd = ((ds_local_file_t *) file->ptr)->fd;
@@ -142,6 +155,13 @@ local_close(ds_file_t *file)
 	my_sync(fd, MYF(MY_WME));
 
 	return my_close(fd, MYF(MY_WME));
+}
+
+static
+int
+local_remove(ds_ctxt_t *ctxt __attribute__((unused)), const char *path)
+{
+	return my_delete(path, MYF(MY_WME));
 }
 
 static

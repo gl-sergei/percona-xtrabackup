@@ -55,6 +55,7 @@ typedef struct {
 	ds_file_t		*dest_file;
 	ds_compress_ctxt_t	*comp_ctxt;
 	size_t			bytes_processed;
+	char			path[FN_REFLEN];
 } ds_compress_file_t;
 
 /* Compression options */
@@ -66,14 +67,18 @@ static ds_ctxt_t *compress_init(const char *root);
 static ds_file_t *compress_open(ds_ctxt_t *ctxt, const char *path,
 				MY_STAT *mystat);
 static int compress_write(ds_file_t *file, const void *buf, size_t len);
+static int compress_truncate(ds_file_t *file);
 static int compress_close(ds_file_t *file);
+static int compress_remove(ds_ctxt_t *ctxt, const char *path);
 static void compress_deinit(ds_ctxt_t *ctxt);
 
 datasink_t datasink_compress = {
 	&compress_init,
 	&compress_open,
 	&compress_write,
+	&compress_truncate,
 	&compress_close,
+	&compress_remove,
 	&compress_deinit
 };
 
@@ -167,6 +172,7 @@ compress_open(ds_ctxt_t *ctxt, const char *path, MY_STAT *mystat)
 	comp_file->dest_file = dest_file;
 	comp_file->comp_ctxt = comp_ctxt;
 	comp_file->bytes_processed = 0;
+	strcpy(comp_file->path, new_name);
 
 	file->ptr = comp_file;
 	file->path = dest_file->path;
@@ -269,6 +275,48 @@ compress_write(ds_file_t *file, const void *buf, size_t len)
 
 static
 int
+compress_truncate(ds_file_t *file)
+{
+	ds_compress_file_t	*comp_file;
+	ds_file_t		*dest_file;
+	int			rc;
+	size_t			path_len;
+
+	comp_file = (ds_compress_file_t *) file->ptr;
+	dest_file = comp_file->dest_file;
+
+	/* Write the qpress file trailer */
+	ds_write(dest_file, "ENDSENDS", 8);
+
+	/* Supposedly the number of written bytes should be written as a
+	"recovery information" in the file trailer, but in reality qpress
+	always writes 8 zeros here. Let's do the same */
+
+	write_uint64_le(dest_file, 0);
+
+	rc = ds_truncate(dest_file);
+
+	/* Write the qpress archive header */
+	if (ds_write(dest_file, "qpress10", 8) ||
+	    write_uint64_le(dest_file, COMPRESS_CHUNK_SIZE)) {
+		goto err;
+	}
+
+	/* Write the qpress file header */
+	path_len = strlen(comp_file->path);
+	if (ds_write(dest_file, "F", 1) ||
+	    write_uint32_le(dest_file, path_len) ||
+	    /* we want to write the terminating \0 as well */
+	    ds_write(dest_file, comp_file->path, path_len + 1)) {
+		goto err;
+	}
+
+err:
+	return rc;
+}
+
+static
+int
 compress_close(ds_file_t *file)
 {
 	ds_compress_file_t	*comp_file;
@@ -292,6 +340,18 @@ compress_close(ds_file_t *file)
 	my_free(file);
 
 	return rc;
+}
+
+static
+int
+compress_remove(ds_ctxt_t *ctxt, const char *path)
+{
+	ds_ctxt_t		*dest_ctxt;
+
+	xb_ad(ctxt->pipe_ctxt != NULL);
+	dest_ctxt = ctxt->pipe_ctxt;
+
+	return ds_remove(dest_ctxt, path);
 }
 
 static

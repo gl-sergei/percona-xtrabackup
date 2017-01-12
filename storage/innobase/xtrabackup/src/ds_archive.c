@@ -43,14 +43,18 @@ static ds_ctxt_t *archive_init(const char *root);
 static ds_file_t *archive_open(ds_ctxt_t *ctxt, const char *path,
 			      MY_STAT *mystat);
 static int archive_write(ds_file_t *file, const void *buf, size_t len);
+static int archive_truncate(ds_file_t *file);
 static int archive_close(ds_file_t *file);
+static int archive_remove(ds_ctxt_t *ctxt, const char *path);
 static void archive_deinit(ds_ctxt_t *ctxt);
 
 datasink_t datasink_archive = {
 	&archive_init,
 	&archive_open,
 	&archive_write,
+	&archive_truncate,
 	&archive_close,
+	&archive_remove,
 	&archive_deinit
 };
 
@@ -236,6 +240,16 @@ archive_write(ds_file_t *file, const void *buf, size_t len)
 
 static
 int
+archive_truncate(ds_file_t *file __attribute__((unused)))
+{
+	msg("Error: truncate operation is not supported for tar stream "
+	    "format.\n");
+
+	return 1;
+}
+
+static
+int
 archive_close(ds_file_t *file)
 {
 	ds_archive_file_t	*archive_file;
@@ -248,6 +262,17 @@ archive_close(ds_file_t *file)
 	my_free(file);
 
 	return rc;
+}
+
+static
+int
+archive_remove(ds_ctxt_t *ctxt __attribute__((unused)),
+	       const char *path __attribute__((unused)))
+{
+	msg("Error: remove operation is not supported for tar stream "
+	    "format.\n");
+
+	return 1;
 }
 
 static

@@ -44,14 +44,18 @@ static ds_ctxt_t *tmpfile_init(const char *root);
 static ds_file_t *tmpfile_open(ds_ctxt_t *ctxt, const char *path,
 			       MY_STAT *mystat);
 static int tmpfile_write(ds_file_t *file, const void *buf, size_t len);
+static int tmpfile_truncate(ds_file_t *file);
 static int tmpfile_close(ds_file_t *file);
+static int tmpfile_remove(ds_ctxt_t *ctxt, const char *path);
 static void tmpfile_deinit(ds_ctxt_t *ctxt);
 
 datasink_t datasink_tmpfile = {
 	&tmpfile_init,
 	&tmpfile_open,
 	&tmpfile_write,
+	&tmpfile_truncate,
 	&tmpfile_close,
+	&tmpfile_remove,
 	&tmpfile_deinit
 };
 
@@ -161,6 +165,14 @@ tmpfile_write(ds_file_t *file, const void *buf, size_t len)
 }
 
 static int
+tmpfile_truncate(ds_file_t *file)
+{
+	File fd = ((ds_tmp_file_t *) file->ptr)->fd;
+
+	return my_chsize(fd, 0, 0, MYF(MY_WME));
+}
+
+static int
 tmpfile_close(ds_file_t *file)
 {
 	/* Do nothing -- we will close (and thus remove) the file after piping
@@ -169,6 +181,13 @@ tmpfile_close(ds_file_t *file)
 	my_free(file->path);
 
 	return 0;
+}
+
+static int
+tmpfile_remove(ds_ctxt_t *ctxt __attribute__((unused)),
+	       const char *path __attribute__((unused)))
+{
+	return 1;
 }
 
 static void
