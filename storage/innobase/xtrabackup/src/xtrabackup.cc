@@ -457,19 +457,55 @@ xtrabackup_add_datasink(ds_ctxt_t *ds)
 }
 
 /* ======== Datafiles iterator ======== */
+struct datafiles_iter {
+	fil_system_t	*system;
+	std::vector<fil_node_t*> nodes;
+	std::vector<fil_node_t*>::iterator nodes_it;
+	ib_mutex_t	mutex;
+};
+
+void
+datafiles_iter_queue(datafiles_iter_t *it, fil_space_t *space)
+{
+	mutex_enter(&it->mutex);
+
+	fil_node_t *node = UT_LIST_GET_FIRST(space->chain);
+
+	while (node != NULL) {
+		it->nodes.push_back(node);
+		node = UT_LIST_GET_NEXT(chain, node);
+	}
+
+	mutex_exit(&it->mutex);
+
+}
+
 datafiles_iter_t *
 datafiles_iter_new(fil_system_t *f_system)
 {
 	datafiles_iter_t *it;
 
-	it = static_cast<datafiles_iter_t *>
-		(ut_malloc_nokey(sizeof(datafiles_iter_t)));
+	it = new datafiles_iter_t;
+
 	mutex_create(LATCH_ID_XTRA_DATAFILES_ITER_MUTEX, &it->mutex);
 
 	it->system = f_system;
-	it->space = NULL;
-	it->node = NULL;
-	it->started = FALSE;
+	fil_space_t *space = UT_LIST_GET_FIRST(it->system->space_list);
+
+	while (space != NULL) {
+		if (space->purpose == FIL_TYPE_TABLESPACE) {
+
+			fil_node_t *node = UT_LIST_GET_FIRST(space->chain);
+
+			while (node != NULL) {
+				it->nodes.push_back(node);
+				node = UT_LIST_GET_NEXT(chain, node);
+			}
+		}
+		space = UT_LIST_GET_NEXT(space_list, space);
+	}
+
+	it->nodes_it = it->nodes.begin();
 
 	return it;
 }
@@ -477,35 +513,15 @@ datafiles_iter_new(fil_system_t *f_system)
 fil_node_t *
 datafiles_iter_next(datafiles_iter_t *it)
 {
-	fil_node_t *new_node;
+	fil_node_t *new_node = NULL;
 
 	mutex_enter(&it->mutex);
 
-	if (it->node == NULL) {
-		if (it->started)
-			goto end;
-		it->started = TRUE;
-	} else {
-		it->node = UT_LIST_GET_NEXT(chain, it->node);
-		if (it->node != NULL)
-			goto end;
+	if (it->nodes_it != it->nodes.end()) {
+		new_node = *it->nodes_it;
+		++it->nodes_it;
 	}
 
-	it->space = (it->space == NULL) ?
-		UT_LIST_GET_FIRST(it->system->space_list) :
-		UT_LIST_GET_NEXT(space_list, it->space);
-
-	while (it->space != NULL &&
-	       (it->space->purpose != FIL_TYPE_TABLESPACE ||
-		UT_LIST_GET_LEN(it->space->chain) == 0))
-		it->space = UT_LIST_GET_NEXT(space_list, it->space);
-	if (it->space == NULL)
-		goto end;
-
-	it->node = UT_LIST_GET_FIRST(it->space->chain);
-
-end:
-	new_node = it->node;
 	mutex_exit(&it->mutex);
 
 	return new_node;
@@ -515,7 +531,7 @@ void
 datafiles_iter_free(datafiles_iter_t *it)
 {
 	mutex_free(&it->mutex);
-	ut_free(it);
+	delete it;
 }
 
 /* ======== Date copying thread context ======== */
@@ -2445,53 +2461,160 @@ xb_get_copy_action(const char *dflt)
 	return(action);
 }
 
+struct datafile_track_t {
+	fil_space_t *space;
+	bool exists;
+	bool retry;
+	int retries;
+};
 
-static std::map<ulint, const fil_space_t *> copied_datafiles_list;
-static ib_mutex_t copied_datafiles_list_mutex;
+static std::map<ulint, datafile_track_t *> datafile_track_table;
+static ib_mutex_t datafile_track_mutex;
+static datafiles_iter_t *datafiles_iter;
 
 static
 void
-copied_datafiles_list_init()
+datafile_track_init(datafiles_iter_t *it)
 {
 	mutex_create(LATCH_ID_XTRA_DATAFILES_ITER_MUTEX,
-		     &copied_datafiles_list_mutex);
+		     &datafile_track_mutex);
+	datafiles_iter = it;
 }
 
 static
 void
-copied_datafiles_list_free()
+datafile_track_free()
 {
-	copied_datafiles_list.clear();
-	mutex_free(&copied_datafiles_list_mutex);
+	std::map<ulint, datafile_track_t *>::iterator i;
+	for (i = datafile_track_table.begin();
+	     i != datafile_track_table.end();
+	     ++i) {
+		datafile_track_t *track = i->second;
+		xb_ad(track->copied);
+		xb_ad(!track->retry);
+		delete track;
+	}
+	datafile_track_table.clear();
+	mutex_free(&datafile_track_mutex);
 }
 
 static
-void
-copied_datafiles_list_add(ulint space_id, const fil_space_t *space)
+bool
+datafile_track_exists(fil_node_t *node)
 {
-	mutex_enter(&copied_datafiles_list_mutex);
+	bool ret = false;
 
-	copied_datafiles_list[space_id] = space;
+	mutex_enter(&datafile_track_mutex);
 
-	mutex_exit(&copied_datafiles_list_mutex);
-}
-
-const fil_space_t *
-copied_datafiles_list_get(ulint space_id)
-{
-	const fil_space_t *space = NULL;
-
-	mutex_enter(&copied_datafiles_list_mutex);
-
-	std::map<ulint, const fil_space_t *>::iterator i;
-	i = copied_datafiles_list.find(space_id);
-	if (i != copied_datafiles_list.end()) {
-		space = i->second;
+	std::map<ulint, datafile_track_t *>::iterator i;
+	i = datafile_track_table.find(node->space->id);
+	if (i != datafile_track_table.end()) {
+		ret = i->second->exists;
 	}
 
-	mutex_exit(&copied_datafiles_list_mutex);
+	mutex_exit(&datafile_track_mutex);
 
-	return space;
+	return ret;
+}
+
+static
+void
+datafile_track_copy_started(fil_node_t *node)
+{
+	mutex_enter(&datafile_track_mutex);
+
+	datafile_track_t *track;
+
+	std::map<ulint, datafile_track_t *>::iterator i;
+	i = datafile_track_table.find(node->space->id);
+	if (i != datafile_track_table.end()) {
+		track = i->second;
+		xb_ad(track->space == space);
+	} else {
+		track = new datafile_track_t;
+		datafile_track_table[node->space->id] = track;
+	}
+	track->exists = true;
+	track->retry = false;
+	track->space = node->space;
+
+	mutex_exit(&datafile_track_mutex);
+}
+
+static
+void
+datafile_track_copy_done(fil_node_t *node)
+{
+	datafile_track_t *track = NULL;
+
+	mutex_enter(&datafile_track_mutex);
+
+	std::map<ulint, datafile_track_t *>::iterator i;
+	i = datafile_track_table.find(node->space->id);
+
+	xb_ad(i != datafile_track_table.end());
+
+	track = i->second;
+
+	if (track->retry) {
+		msg_ts("File '%s' has been updated without redo logging while"
+		       " xtrabackup copied it. Xtrabackup will make another"
+		       " attempt to copy it.\n", node->name);
+	}
+
+	mutex_exit(&datafile_track_mutex);
+}
+
+
+datafile_track_t *
+datafile_track_get(ulint space_id)
+{
+	datafile_track_t *track = NULL;
+
+	mutex_enter(&datafile_track_mutex);
+
+	std::map<ulint, datafile_track_t *>::iterator i;
+	i = datafile_track_table.find(space_id);
+	if (i != datafile_track_table.end()) {
+		track = i->second;
+	}
+
+	mutex_exit(&datafile_track_mutex);
+
+	return track;
+}
+
+void
+mlog_index_load_mark(ulint space_id, lsn_t lsn)
+{
+	datafile_track_t *track = NULL;
+
+	msg_ts("Warning: An optimized (without redo logging) DDL operation has "
+	       "been performed. All modified pages may not have been flushed to"
+	       " the disk yet.\n");
+
+	mutex_enter(&datafile_track_mutex);
+
+	std::map<ulint, datafile_track_t *>::iterator i;
+	i = datafile_track_table.find(space_id);
+	if (i != datafile_track_table.end()) {
+		track = i->second;
+
+		msg_ts("XtraBackup will retry to copy tablespace %lu '%s'\n",
+		       track->space->id, track->space->name);
+
+		if (!track->retry) {
+			/* remove an old file and copy new file over it */
+			datafiles_iter_queue(datafiles_iter, track->space);
+
+			track->retry = true;
+		} else {
+			msg_ts("Tablespace with id %lu have not been copied"
+			       " yet. Backup continues.\n", space_id);
+		}
+	}
+
+	mutex_exit(&datafile_track_mutex);
 }
 
 /* TODO: We may tune the behavior (e.g. by fil_aio)*/
@@ -2543,8 +2666,6 @@ xtrabackup_copy_datafile(fil_node_t* node, uint thread_n)
 		goto error;
 	}
 
-	copied_datafiles_list_add(cursor.space_id, node->space);
-
 	if (!is_system) {
 		snprintf(dst_name, sizeof(dst_name), "%s.ibd", node_name);
 	} else {
@@ -2569,6 +2690,13 @@ xtrabackup_copy_datafile(fil_node_t* node, uint thread_n)
 		    "failed to initialize page write filter.\n", thread_n);
 		goto error;
 	}
+
+	if (datafile_track_exists(node)) {
+		msg_ts("[%02u] deleting existing file %s\n",
+		       thread_n, dst_name);
+		ds_remove(ds_data, dst_name);
+	}
+	datafile_track_copy_started(node);
 
 	dstfile = ds_open(ds_data, dst_name, &cursor.statinfo);
 	if (dstfile == NULL) {
@@ -2602,6 +2730,8 @@ xtrabackup_copy_datafile(fil_node_t* node, uint thread_n)
 	    && !write_filter->finalize(&write_filt_ctxt, dstfile)) {
 		goto error;
 	}
+
+	datafile_track_copy_done(node);
 
 	/* close */
 	msg_ts("[%02u]        ...done\n", thread_n);
@@ -4549,7 +4679,7 @@ reread_log_header:
                                 xtrabackup_parallel);
 	count = xtrabackup_parallel;
 	mutex_create(LATCH_ID_XTRA_COUNT_MUTEX, &count_mutex);
-	copied_datafiles_list_init();
+	datafile_track_init(it);
 
 	for (i = 0; i < (uint) xtrabackup_parallel; i++) {
 		data_threads[i].it = it;
@@ -4571,7 +4701,7 @@ reread_log_header:
 		mutex_exit(&count_mutex);
 	}
 
-	copied_datafiles_list_free();
+	datafile_track_free();
 	mutex_free(&count_mutex);
 	ut_free(data_threads);
 	datafiles_iter_free(it);

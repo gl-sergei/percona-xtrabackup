@@ -39,13 +39,8 @@ typedef struct {
 } xb_delta_info_t;
 
 /* ======== Datafiles iterator ======== */
-typedef struct {
-	fil_system_t	*system;
-	fil_space_t	*space;
-	fil_node_t	*node;
-	ibool		started;
-	ib_mutex_t	mutex;
-} datafiles_iter_t;
+struct datafiles_iter;
+typedef struct datafiles_iter datafiles_iter_t;
 
 /* value of the --incremental option */
 extern lsn_t incremental_lsn;

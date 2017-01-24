@@ -1724,8 +1724,8 @@ fil_write_encryption_parse(
 	return(ptr);
 }
 
-const fil_space_t *
-copied_datafiles_list_get(ulint space_id);
+void
+mlog_index_load_mark(ulint space_id, lsn_t lsn);
 
 /** Try to parse a single log record body and also applies it if
 specified.
@@ -1802,30 +1802,8 @@ recv_parse_or_apply_log_rec_body(
 							"able to determine the"
 							"InnoDB Engine Status";
 
-					if (copied_datafiles_list_get(
-						space_id) != NULL) {
-
-						ib::fatal() << "An optimized"
-							" (without redo"
-							" logging) DDL"
-							" operation has been"
-							" performed. All"
-							" modified pages may"
-							" not have been"
-							" flushed to the disk"
-							" yet.\n PXB will not"
-							" be able to take a"
-							" consistent backup."
-							" Retry the backup"
-							" operation";
-
-					} else {
-						ib::info() << "Tablespace"
-							" with id " << space_id
-							<< " have not been"
-							" copied yet. "
-							"Continuing backup.";
-					}
+					mlog_index_load_mark(space_id,
+						recv_sys->recovered_lsn);
 				}
 				/** else the index is flushed to disk before
 				backup started hence no error */

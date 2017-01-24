@@ -161,7 +161,11 @@ static
 int
 local_remove(ds_ctxt_t *ctxt __attribute__((unused)), const char *path)
 {
-	return my_delete(path, MYF(MY_WME));
+	char 		fullpath[FN_REFLEN];
+
+	fn_format(fullpath, path, ctxt->root, "", MYF(MY_RELATIVE_PATH));
+
+	return my_delete(fullpath, MYF(MY_WME));
 }
 
 static

@@ -463,7 +463,7 @@ xb_fil_cur_close(
 		ut_free(cursor->orig_buf);
 	}
 	if (cursor->node != NULL) {
-		xb_fil_node_close_file(cursor->node);
+		// xb_fil_node_close_file(cursor->node);
 		cursor->file = XB_FILE_UNDEFINED;
 	}
 }
