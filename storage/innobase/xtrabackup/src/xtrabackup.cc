@@ -553,6 +553,7 @@ typedef struct {
 	uint			*count;
 	ib_mutex_t		*count_mutex;
 	os_thread_id_t		id;
+	bool			first_run;
 } data_thread_ctxt_t;
 
 /* ======== for option and variables ======== */
@@ -3263,7 +3264,9 @@ data_copy_thread_func(
 	*/
 	my_thread_init();
 
-	debug_sync_point("data_copy_thread_func");
+	if (ctxt->first_run) {
+		debug_sync_point("data_copy_thread_func");
+	}
 
 	while ((node = datafiles_iter_next(ctxt->it)) != NULL) {
 
@@ -4690,6 +4693,7 @@ reread_log_header:
 	data_threads = (data_thread_ctxt_t *)
 		ut_malloc_nokey(sizeof(data_thread_ctxt_t) *
                                 xtrabackup_parallel);
+	data_threads->first_run = true;
 	count = xtrabackup_parallel;
 	mutex_create(LATCH_ID_XTRA_COUNT_MUTEX, &count_mutex);
 	datafile_track_init(it);
