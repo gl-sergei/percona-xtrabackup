@@ -68,6 +68,7 @@ validate_chunk_type(uchar code)
 	case XB_CHUNK_TYPE_PAYLOAD:
 	case XB_CHUNK_TYPE_EOF:
 	case XB_CHUNK_TYPE_TRUNCATE:
+	case XB_CHUNK_TYPE_REMOVE:
 		return (xb_chunk_type_t) code;
 	default:
 		return XB_CHUNK_TYPE_UNKNOWN;
@@ -154,7 +155,8 @@ xb_stream_read_chunk(xb_rstream_t *stream, xb_rstream_chunk_t *chunk)
 	chunk->path[pathlen] = '\0';
 
 	if (chunk->type == XB_CHUNK_TYPE_EOF
-	    || chunk->type == XB_CHUNK_TYPE_TRUNCATE) {
+	    || chunk->type == XB_CHUNK_TYPE_TRUNCATE
+	    || chunk->type == XB_CHUNK_TYPE_REMOVE) {
 		return XB_STREAM_READ_CHUNK;
 	}
 

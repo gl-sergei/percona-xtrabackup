@@ -64,6 +64,8 @@ int xb_stream_write_data(xb_wstream_file_t *file, const void *buf, size_t len);
 
 int xb_stream_write_truncate(xb_wstream_file_t *file);
 
+int xb_stream_write_remove(xb_wstream_t *stream, const char *path);
+
 int xb_stream_write_close(xb_wstream_file_t *file);
 
 int xb_stream_write_done(xb_wstream_t *stream);
@@ -81,7 +83,8 @@ typedef enum {
 	XB_CHUNK_TYPE_UNKNOWN = '\0',
 	XB_CHUNK_TYPE_PAYLOAD = 'P',
 	XB_CHUNK_TYPE_EOF = 'E',
-	XB_CHUNK_TYPE_TRUNCATE = 'T'
+	XB_CHUNK_TYPE_TRUNCATE = 'T',
+	XB_CHUNK_TYPE_REMOVE = 'R'
 } xb_chunk_type_t;
 
 typedef struct xb_rstream_struct xb_rstream_t;

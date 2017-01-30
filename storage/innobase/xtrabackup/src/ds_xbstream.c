@@ -226,13 +226,16 @@ static
 int
 xbstream_remove(ds_ctxt_t *ctxt, const char *path)
 {
-	ds_ctxt_t		*dest_ctxt;
+	ds_stream_ctxt_t	*stream_ctxt;
+	xb_wstream_t		*xbstream;
+	int			rc = 0;
 
+	stream_ctxt = (ds_stream_ctxt_t *) ctxt->ptr;
+	xbstream = stream_ctxt->xbstream;
 
-	xb_ad(ctxt->pipe_ctxt != NULL);
-	dest_ctxt = ctxt->pipe_ctxt;
+	rc = xb_stream_write_remove(xbstream, path);
 
-	return ds_remove(dest_ctxt, path);
+	return rc;
 }
 
 static

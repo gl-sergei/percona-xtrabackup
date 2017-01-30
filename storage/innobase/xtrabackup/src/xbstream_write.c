@@ -143,6 +143,24 @@ xb_stream_write_truncate(xb_wstream_file_t *file)
 }
 
 int
+xb_stream_write_remove(xb_wstream_t *stream, const char *path)
+{
+	xb_wstream_file_t *file;
+
+	file = xb_stream_write_open(stream, path, 0, NULL, NULL);
+
+	if (file == NULL ||
+	    xb_stream_flush(file) ||
+	    xb_stream_write_ctl_chunk(XB_CHUNK_TYPE_REMOVE, file)) {
+		return 1;
+	}
+
+	my_free(file);
+
+	return 0;
+}
+
+int
 xb_stream_write_close(xb_wstream_file_t *file)
 {
 	if (xb_stream_flush(file) ||

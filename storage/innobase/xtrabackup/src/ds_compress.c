@@ -347,11 +347,15 @@ int
 compress_remove(ds_ctxt_t *ctxt, const char *path)
 {
 	ds_ctxt_t		*dest_ctxt;
+	char			new_path[FN_REFLEN];
 
 	xb_ad(ctxt->pipe_ctxt != NULL);
 	dest_ctxt = ctxt->pipe_ctxt;
 
-	return ds_remove(dest_ctxt, path);
+	/* Append the .qp extension to the filename */
+	fn_format(new_path, path, "", ".qp", MYF(MY_APPEND_EXT));
+
+	return ds_remove(dest_ctxt, new_path);
 }
 
 static

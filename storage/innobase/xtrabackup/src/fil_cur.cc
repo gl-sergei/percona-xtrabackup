@@ -78,7 +78,7 @@ xb_get_relative_path(
 	}
 
 }
-
+#if 0
 /**********************************************************************//**
 Closes a file. */
 static
@@ -123,7 +123,7 @@ xb_fil_node_close_file(
 
 	mutex_exit(&fil_system->mutex);
 }
-
+#endif
 /************************************************************************
 Open a source file cursor and initialize the associated read filter.
 
@@ -463,7 +463,9 @@ xb_fil_cur_close(
 		ut_free(cursor->orig_buf);
 	}
 	if (cursor->node != NULL) {
-		// xb_fil_node_close_file(cursor->node);
+#if 0
+		xb_fil_node_close_file(cursor->node);
+#endif
 		cursor->file = XB_FILE_UNDEFINED;
 	}
 }

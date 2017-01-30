@@ -403,6 +403,12 @@ mode_extract(int argc __attribute__((unused)),
 			continue;
 		}
 
+		if (chunk.type == XB_CHUNK_TYPE_REMOVE) {
+			ds_remove(ds_ctxt, chunk.path);
+
+			continue;
+		}
+
 		/* See if we already have this file open */
 		entry = (file_entry_t *) my_hash_search(&filehash,
 							(uchar *) chunk.path,

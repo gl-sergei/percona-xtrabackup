@@ -459,8 +459,7 @@ xtrabackup_add_datasink(ds_ctxt_t *ds)
 /* ======== Datafiles iterator ======== */
 struct datafiles_iter {
 	fil_system_t	*system;
-	std::vector<fil_node_t*> nodes;
-	std::vector<fil_node_t*>::iterator nodes_it;
+	std::queue<fil_node_t*> nodes;
 	ib_mutex_t	mutex;
 };
 
@@ -472,7 +471,7 @@ datafiles_iter_queue(datafiles_iter_t *it, fil_space_t *space)
 	fil_node_t *node = UT_LIST_GET_FIRST(space->chain);
 
 	while (node != NULL) {
-		it->nodes.push_back(node);
+		it->nodes.push(node);
 		node = UT_LIST_GET_NEXT(chain, node);
 	}
 
@@ -498,16 +497,28 @@ datafiles_iter_new(fil_system_t *f_system)
 			fil_node_t *node = UT_LIST_GET_FIRST(space->chain);
 
 			while (node != NULL) {
-				it->nodes.push_back(node);
+				it->nodes.push(node);
 				node = UT_LIST_GET_NEXT(chain, node);
 			}
 		}
 		space = UT_LIST_GET_NEXT(space_list, space);
 	}
 
-	it->nodes_it = it->nodes.begin();
-
 	return it;
+}
+
+bool
+datafiles_iter_empty(datafiles_iter_t *it)
+{
+	bool result;
+
+	mutex_enter(&it->mutex);
+
+	result = it->nodes.empty();
+
+	mutex_exit(&it->mutex);
+
+	return result;
 }
 
 fil_node_t *
@@ -517,9 +528,9 @@ datafiles_iter_next(datafiles_iter_t *it)
 
 	mutex_enter(&it->mutex);
 
-	if (it->nodes_it != it->nodes.end()) {
-		new_node = *it->nodes_it;
-		++it->nodes_it;
+	if (!it->nodes.empty()) {
+		new_node = it->nodes.front();
+		it->nodes.pop();
 	}
 
 	mutex_exit(&it->mutex);
@@ -4673,6 +4684,8 @@ reread_log_header:
 		exit(EXIT_FAILURE);
 	}
 
+	msg_ts("Starting copying of InnoDB tables.\n");
+
 	/* Create data copying threads */
 	data_threads = (data_thread_ctxt_t *)
 		ut_malloc_nokey(sizeof(data_thread_ctxt_t) *
@@ -4701,18 +4714,41 @@ reread_log_header:
 		mutex_exit(&count_mutex);
 	}
 
-	datafile_track_free();
-	mutex_free(&count_mutex);
-	ut_free(data_threads);
-	datafiles_iter_free(it);
+	msg_ts("InnoDB tables have been copied.\n");
 
 	if (changed_page_bitmap) {
 		xb_page_bitmap_deinit(changed_page_bitmap);
 	}
-	}
 
 	if (!backup_start()) {
 		exit(EXIT_FAILURE);
+	}
+
+	if (opt_binlog_info == BINLOG_INFO_ON) {
+		memset(data_threads, 0,
+		       sizeof(data_thread_ctxt_t) * xtrabackup_parallel);
+		count = xtrabackup_parallel;
+
+		for (i = 0; i < (uint) xtrabackup_parallel; i++) {
+			data_threads[i].it = it;
+			data_threads[i].num = i+1;
+			data_threads[i].count = &count;
+			data_threads[i].count_mutex = &count_mutex;
+			os_thread_create(data_copy_thread_func,
+					 data_threads + i,
+					 &data_threads[i].id);
+		}
+
+		/* Wait for threads to exit */
+		while (1) {
+			os_thread_sleep(1000000);
+			mutex_enter(&count_mutex);
+			if (count == 0) {
+				mutex_exit(&count_mutex);
+				break;
+			}
+			mutex_exit(&count_mutex);
+		}
 	}
 
 	/* read the latest checkpoint lsn */
@@ -4748,12 +4784,28 @@ skip_last_cp:
 	/* stop log_copying_thread */
 	log_copying = FALSE;
 	os_event_set(log_copying_stop);
-	msg("xtrabackup: Stopping log copying thread.\n");
+	msg_ts("xtrabackup: Stopping log copying thread.\n");
 	while (log_copying_running) {
 		msg(".");
 		os_thread_sleep(200000); /*0.2 sec*/
 	}
 	msg("\n");
+
+	msg_ts("xtrabackup: Stopping log copying thread.\n");
+
+	if (!datafiles_iter_empty(it)) {
+		msg("Error: some tables have changed without redo logging after"
+		    " xtrabackup has finished copying of datafiles but before"
+		    " it finished scanning of redo logs.\n");
+		exit(EXIT_FAILURE);
+	}
+
+	datafile_track_free();
+	mutex_free(&count_mutex);
+	ut_free(data_threads);
+	datafiles_iter_free(it);
+
+	}
 
 	os_event_destroy(log_copying_stop);
 	if (ds_close(dst_log_file)) {
