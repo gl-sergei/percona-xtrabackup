@@ -20,9 +20,13 @@ Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA
 
 #include <mysql_version.h>
 #include <my_base.h>
-#include <zlib.h>
 #include "common.h"
 #include "xbstream.h"
+
+void
+ut_crc32_init();
+typedef uint32_t       (*ut_crc32_func_t)(const unsigned char* ptr, unsigned int len);
+extern ut_crc32_func_t ut_crc32;
 
 /* Allocate 1 MB for the payload buffer initially */
 #define INIT_BUFFER_LEN (1024 * 1024)

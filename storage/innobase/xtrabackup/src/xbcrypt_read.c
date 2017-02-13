@@ -20,6 +20,11 @@ Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA
 
 #include "xbcrypt.h"
 
+void
+ut_crc32_init();
+typedef uint32_t       (*ut_crc32_func_t)(const unsigned char* ptr, unsigned int len);
+extern ut_crc32_func_t ut_crc32;
+
 struct xb_rcrypt_struct {
 	void				*userdata;
 	xb_crypt_read_callback		*read;
