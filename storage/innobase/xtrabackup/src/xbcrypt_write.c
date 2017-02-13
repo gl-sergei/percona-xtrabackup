@@ -20,6 +20,9 @@ Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA
 
 #include "xbcrypt.h"
 
+typedef uint32_t	(*ut_crc32_func_t)(const unsigned char* ptr, unsigned int len);
+extern ut_crc32_func_t	ut_crc32;
+
 struct xb_wcrypt_struct {
 	void				*userdata;
 	xb_crypt_write_callback		*write;
@@ -74,7 +77,8 @@ int xb_crypt_write_chunk(xb_wcrypt_t *crypt, const void *buf, size_t olen,
 	int8store(ptr, (ulonglong)elen); /* encrypted (actual) size */
 	ptr += 8;
 
-	checksum = crc32(0, buf, elen);
+	// checksum = crc32(0, buf, elen);
+	checksum = ut_crc32((const unsigned char *) buf, elen);
 	int4store(ptr, checksum);	/* checksum */
 	ptr += 4;
 

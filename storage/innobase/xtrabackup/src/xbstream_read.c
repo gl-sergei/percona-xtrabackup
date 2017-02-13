@@ -202,7 +202,8 @@ xb_stream_read_chunk(xb_rstream_t *stream, xb_rstream_chunk_t *chunk)
 		stream->offset += chunk->length;
 	}
 
-	checksum = crc32(0, stream->buffer, chunk->length);
+	// checksum = crc32(0, stream->buffer, chunk->length);
+	checksum = ut_crc32((const unsigned char *) stream->buffer, chunk->length);
 	if (checksum != checksum_exp) {
 		msg("xb_stream_read_chunk(): invalid checksum at offset "
 		    "0x%llx: expected 0x%lx, read 0x%lx.\n",

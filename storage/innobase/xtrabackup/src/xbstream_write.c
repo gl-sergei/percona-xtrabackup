@@ -20,9 +20,14 @@ Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA
 
 #include <mysql_version.h>
 #include <my_base.h>
-#include <zlib.h>
 #include "common.h"
 #include "xbstream.h"
+
+void
+ut_crc32_init();
+typedef uint32_t	(*ut_crc32_func_t)(const unsigned char* ptr, unsigned int len);
+extern ut_crc32_func_t	ut_crc32;
+
 
 /* Group writes smaller than this into a single chunk */
 #define XB_STREAM_MIN_CHUNK_SIZE (10 * 1024 * 1024)
@@ -210,7 +215,8 @@ xb_stream_write_chunk(xb_wstream_file_t *file, const void *buf, size_t len)
 	int8store(ptr, file->offset);            /* Payload offset */
 	ptr += 8;
 
-	checksum = crc32(0, buf, len);           /* checksum */
+	// checksum = crc32(0, buf, len);           /* checksum */
+	checksum = ut_crc32((const unsigned char *) buf, len);
 	int4store(ptr, checksum);
 	ptr += 4;
 

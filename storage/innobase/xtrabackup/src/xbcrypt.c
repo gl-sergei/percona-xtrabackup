@@ -129,6 +129,9 @@ static
 int
 mode_encrypt(File filein, File fileout);
 
+void
+ut_crc32_init();
+
 int
 main(int argc, char **argv)
 {
@@ -139,6 +142,8 @@ main(int argc, char **argv)
 	File fileout = 0;
 
 	MY_INIT(argv[0]);
+
+	ut_crc32_init();
 
 	if (get_options(&argc, &argv)) {
 		goto err;

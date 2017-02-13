@@ -138,6 +138,7 @@ MYSQL_ADD_EXECUTABLE(xbstream
   xbstream.c
   xbstream_read.c
   xbstream_write.c
+  ../../../../storage/innobase/ut/ut0crc32.cc
   )
 
 SET_TARGET_PROPERTIES(xbstream
@@ -157,6 +158,7 @@ MYSQL_ADD_EXECUTABLE(xbcrypt
   xbcrypt_common.c
   xbcrypt_read.c
   xbcrypt_write.c
+  ../../../../storage/innobase/ut/ut0crc32.cc
   )
 
 SET_TARGET_PROPERTIES(xbcrypt

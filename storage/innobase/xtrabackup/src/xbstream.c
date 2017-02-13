@@ -83,10 +83,15 @@ static int mode_extract(int argc, char **argv);
 static my_bool get_one_option(int optid, const struct my_option *opt,
 			      char *argument);
 
+void
+ut_crc32_init();
+
 int
 main(int argc, char **argv)
 {
 	MY_INIT(argv[0]);
+
+	ut_crc32_init();
 
 	if (get_options(&argc, &argv)) {
 		goto err;

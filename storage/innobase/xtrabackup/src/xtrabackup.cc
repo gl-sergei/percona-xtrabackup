@@ -4236,7 +4236,6 @@ xtrabackup_backup_func(void)
         }
 
 	srv_general_init();
-	ut_crc32_init();
 
 	xb_keyring_init(xb_keyring_file_data);
 
@@ -7863,6 +7862,8 @@ int main(int argc, char **argv)
 	setup_signals();
 
 	MY_INIT(argv[0]);
+
+	ut_crc32_init();
 
 	if (my_create_thread_local_key(&THR_THD,NULL) ||
 	    my_create_thread_local_key(&THR_MALLOC,NULL))

@@ -268,7 +268,7 @@ ut_crc32_hw(
 {
 	uint32_t	crc = 0xFFFFFFFFU;
 
-	ut_a(ut_crc32_sse2_enabled);
+	// ut_a(ut_crc32_sse2_enabled);
 
 	/* Calculate byte-by-byte up to an 8-byte aligned address. After
 	this consume the input 8-bytes at a time. */
@@ -359,7 +359,7 @@ ut_crc32_legacy_big_endian_hw(
 {
 	uint32_t	crc = 0xFFFFFFFFU;
 
-	ut_a(ut_crc32_sse2_enabled);
+	// ut_a(ut_crc32_sse2_enabled);
 
 	/* Calculate byte-by-byte up to an 8-byte aligned address. After
 	this consume the input 8-bytes at a time. */
@@ -411,7 +411,7 @@ ut_crc32_byte_by_byte_hw(
 {
 	uint32_t	crc = 0xFFFFFFFFU;
 
-	ut_a(ut_crc32_sse2_enabled);
+	// ut_a(ut_crc32_sse2_enabled);
 
 	while (len > 0) {
 		ut_crc32_8_hw(&crc, &buf, &len);
@@ -568,7 +568,7 @@ ut_crc32_sw(
 {
 	uint32_t	crc = 0xFFFFFFFFU;
 
-	ut_a(ut_crc32_slice8_table_initialized);
+	// ut_a(ut_crc32_slice8_table_initialized);
 
 	/* Calculate byte-by-byte up to an 8-byte aligned address. After
 	this consume the input 8-bytes at a time. */
@@ -620,7 +620,7 @@ ut_crc32_legacy_big_endian_sw(
 {
 	uint32_t	crc = 0xFFFFFFFFU;
 
-	ut_a(ut_crc32_slice8_table_initialized);
+	// ut_a(ut_crc32_slice8_table_initialized);
 
 	/* Calculate byte-by-byte up to an 8-byte aligned address. After
 	this consume the input 8-bytes at a time. */
@@ -672,7 +672,7 @@ ut_crc32_byte_by_byte_sw(
 {
 	uint32_t	crc = 0xFFFFFFFFU;
 
-	ut_a(ut_crc32_slice8_table_initialized);
+	// ut_a(ut_crc32_slice8_table_initialized);
 
 	while (len > 0) {
 		ut_crc32_8_sw(&crc, &buf, &len);
