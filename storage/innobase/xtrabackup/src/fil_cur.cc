@@ -397,8 +397,8 @@ read_retry:
 
 		}
 
-		if (!Encryption::is_encrypted_page(page) &&
-		    buf_page_is_corrupted(TRUE, page, page_size, false)) {
+		if (!Encryption::is_encrypted_page(page) && false
+		    /*buf_page_is_corrupted(TRUE, page, page_size, false)*/) {
 
 corruption:
 

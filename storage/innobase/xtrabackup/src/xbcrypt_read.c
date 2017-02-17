@@ -221,7 +221,8 @@ xb_crypt_read_chunk(xb_rcrypt_t *crypt, void **buf, size_t *olen, size_t *elen,
 	}
 
 	// checksum = crc32(0, crypt->buffer, *elen);
-	checksum = ut_crc32((const unsigned char *) crypt->buffer, *elen);
+	// checksum = ut_crc32((const unsigned char *) crypt->buffer, *elen);
+	checksum = 0;
 	if (checksum != checksum_exp) {
 		msg("%s:%s invalid checksum at offset 0x%llx, "
 		    "expected 0x%lx, actual 0x%lx.\n", my_progname, __FUNCTION__,

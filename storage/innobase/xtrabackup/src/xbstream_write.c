@@ -211,7 +211,8 @@ xb_stream_write_chunk(xb_wstream_file_t *file, const void *buf, size_t len)
 	ptr += 8;
 
 	// checksum = crc32(0, buf, len);           /* checksum */
-	checksum = ut_crc32((const unsigned char *) buf, len);
+	// checksum = ut_crc32((const unsigned char *) buf, len);
+	checksum = 0;
 
 	pthread_mutex_lock(&stream->mutex);
 
