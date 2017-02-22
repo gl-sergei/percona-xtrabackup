@@ -18,6 +18,7 @@ Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA
 
 *******************************************************/
 
+#include "common.h"
 #include "xbcrypt.h"
 
 void
@@ -63,7 +64,7 @@ xb_crypt_read_chunk(xb_rcrypt_t *crypt, void **buf, size_t *olen, size_t *elen,
 	uchar		tmpbuf[XB_CRYPT_CHUNK_MAGIC_SIZE + 8 + 8 + 8 + 4];
 	uchar		*ptr;
 	ulonglong	tmp;
-	ulong		checksum, checksum_exp, version;
+	uint32_t	checksum, checksum_exp, version;
 	size_t		bytesread;
 	xb_rcrypt_result_t result = XB_CRYPT_READ_CHUNK;
 
@@ -222,10 +223,11 @@ xb_crypt_read_chunk(xb_rcrypt_t *crypt, void **buf, size_t *olen, size_t *elen,
 
 	// checksum = crc32(0, crypt->buffer, *elen);
 	// checksum = ut_crc32((const unsigned char *) crypt->buffer, *elen);
-	checksum = 0;
+	// checksum = 0;
+	_gcry_crc32_intel_pclmul(&checksum, crypt->buffer, *elen);
 	if (checksum != checksum_exp) {
 		msg("%s:%s invalid checksum at offset 0x%llx, "
-		    "expected 0x%lx, actual 0x%lx.\n", my_progname, __FUNCTION__,
+		    "expected 0x%x, actual 0x%x.\n", my_progname, __FUNCTION__,
 		    crypt->offset, checksum_exp, checksum);
 		result = XB_CRYPT_READ_ERROR;
 		goto err;

@@ -18,6 +18,7 @@ Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA
 
 *******************************************************/
 
+#include "common.h"
 #include "xbcrypt.h"
 
 typedef uint32_t	(*ut_crc32_func_t)(const unsigned char* ptr, unsigned int len);
@@ -49,7 +50,7 @@ int xb_crypt_write_chunk(xb_wcrypt_t *crypt, const void *buf, size_t olen,
 {
 	uchar		tmpbuf[XB_CRYPT_CHUNK_MAGIC_SIZE + 8 + 8 + 8 + 4 + 8];
 	uchar		*ptr;
-	ulong		checksum;
+	uint32_t	checksum;
 
 	xb_ad(olen <= INT_MAX);
 	if (olen > INT_MAX)
@@ -80,6 +81,7 @@ int xb_crypt_write_chunk(xb_wcrypt_t *crypt, const void *buf, size_t olen,
 	// checksum = crc32(0, buf, elen);
 	// checksum = ut_crc32((const unsigned char *) buf, elen);
 	checksum = 0;
+	_gcry_crc32_intel_pclmul(&checksum, buf, elen);
 	int4store(ptr, checksum);	/* checksum */
 	ptr += 4;
 

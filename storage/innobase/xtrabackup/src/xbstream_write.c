@@ -188,7 +188,7 @@ xb_stream_write_chunk(xb_wstream_file_t *file, const void *buf, size_t len)
 			       FN_REFLEN + 8 + 8 + 4];
 	uchar		*ptr;
 	xb_wstream_t	*stream = file->stream;
-	ulong		checksum;
+	uint32_t		checksum;
 
 	/* Write xbstream header */
 	ptr = tmpbuf;
@@ -213,6 +213,7 @@ xb_stream_write_chunk(xb_wstream_file_t *file, const void *buf, size_t len)
 	// checksum = crc32(0, buf, len);           /* checksum */
 	// checksum = ut_crc32((const unsigned char *) buf, len);
 	checksum = 0;
+	_gcry_crc32_intel_pclmul(&checksum, buf, len);
 
 	pthread_mutex_lock(&stream->mutex);
 

@@ -27,6 +27,21 @@ Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA
 #include <fcntl.h>
 #include <stdarg.h>
 
+#  define U64_C(c) (c ## UL)
+
+typedef uint32_t u32;
+typedef uint16_t u16;
+typedef uint64_t u64;
+#ifndef byte
+typedef uint8_t byte;
+#endif
+
+# define _gcry_bswap32 __builtin_bswap32
+
+void
+_gcry_crc32_intel_pclmul (u32 *pcrc, const byte *inbuf, size_t inlen);
+
+
 #define xb_a(expr)							\
 	do {								\
 		if (!(expr)) {						\

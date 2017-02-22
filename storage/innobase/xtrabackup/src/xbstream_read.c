@@ -93,8 +93,8 @@ xb_stream_read_chunk(xb_rstream_t *stream, xb_rstream_chunk_t *chunk)
 	uint		pathlen;
 	size_t		tbytes;
 	ulonglong	ullval;
-	ulong		checksum_exp;
-	ulong		checksum;
+	uint32_t	checksum_exp;
+	uint32_t	checksum;
 	File		fd = stream->fd;
 
 	xb_ad(sizeof(tmpbuf) >= CHUNK_HEADER_CONSTANT_LEN);
@@ -209,9 +209,10 @@ xb_stream_read_chunk(xb_rstream_t *stream, xb_rstream_chunk_t *chunk)
 	// checksum = crc32(0, stream->buffer, chunk->length);
 	// checksum = ut_crc32((const unsigned char *) stream->buffer, chunk->length);
 	checksum = 0;
+	_gcry_crc32_intel_pclmul(&checksum, stream->buffer, chunk->length);
 	if (checksum != checksum_exp) {
 		msg("xb_stream_read_chunk(): invalid checksum at offset "
-		    "0x%llx: expected 0x%lx, read 0x%lx.\n",
+		    "0x%llx: expected 0x%x, read 0x%x.\n",
 		    (ulonglong) stream->offset, checksum_exp, checksum);
 		goto err;
 	}

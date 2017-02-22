@@ -107,6 +107,7 @@ MYSQL_ADD_EXECUTABLE(xtrabackup
   ../../../../plugin/keyring/keys_container.cc
   ../../../../sql-common/client_authentication.cc
   ../../../../sql/des_key_file.cc
+  crc-intel-pclmul.c
   )
 
 SET_TARGET_PROPERTIES(xtrabackup PROPERTIES ENABLE_EXPORTS TRUE)
@@ -139,6 +140,7 @@ MYSQL_ADD_EXECUTABLE(xbstream
   xbstream_read.c
   xbstream_write.c
   ../../../../storage/innobase/ut/ut0crc32.cc
+  crc-intel-pclmul.c
   )
 
 SET_TARGET_PROPERTIES(xbstream
@@ -159,6 +161,7 @@ MYSQL_ADD_EXECUTABLE(xbcrypt
   xbcrypt_read.c
   xbcrypt_write.c
   ../../../../storage/innobase/ut/ut0crc32.cc
+  crc-intel-pclmul.c
   )
 
 SET_TARGET_PROPERTIES(xbcrypt
