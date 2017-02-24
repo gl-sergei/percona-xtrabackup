@@ -399,6 +399,8 @@ extract_worker_thread_func(void *arg)
 
 	extract_ctxt_t *ctxt = (extract_ctxt_t *) arg;
 
+	memset(&chunk, 0, sizeof(chunk));
+
 	while (1) {
 
 		pthread_mutex_lock(ctxt->mutex);
@@ -440,6 +442,13 @@ extract_worker_thread_func(void *arg)
 
 		pthread_mutex_unlock(ctxt->mutex);
 
+		res = xb_stream_validate_checksum(&chunk);
+
+		if (res != XB_STREAM_READ_CHUNK) {
+			pthread_mutex_unlock(&entry->mutex);
+			break;
+		}
+
 		if (chunk.type == XB_CHUNK_TYPE_EOF) {
 			my_hash_delete(ctxt->filehash, (uchar *) entry);
 			pthread_mutex_unlock(&entry->mutex);
@@ -464,6 +473,8 @@ extract_worker_thread_func(void *arg)
 
 		pthread_mutex_unlock(&entry->mutex);
 	}
+
+	my_free(chunk.data);
 
 	return (void *)(res);
 }
