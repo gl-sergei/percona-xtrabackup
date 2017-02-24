@@ -474,7 +474,8 @@ extract_worker_thread_func(void *arg)
 		pthread_mutex_unlock(&entry->mutex);
 	}
 
-	my_free(chunk.data);
+	if (chunk.data)
+		my_free(chunk.data);
 
 	return (void *)(res);
 }
