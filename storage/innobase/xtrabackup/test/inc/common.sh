@@ -54,16 +54,27 @@ function call_mysql_install_db()
             --basedir=${MYSQL_BASEDIR}"
         fi
 
-        if ! ${INSTALL_CMD} ${MYSQLD_EXTRA_ARGS}
-        then
-            vlog "mysql_install_db failed. Server log (if exists):"
-            vlog "----------------"
-            cat ${MYSQLD_ERRFILE} >&2 || true
-            vlog "----------------"
-            exit -1
+        if [ "${MYSQLD_EXTRA_MY_CNF_OPTS:-}" = "" ]  && [ -d ${MYSQL_BASEDIR}/prebuilt-data ] ; then
+            vlog "Using prebuilt datadir"
+            cp -a ${MYSQL_BASEDIR}/prebuilt-data/* ${MYSQLD_DATADIR}
+        else
+            if ! ${INSTALL_CMD} ${MYSQLD_EXTRA_ARGS}
+            then
+                vlog "mysql_install_db failed. Server log (if exists):"
+                vlog "----------------"
+                cat ${MYSQLD_ERRFILE} >&2 || true
+                vlog "----------------"
+                exit -1
+            fi
+
+            [ -d ${MYSQLD_DATADIR}/test ] || mkdir ${MYSQLD_DATADIR}/test
         fi
 
-        [ -d ${MYSQLD_DATADIR}/test ] || mkdir ${MYSQLD_DATADIR}/test
+        if [ "${MYSQLD_EXTRA_MY_CNF_OPTS:-}" = "" ] && [ ! -d ${MYSQL_BASEDIR}/prebuilt-data ] ; then
+            vlog "Saving datadir for later use"
+            mkdir ${MYSQL_BASEDIR}/prebuilt-data
+            cp -a ${MYSQLD_DATADIR}/* ${MYSQL_BASEDIR}/prebuilt-data
+        fi
 
         cd - >/dev/null 2>&1
 }
