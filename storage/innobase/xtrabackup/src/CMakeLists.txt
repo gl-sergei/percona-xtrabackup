@@ -89,6 +89,8 @@ MYSQL_ADD_EXECUTABLE(xtrabackup
   xbstream_write.c
   backup_mysql.cc
   backup_copy.cc
+  crc_glue.c
+  crc-intel-pclmul.c
   ../../../../sql-common/client_authentication.cc
   )
 
@@ -121,6 +123,8 @@ MYSQL_ADD_EXECUTABLE(xbstream
   xbstream.c
   xbstream_read.c
   xbstream_write.c
+  crc_glue.c
+  crc-intel-pclmul.c
   )
 
 SET_TARGET_PROPERTIES(xbstream
@@ -140,6 +144,8 @@ MYSQL_ADD_EXECUTABLE(xbcrypt
   xbcrypt_common.c
   xbcrypt_read.c
   xbcrypt_write.c
+  crc_glue.c
+  crc-intel-pclmul.c
   )
 
 SET_TARGET_PROPERTIES(xbcrypt

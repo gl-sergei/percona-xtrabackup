@@ -22,6 +22,7 @@ Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA
 #include <my_getopt.h>
 #include "common.h"
 #include "xbcrypt.h"
+#include "crc_glue.h"
 #include <gcrypt.h>
 
 #if !defined(GCRYPT_VERSION_NUMBER) || (GCRYPT_VERSION_NUMBER < 0x010600)
@@ -137,6 +138,8 @@ main(int argc, char **argv)
 	File fileout = 0;
 
 	MY_INIT(argv[0]);
+
+	crc_init();
 
 	if (get_options(&argc, &argv)) {
 		goto err;
