@@ -1,4 +1,4 @@
-# Copyright (c) 2013-2016 Percona LLC and/or its affiliates.
+# Copyright (c) 2013, 2017 Percona LLC and/or its affiliates.
 #
 # This program is free software; you can redistribute it and/or modify
 # it under the terms of the GNU General Public License as published by
@@ -20,6 +20,7 @@ INCLUDE(libev)
 INCLUDE(${MYSQL_CMAKE_SCRIPT_DIR}/compile_flags.cmake)
 
 ADD_SUBDIRECTORY(libarchive)
+ADD_SUBDIRECTORY(crc)
 ADD_SUBDIRECTORY(jsmn)
 
 FIND_GCRYPT()
@@ -40,6 +41,7 @@ INCLUDE_DIRECTORIES(
   ${CMAKE_SOURCE_DIR}/storage/innobase/xtrabackup/src/libarchive/libarchive
   ${CMAKE_SOURCE_DIR}/storage/innobase/xtrabackup/src/quicklz
   ${CMAKE_SOURCE_DIR}/storage/innobase/xtrabackup/src/jsmn
+  ${CMAKE_SOURCE_DIR}/storage/innobase/xtrabackup/src/crc
   ${GCRYPT_INCLUDE_DIR}
   ${CURL_INCLUDE_DIRS}
   ${LIBEV_INCLUDE_DIRS}
@@ -115,6 +117,7 @@ TARGET_LINK_LIBRARIES(xtrabackup
   mysqlserver 
   ${GCRYPT_LIBS} 
   archive_static
+  crc
   )
 
 ADD_DEPENDENCIES(xtrabackup GenVersionCheck)
@@ -147,6 +150,7 @@ SET_TARGET_PROPERTIES(xbstream
 TARGET_LINK_LIBRARIES(xbstream
   mysys
   mysys_ssl
+  crc
   )
 
 ########################################################################
@@ -167,6 +171,7 @@ TARGET_LINK_LIBRARIES(xbcrypt
   ${GCRYPT_LIBS}
   mysys
   mysys_ssl
+  crc
   )
 
 ########################################################################
