@@ -86,6 +86,7 @@ MYSQL_ADD_EXECUTABLE(xtrabackup
   ds_buffer.c
   ds_compress.c
   ds_encrypt.c
+  ds_decrypt.c
   ds_local.c
   ds_stdout.c
   ds_tmpfile.c
@@ -135,10 +136,13 @@ MYSQL_ADD_EXECUTABLE(xbstream
   ds_buffer.c
   ds_local.c
   ds_stdout.c
+  ds_decrypt.c
   datasink.c
   xbstream.c
   xbstream_read.c
   xbstream_write.c
+  xbcrypt_common.c
+  xbcrypt_write.c
   ../../../../storage/innobase/ut/ut0crc32.cc
   crc-intel-pclmul.c
   )
@@ -148,6 +152,7 @@ SET_TARGET_PROPERTIES(xbstream
         )
 
 TARGET_LINK_LIBRARIES(xbstream
+  ${GCRYPT_LIBS}
   mysys
   mysys_ssl
   )

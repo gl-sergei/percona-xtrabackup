@@ -99,9 +99,6 @@ extern longlong		innobase_log_file_size;
 extern long		innobase_log_files_in_group;
 extern longlong		innobase_page_size;
 
-extern const char	*xtrabackup_encrypt_algo_names[];
-extern TYPELIB		xtrabackup_encrypt_algo_typelib;
-
 extern int		xtrabackup_parallel;
 
 extern my_bool		xb_close_files;

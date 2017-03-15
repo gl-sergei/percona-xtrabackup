@@ -96,6 +96,7 @@ Place, Suite 330, Boston, MA 02111-1307 USA
 #include "backup_mysql.h"
 #include "keyring.h"
 #include "xb0xb.h"
+#include "xbcrypt.h"
 
 /* TODO: replace with appropriate macros used in InnoDB 5.6 */
 #define PAGE_ZIP_MIN_SIZE_SHIFT	10
@@ -206,19 +207,6 @@ const char *xtrabackup_compress_alg = NULL;
 ibool xtrabackup_compress = FALSE;
 uint xtrabackup_compress_threads;
 ulonglong xtrabackup_compress_chunk_size = 0;
-
-const char *xtrabackup_encrypt_algo_names[] =
-{ "NONE", "AES128", "AES192", "AES256", NullS};
-TYPELIB xtrabackup_encrypt_algo_typelib=
-{array_elements(xtrabackup_encrypt_algo_names)-1,"",
-	xtrabackup_encrypt_algo_names, NULL};
-
-ibool xtrabackup_encrypt = FALSE;
-ulong xtrabackup_encrypt_algo;
-char *xtrabackup_encrypt_key = NULL;
-char *xtrabackup_encrypt_key_file = NULL;
-uint xtrabackup_encrypt_threads;
-ulonglong xtrabackup_encrypt_chunk_size = 0;
 
 ulint xtrabackup_rebuild_threads = 1;
 

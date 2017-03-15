@@ -65,6 +65,7 @@ Place, Suite 330, Boston, MA 02111-1307 USA
 #include "fil_cur.h"
 #include "write_filt.h"
 #include "backup_copy.h"
+#include "xbcrypt.h"
 
 using std::min;
 using std::max;

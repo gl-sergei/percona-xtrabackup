@@ -25,6 +25,7 @@ Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA
 #include <pthread.h>
 #include "common.h"
 #include "xbstream.h"
+#include "xbcrypt.h"
 #include "ds_local.h"
 #include "ds_stdout.h"
 
@@ -53,6 +54,20 @@ static char *		opt_directory = NULL;
 static my_bool		opt_verbose = 0;
 static int		opt_parallel;
 
+/* Encryption options */
+extern ulong		xtrabackup_encrypt_algo;
+extern char		*xtrabackup_encrypt_key;
+extern char		*xtrabackup_encrypt_key_file;
+extern uint		xtrabackup_encrypt_threads;
+extern ulonglong	xtrabackup_encrypt_chunk_size;
+
+enum {
+	OPT_ENCRYPT_KEY = 256,
+	OPT_ENCRYPT_KEY_FILE,
+	OPT_ENCRYPT_THREADS,
+	OPT_ENCRYPT_CHUNK_SIZE
+};
+
 static struct my_option my_long_options[] =
 {
 	{"help", '?', "Display this help and exit.",
@@ -70,6 +85,29 @@ static struct my_option my_long_options[] =
 	{"parallel", 'p', "Number of worker threads for reading / writing.",
 	 &opt_parallel, &opt_parallel, 0, GET_INT, REQUIRED_ARG,
 	 1, 1, INT_MAX, 0, 0, 0},
+	{"decrypt", 'd', "Decrypts all files with the .xbcrypt "
+	 "extension in a backup previously made with --encrypt option.",
+	 &xtrabackup_encrypt_algo, &xtrabackup_encrypt_algo,
+	 &xtrabackup_encrypt_algo_typelib, GET_ENUM, REQUIRED_ARG,
+	 0, 0, 0, 0, 0, 0},
+
+	{"encrypt-key", OPT_ENCRYPT_KEY, "Encryption key to use.",
+	 &xtrabackup_encrypt_key, &xtrabackup_encrypt_key, 0,
+	 GET_STR_ALLOC, REQUIRED_ARG, 0, 0, 0, 0, 0, 0},
+
+	{"encrypt-key-file", OPT_ENCRYPT_KEY_FILE, "File which contains encryption key to use.",
+	 &xtrabackup_encrypt_key_file, &xtrabackup_encrypt_key_file, 0,
+	 GET_STR_ALLOC, REQUIRED_ARG, 0, 0, 0, 0, 0, 0},
+
+	{"encrypt-threads", OPT_ENCRYPT_THREADS,
+	 "Number of threads for parallel data encryption. The default value is 1.",
+	 &xtrabackup_encrypt_threads, &xtrabackup_encrypt_threads,
+	 0, GET_UINT, REQUIRED_ARG, 1, 1, UINT_MAX, 0, 0, 0},
+
+	{"encrypt-chunk-size", OPT_ENCRYPT_CHUNK_SIZE,
+	 "Size of working buffer(S) for encryption threads in bytes. The default value is 64K.",
+	 &xtrabackup_encrypt_chunk_size, &xtrabackup_encrypt_chunk_size,
+	 0, GET_ULL, REQUIRED_ARG, (1 << 16), 1024, ULLONG_MAX, 0, 0, 0},
 
 	{0, 0, 0, 0, 0, 0, GET_NO_ARG, NO_ARG, 0, 0, 0, 0, 0, 0}
 };
@@ -315,9 +353,23 @@ err:
 	return 1;
 }
 
+/************************************************************************
+Check if string ends with given suffix.
+@return true if string ends with given suffix. */
+static
+my_bool
+ends_with(const char *str, const char *suffix)
+{
+	size_t suffix_len = strlen(suffix);
+	size_t str_len = strlen(str);
+	return(str_len >= suffix_len
+	       && strcmp(str + str_len - suffix_len, suffix) == 0);
+}
+
 static
 file_entry_t *
-file_entry_new(ds_ctxt_t *ds_ctxt, const char *path, uint pathlen)
+file_entry_new(ds_ctxt_t *ds_ctxt, ds_ctxt_t *ds_decrypt_ctxt,
+	       const char *path, uint pathlen)
 {
 	file_entry_t	*entry;
 	ds_file_t	*file;
@@ -336,7 +388,11 @@ file_entry_new(ds_ctxt_t *ds_ctxt, const char *path, uint pathlen)
 	}
 	entry->pathlen = pathlen;
 
-	file = ds_open(ds_ctxt, path, NULL);
+	if (ds_decrypt_ctxt && ends_with(path, ".xbcrypt")) {
+		file = ds_open(ds_decrypt_ctxt, path, NULL);
+	} else {
+		file = ds_open(ds_ctxt, path, NULL);
+	}
 	if (file == NULL) {
 		msg("%s: failed to create file.\n", my_progname);
 		goto err;
@@ -386,6 +442,7 @@ typedef struct {
 	HASH			*filehash;
 	xb_rstream_t		*stream;
 	ds_ctxt_t		*ds_ctxt;
+	ds_ctxt_t		*ds_decrypt_ctxt;
 	pthread_mutex_t		*mutex;
 } extract_ctxt_t;
 
@@ -424,7 +481,9 @@ extract_worker_thread_func(void *arg)
 							chunk.pathlen);
 
 		if (entry == NULL) {
-			entry = file_entry_new(ctxt->ds_ctxt, chunk.path,
+			entry = file_entry_new(ctxt->ds_ctxt,
+					       ctxt->ds_decrypt_ctxt,
+					       chunk.path,
 					       chunk.pathlen);
 			if (entry == NULL) {
 				pthread_mutex_unlock(ctxt->mutex);
@@ -489,6 +548,7 @@ mode_extract(int n_threads, int argc __attribute__((unused)),
 	xb_rstream_t		*stream;
 	HASH			filehash;
 	ds_ctxt_t		*ds_ctxt;
+	ds_ctxt_t		*ds_decrypt_ctxt;
 
 	extract_ctxt_t		ctxt;
 	int			i;
@@ -511,6 +571,13 @@ mode_extract(int n_threads, int argc __attribute__((unused)),
 	/* If --directory is specified, it is already set as CWD by now. */
 	ds_ctxt = ds_create(".", DS_TYPE_LOCAL);
 
+	if (xtrabackup_encrypt_algo) {
+		ds_decrypt_ctxt = ds_create(".", DS_TYPE_DECRYPT);
+		ds_set_pipe(ds_decrypt_ctxt, ds_ctxt);
+	} else {
+		ds_decrypt_ctxt = NULL;
+	}
+
 	if (my_hash_init(&filehash, &my_charset_bin, START_FILE_HASH_SIZE,
 			  0, 0, (my_hash_get_key) get_file_entry_key,
 			  (my_hash_free_key) file_entry_free, MYF(0),
@@ -523,6 +590,7 @@ mode_extract(int n_threads, int argc __attribute__((unused)),
 	ctxt.filehash = &filehash;
 	ctxt.ds_ctxt = ds_ctxt;
 	ctxt.mutex = &mutex;
+	ctxt.ds_decrypt_ctxt = ds_decrypt_ctxt;
 
 	for (i = 0; i < n_threads; i++)
 		pthread_create(tids + i, NULL, extract_worker_thread_func, &ctxt);

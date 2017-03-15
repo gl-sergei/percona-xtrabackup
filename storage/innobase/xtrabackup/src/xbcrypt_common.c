@@ -23,6 +23,19 @@ Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA
 #include "common.h"
 #include "xbcrypt.h"
 
+const char *xtrabackup_encrypt_algo_names[] =
+{ "NONE", "AES128", "AES192", "AES256", NullS};
+TYPELIB xtrabackup_encrypt_algo_typelib=
+{array_elements(xtrabackup_encrypt_algo_names)-1,"",
+	xtrabackup_encrypt_algo_names, NULL};
+
+my_bool xtrabackup_encrypt = FALSE;
+ulong xtrabackup_encrypt_algo;
+char *xtrabackup_encrypt_key = NULL;
+char *xtrabackup_encrypt_key_file = NULL;
+uint xtrabackup_encrypt_threads;
+ulonglong xtrabackup_encrypt_chunk_size = 0;
+
 #if GCC_VERSION >= 4002
 /* Workaround to avoid "gcry_ac_* is deprecated" warnings in gcrypt.h */
 #  pragma GCC diagnostic ignored "-Wdeprecated-declarations"

@@ -24,6 +24,9 @@ Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA
 #include <my_base.h>
 #include "common.h"
 
+extern const char	*xtrabackup_encrypt_algo_names[];
+extern TYPELIB		xtrabackup_encrypt_algo_typelib;
+
 #define XB_CRYPT_CHUNK_MAGIC1 "XBCRYP01"
 #define XB_CRYPT_CHUNK_MAGIC2 "XBCRYP02"
 #define XB_CRYPT_CHUNK_MAGIC3 "XBCRYP03" /* must be same size as ^^ */
@@ -66,6 +69,7 @@ xb_rcrypt_t *xb_crypt_read_open(void *userdata,
 typedef enum {
 	XB_CRYPT_READ_CHUNK,
 	XB_CRYPT_READ_EOF,
+	XB_CRYPT_READ_INCOMPLETE,
 	XB_CRYPT_READ_ERROR
 } xb_rcrypt_result_t;
 
