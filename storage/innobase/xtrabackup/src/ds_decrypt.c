@@ -63,6 +63,7 @@ typedef struct {
 	unsigned long long	offset;
 	my_bool			hash_appended;
 	gcry_cipher_hd_t	cipher_handle;
+	xb_rcrypt_result_t	parse_result;
 } crypt_thread_ctxt_t;
 
 typedef struct {
@@ -507,6 +508,8 @@ decrypt_write(ds_file_t *file, const void *buf, size_t len)
 			parse_result = parse_xbcrypt_chunk(
 				thd, buf, len, &bytes_processed);
 
+			thd->parse_result = parse_result;
+
 			if (parse_result != XB_CRYPT_READ_CHUNK) {
 				pthread_mutex_unlock(&thd->ctrl_mutex);
 				break;
@@ -520,14 +523,16 @@ decrypt_write(ds_file_t *file, const void *buf, size_t len)
 			len -= bytes_processed;
 			buf += bytes_processed;
 		}
-		if (parse_result == XB_CRYPT_READ_EOF) {
-			break;
-		}
+
 		max_thread = (i < nthreads) ? i :  nthreads - 1;
 
 		/* Reap and write decrypted data */
 		for (i = 0; i <= max_thread; i++) {
 			thd = threads + i;
+
+			if (thd->parse_result != XB_CRYPT_READ_CHUNK) {
+				break;
+			}
 
 			pthread_mutex_lock(&thd->data_mutex);
 			while (thd->data_avail == TRUE) {
@@ -536,7 +541,6 @@ decrypt_write(ds_file_t *file, const void *buf, size_t len)
 			}
 
 			xb_a(thd->to_len > 0);
-
 
 			ds_write(crypt_file->dest_file, thd->to, thd->to_len);
 
