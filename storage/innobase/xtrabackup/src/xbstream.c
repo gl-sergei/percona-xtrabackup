@@ -509,7 +509,6 @@ extract_worker_thread_func(void *arg)
 		}
 
 		if (chunk.type == XB_CHUNK_TYPE_EOF) {
-			my_hash_delete(ctxt->filehash, (uchar *) entry);
 			pthread_mutex_unlock(&entry->mutex);
 			continue;
 		}
@@ -554,11 +553,11 @@ mode_extract(int n_threads, int argc __attribute__((unused)),
 	int			i;
 
 	pthread_t		*tids;
-	int			*retvals;
+	void			**retvals;
 	pthread_mutex_t		mutex;
 
 	tids = malloc(sizeof(pthread_t) * n_threads);
-	retvals = malloc(sizeof(int) * n_threads);
+	retvals = malloc(sizeof(void*) * n_threads);
 
 	pthread_mutex_init(&mutex, NULL);
 
@@ -596,17 +595,23 @@ mode_extract(int n_threads, int argc __attribute__((unused)),
 		pthread_create(tids + i, NULL, extract_worker_thread_func, &ctxt);
 
 	for (i = 0; i < n_threads; i++)
-		pthread_join(tids[i], (void **)(retvals + i));
+		pthread_join(tids[i], retvals + i);
 
 	for (i = 0; i < n_threads; i++) {
-		if (retvals[i] == XB_STREAM_READ_ERROR) {
+		if ((int)retvals[i] == XB_STREAM_READ_ERROR) {
 			goto err;
 		}
 	}
 
+	free(tids);
+	free(retvals);
+
 	pthread_mutex_destroy(&mutex);
 	my_hash_free(&filehash);
 	ds_destroy(ds_ctxt);
+	if (ds_decrypt_ctxt) {
+		ds_destroy(ds_decrypt_ctxt);
+	}
 	xb_stream_read_done(stream);
 
 	return 0;

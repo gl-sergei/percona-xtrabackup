@@ -582,6 +582,8 @@ decrypt_close(ds_file_t *file)
 		rc = 1;
 	}
 
+	my_free(crypt_file->rest);
+
 	my_free(file);
 
 	return rc;
@@ -601,10 +603,6 @@ decrypt_deinit(ds_ctxt_t *ctxt)
 
 	my_free(ctxt->root);
 	my_free(ctxt);
-	if (xtrabackup_encrypt_key)
-		my_free(xtrabackup_encrypt_key);
-	if (xtrabackup_encrypt_key_file)
-		my_free(xtrabackup_encrypt_key_file);
 }
 
 static
@@ -616,7 +614,8 @@ create_worker_threads(uint n)
 
 	threads = (crypt_thread_ctxt_t *)
 		my_malloc(PSI_NOT_INSTRUMENTED,
-			  sizeof(crypt_thread_ctxt_t) * n, MYF(MY_FAE));
+			  sizeof(crypt_thread_ctxt_t) * n,
+			  MYF(MY_FAE | MY_ZEROFILL));
 
 	for (i = 0; i < n; i++) {
 		crypt_thread_ctxt_t *thd = threads + i;
@@ -629,10 +628,6 @@ create_worker_threads(uint n)
 		thd->to = (uchar *) my_malloc(PSI_NOT_INSTRUMENTED,
 					      XB_CRYPT_CHUNK_SIZE +
 					      XB_CRYPT_HASH_LEN, MYF(MY_FAE));
-
-		thd->iv = (uchar *) my_malloc(PSI_NOT_INSTRUMENTED,
-					      encrypt_iv_len,
-					      MYF(MY_FAE));
 
 		/* Initialize the control mutex and condition var */
 		if (pthread_mutex_init(&thd->ctrl_mutex, NULL) ||
