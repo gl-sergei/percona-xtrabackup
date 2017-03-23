@@ -92,6 +92,7 @@ Place, Suite 330, Boston, MA 02111-1307 USA
 #include "backup_mysql.h"
 #include "backup_copy.h"
 #include "backup_mysql.h"
+#include "crc_glue.h"
 
 /* TODO: replace with appropriate macros used in InnoDB 5.6 */
 #define PAGE_ZIP_MIN_SIZE_SHIFT	10
@@ -4020,6 +4021,7 @@ xtrabackup_backup_func(void)
 	os_sync_mutex = NULL;
 	srv_general_init();
 	ut_crc32_init();
+	crc_init();
 
 	xb_filters_init();
 
