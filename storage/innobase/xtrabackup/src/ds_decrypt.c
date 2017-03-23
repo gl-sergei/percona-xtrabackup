@@ -391,7 +391,7 @@ parse_xbcrypt_chunk(crypt_thread_ctxt_t *thd, const uchar *buf, size_t len,
 
 	xb_ad(thd->from_len <= thd->to_len);
 
-	checksum = crc32(0, thd->from, thd->from_len);
+	checksum = crc32_iso3309(0, thd->from, thd->from_len);
 	if (checksum != checksum_exp) {
 		msg("%s:%s invalid checksum at offset 0x%llx, "
 		    "expected 0x%lx, actual 0x%lx.\n", my_progname,

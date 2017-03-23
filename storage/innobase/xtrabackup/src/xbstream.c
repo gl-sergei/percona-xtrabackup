@@ -28,6 +28,7 @@ Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA
 #include "datasink.h"
 #include "ds_decrypt.h"
 #include <gcrypt.h>
+#include "crc_glue.h"
 
 #define XBSTREAM_VERSION "1.0"
 #define XBSTREAM_BUFFER_SIZE (10 * 1024 * 1024UL)
@@ -134,6 +135,8 @@ int
 main(int argc, char **argv)
 {
 	MY_INIT(argv[0]);
+
+	crc_init();
 
 	if (get_options(&argc, &argv)) {
 		goto err;
