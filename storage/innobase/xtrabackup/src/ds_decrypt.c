@@ -22,23 +22,8 @@ Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA
 #include <my_base.h>
 #include "common.h"
 #include "datasink.h"
-
-#if GCC_VERSION >= 4002
-/* Workaround to avoid "gcry_ac_* is deprecated" warnings in gcrypt.h */
-#  pragma GCC diagnostic ignored "-Wdeprecated-declarations"
-#endif
-
-#include <gcrypt.h>
-
-#if GCC_VERSION >= 4002
-#  pragma GCC diagnostic warning "-Wdeprecated-declarations"
-#endif
-
 #include "xbcrypt.h"
-
-#if !defined(GCRYPT_VERSION_NUMBER) || (GCRYPT_VERSION_NUMBER < 0x010600)
-GCRY_THREAD_OPTION_PTHREAD_IMPL;
-#endif
+#include "xbcrypt_common.h"
 
 typedef struct {
 	pthread_t		id;
@@ -82,11 +67,7 @@ typedef struct {
 	size_t			buf_size;
 } ds_decrypt_file_t;
 
-/* Encryption options */
-char		*ds_decrypt_encrypt_key = NULL;
-char		*ds_decrypt_encrypt_key_file = NULL;
 int		ds_decrypt_encrypt_threads = 1;
-ulong		ds_decrypt_encrypt_algo;
 
 static ds_ctxt_t *decrypt_init(const char *root);
 static ds_file_t *decrypt_open(ds_ctxt_t *ctxt, const char *path,
@@ -107,10 +88,6 @@ static crypt_thread_ctxt_t *create_worker_threads(uint n);
 static void destroy_worker_threads(crypt_thread_ctxt_t *threads, uint n);
 static void *decrypt_worker_thread_func(void *arg);
 
-static const uint encrypt_mode = GCRY_CIPHER_MODE_CTR;
-static uint encrypt_key_len = 0;
-static size_t encrypt_iv_len = 0;
-
 static
 ds_ctxt_t *
 decrypt_init(const char *root)
@@ -118,79 +95,8 @@ decrypt_init(const char *root)
 	ds_ctxt_t		*ctxt;
 	ds_decrypt_ctxt_t	*decrypt_ctxt;
 	crypt_thread_ctxt_t	*threads;
-	gcry_error_t 		gcry_error;
 
-	/* Acording to gcrypt docs (and my testing), setting up the threading
-	   callbacks must be done first, so, lets give it a shot */
-#if !defined(GCRYPT_VERSION_NUMBER) || (GCRYPT_VERSION_NUMBER < 0x010600)
-	gcry_error = gcry_control(GCRYCTL_SET_THREAD_CBS, &gcry_threads_pthread);
-	if (gcry_error) {
-		msg("decrypt: unable to set libgcrypt thread cbs - "
-		    "%s : %s\n",
-		    gcry_strsource(gcry_error),
-		    gcry_strerror(gcry_error));
-		return NULL;
-	}
-#endif
-
-	/* Version check should be the very next call because it
-	makes sure that important subsystems are intialized. */
-	if (!gcry_control(GCRYCTL_ANY_INITIALIZATION_P)) {
-		const char	*gcrypt_version;
-		gcrypt_version = gcry_check_version(NULL);
-		/* No other library has already initialized libgcrypt. */
-		if (!gcrypt_version) {
-			msg("decrypt: failed to initialize libgcrypt\n");
-			return NULL;
-		} else {
-			msg("decrypt: using gcrypt %s\n", gcrypt_version);
-		}
-	}
-
-	/* Disable the gcry secure memory, not dealing with this for now */
-	gcry_error = gcry_control(GCRYCTL_DISABLE_SECMEM, 0);
-	if (gcry_error) {
-		msg("decrypt: unable to disable libgcrypt secmem - "
-		    "%s : %s\n",
-		    gcry_strsource(gcry_error),
-		    gcry_strerror(gcry_error));
-		return NULL;
-	}
-
-	/* Finalize gcry initialization. */
-	gcry_error = gcry_control(GCRYCTL_INITIALIZATION_FINISHED, 0);
-	if (gcry_error) {
-		msg("decrypt: unable to finish libgcrypt initialization - "
-		    "%s : %s\n",
-		    gcry_strsource(gcry_error),
-		    gcry_strerror(gcry_error));
-		return NULL;
-	}
-
-	/* Set up the iv length */
-	encrypt_iv_len = gcry_cipher_get_algo_blklen(ds_decrypt_encrypt_algo);
-	xb_a(encrypt_iv_len > 0);
-
-	/* Now set up the key */
-	if (ds_decrypt_encrypt_key == NULL &&
-	    ds_decrypt_encrypt_key_file == NULL) {
-		msg("decrypt: no encryption key or key file specified.\n");
-		return NULL;
-	} else if (ds_decrypt_encrypt_key && ds_decrypt_encrypt_key_file) {
-		msg("decrypt: both encryption key and key file specified.\n");
-		return NULL;
-	} else if (ds_decrypt_encrypt_key_file) {
-		if (!xb_crypt_read_key_file(ds_decrypt_encrypt_key_file,
-					    (void**)&ds_decrypt_encrypt_key,
-					    &encrypt_key_len)) {
-			msg("decrypt: unable to read encryption key file"
-			    " \"%s\".\n", ds_decrypt_encrypt_key_file);
-			return NULL;
-		}
-	} else if (ds_decrypt_encrypt_key) {
-		encrypt_key_len = strlen(ds_decrypt_encrypt_key);
-	} else {
-		msg("decrypt: no encryption key or key file specified.\n");
+	if (xb_crypt_init(NULL)) {
 		return NULL;
 	}
 
@@ -323,10 +229,10 @@ parse_xbcrypt_chunk(crypt_thread_ctxt_t *thd, const uchar *buf, size_t len,
 	thd->offset += 8;
 	thd->to_len = (size_t)tmp;
 
-	if (thd->to_size < thd->to_len) {
+	if (thd->to_size < thd->to_len + XB_CRYPT_HASH_LEN) {
 		thd->to = (uchar *) my_realloc(
 				thd->to,
-				thd->to_len,
+				thd->to_len + XB_CRYPT_HASH_LEN,
 				MYF(MY_FAE | MY_ALLOW_ZERO_PTR));
 		thd->to_size = thd->to_len;
 	}
@@ -342,6 +248,8 @@ parse_xbcrypt_chunk(crypt_thread_ctxt_t *thd, const uchar *buf, size_t len,
 	}
 	thd->offset += 8;
 	thd->from_len = (size_t)tmp;
+
+	xb_a(thd->from_len <= thd->to_len + XB_CRYPT_HASH_LEN);
 
 	CHECK_BUF_SIZE(ptr, 4, buf, len);
 	checksum_exp = uint4korr(ptr);	/* checksum */
@@ -658,33 +566,7 @@ create_worker_threads(uint n)
 			goto err;
 		}
 
-		if (ds_decrypt_encrypt_algo != GCRY_CIPHER_NONE) {
-			gcry_error_t 		gcry_error;
-
-			gcry_error = gcry_cipher_open(&thd->cipher_handle,
-						      ds_decrypt_encrypt_algo,
-						      encrypt_mode, 0);
-			if (gcry_error) {
-				msg("decrypt: unable to open libgcrypt"
-				    " cipher - %s : %s\n",
-				    gcry_strsource(gcry_error),
-				    gcry_strerror(gcry_error));
-				gcry_cipher_close(thd->cipher_handle);
-				goto err;
-			}
-
-			gcry_error = gcry_cipher_setkey(thd->cipher_handle,
-							ds_decrypt_encrypt_key,
-							encrypt_key_len);
-			if (gcry_error) {
-				msg("decrypt: unable to set libgcrypt"
-				    " cipher key - %s : %s\n",
-				    gcry_strsource(gcry_error),
-				    gcry_strerror(gcry_error));
-				gcry_cipher_close(thd->cipher_handle);
-				goto err;
-			}
-		}
+		xb_crypt_cipher_open(&thd->cipher_handle);
 
 		pthread_mutex_lock(&thd->ctrl_mutex);
 
@@ -732,8 +614,7 @@ destroy_worker_threads(crypt_thread_ctxt_t *threads, uint n)
 		pthread_cond_destroy(&thd->ctrl_cond);
 		pthread_mutex_destroy(&thd->ctrl_mutex);
 
-		if (ds_decrypt_encrypt_algo != GCRY_CIPHER_NONE)
-			gcry_cipher_close(thd->cipher_handle);
+		xb_crypt_cipher_close(thd->cipher_handle);
 
 		my_free(thd->to);
 	}
@@ -767,74 +648,12 @@ decrypt_worker_thread_func(void *arg)
 		if (thd->cancelled)
 			break;
 
-		if (ds_decrypt_encrypt_algo != GCRY_CIPHER_NONE) {
-
-			gcry_error_t	gcry_error;
-
-			gcry_error = gcry_cipher_reset(thd->cipher_handle);
-			if (gcry_error) {
-				msg("%s:decrypt: unable to reset libgcrypt"
-				    " cipher - %s : %s\n", my_progname,
-				    gcry_strsource(gcry_error),
-				    gcry_strerror(gcry_error));
-				thd->failed = TRUE;
-				continue;
-			}
-
-			if (thd->iv_len > 0) {
-				gcry_error = gcry_cipher_setctr(
-					thd->cipher_handle,
-					thd->iv,
-					thd->iv_len);
-			}
-			if (gcry_error) {
-				msg("%s:decrypt: unable to set cipher iv - "
-				    "%s : %s\n", my_progname,
-				    gcry_strsource(gcry_error),
-				    gcry_strerror(gcry_error));
-				thd->failed = TRUE;
-				continue;
-			}
-
-			/* Try to decrypt it */
-			gcry_error = gcry_cipher_decrypt(thd->cipher_handle,
-							 thd->to,
-							 thd->to_len,
-							 thd->from,
-							 thd->from_len);
-			if (gcry_error) {
-				msg("%s:decrypt: unable to decrypt chunk - "
-				    "%s : %s\n", my_progname,
-				    gcry_strsource(gcry_error),
-				    gcry_strerror(gcry_error));
-				gcry_cipher_close(thd->cipher_handle);
-				thd->failed = TRUE;
-				continue;
-			}
-
-		} else {
-			memcpy(thd->to, thd->from, thd->to_len);
-		}
-
-		if (thd->hash_appended) {
-			uchar hash[XB_CRYPT_HASH_LEN];
-
-			thd->to_len -= XB_CRYPT_HASH_LEN;
-
-			/* ensure that XB_CRYPT_HASH_LEN is the correct length
-			of XB_CRYPT_HASH hashing algorithm output */
-			xb_a(gcry_md_get_algo_dlen(XB_CRYPT_HASH) ==
-			     XB_CRYPT_HASH_LEN);
-			gcry_md_hash_buffer(XB_CRYPT_HASH, hash, thd->to,
-					    thd->to_len);
-			if (memcmp(hash, (char *) thd->to + thd->to_len,
-				   XB_CRYPT_HASH_LEN) != 0) {
-				msg("%s:%s invalid plaintext hash. "
-				    "Wrong encrytion key specified?\n",
-				    my_progname, __FUNCTION__);
-				thd->failed = TRUE;
-				continue;
-			}
+		if (xb_crypt_decrypt(thd->cipher_handle, thd->from,
+				     thd->from_len, thd->to, &thd->to_len,
+				     thd->iv, thd->iv_len,
+				     thd->hash_appended)) {
+			thd->failed = TRUE;
+			continue;
 		}
 
 	}

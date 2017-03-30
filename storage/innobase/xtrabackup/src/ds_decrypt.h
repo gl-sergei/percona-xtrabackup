@@ -25,9 +25,6 @@ Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA
 
 extern datasink_t	datasink_decrypt;
 
-extern char		*ds_decrypt_encrypt_key;
-extern char		*ds_decrypt_encrypt_key_file;
 extern int		ds_decrypt_encrypt_threads;
-extern ulong		ds_decrypt_encrypt_algo;
 
 #endif

@@ -25,6 +25,7 @@ Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA
 #include <pthread.h>
 #include "common.h"
 #include "xbstream.h"
+#include "xbcrypt_common.h"
 #include "datasink.h"
 #include "ds_decrypt.h"
 #include <gcrypt.h>
@@ -63,11 +64,6 @@ static ulong 		opt_encrypt_algo;
 static char 		*opt_encrypt_key_file = NULL;
 static void 		*opt_encrypt_key = NULL;
 static int		opt_encrypt_threads = 1;
-
-static ulong 		encrypt_algos[] = { GCRY_CIPHER_NONE,
-					    GCRY_CIPHER_AES128,
-					    GCRY_CIPHER_AES192,
-					    GCRY_CIPHER_AES256 };
 
 enum {
 	OPT_ENCRYPT_THREADS = 256
@@ -565,9 +561,9 @@ mode_extract(int n_threads, int argc __attribute__((unused)),
 	}
 
 	if (opt_encrypt_algo) {
-		ds_decrypt_encrypt_algo = encrypt_algos[opt_encrypt_algo];
-		ds_decrypt_encrypt_key = opt_encrypt_key;
-		ds_decrypt_encrypt_key_file = opt_encrypt_key_file;
+		ds_encrypt_algo = opt_encrypt_algo;
+		ds_encrypt_key = opt_encrypt_key;
+		ds_encrypt_key_file = opt_encrypt_key_file;
 		ds_decrypt_encrypt_threads = opt_encrypt_threads;
 		ds_decrypt_ctxt = ds_create(".", DS_TYPE_DECRYPT);
 		if (ds_decrypt_ctxt == NULL) {

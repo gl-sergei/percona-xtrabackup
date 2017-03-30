@@ -22,6 +22,7 @@ Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA
 #include <my_getopt.h>
 #include "common.h"
 #include "xbcrypt.h"
+#include "xbcrypt_common.h"
 #include <gcrypt.h>
 
 #if !defined(GCRYPT_VERSION_NUMBER) || (GCRYPT_VERSION_NUMBER < 0x010600)
