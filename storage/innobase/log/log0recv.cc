@@ -4434,11 +4434,15 @@ recv_recovery_from_checkpoint_start(
 
 	log_sys->last_checkpoint_lsn = checkpoint_lsn;
 
+	fprintf(stderr, "InnoDB: Skipping fil_names_clear.");
+
+#if 0
 	if (!srv_read_only_mode) {
 		/* Write a MLOG_CHECKPOINT marker as the first thing,
 		before generating any other redo log. */
 		fil_names_clear(log_sys->last_checkpoint_lsn, true);
 	}
+#endif
 
 	MONITOR_SET(MONITOR_LSN_CHECKPOINT_AGE,
 		    log_sys->lsn - log_sys->last_checkpoint_lsn);
