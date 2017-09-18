@@ -1,4 +1,4 @@
-# Copyright (c) 2006, 2012, Oracle and/or its affiliates. All rights reserved.
+# Copyright (c) 2006, 2016, Oracle and/or its affiliates. All rights reserved.
 # 
 # This program is free software; you can redistribute it and/or modify
 # it under the terms of the GNU General Public License as published by
@@ -36,7 +36,7 @@ TARGET_LINK_LIBRARIES(myisam mysys)
 
 IF(WITH_UNIT_TESTS AND FALSE)
   ADD_EXECUTABLE(mi_test1 mi_test1.c)
-  TARGET_LINK_LIBRARIES(mi_test1 myisam mysys_ssl)
+  TARGET_LINK_LIBRARIES(mi_test1 ${MYISAM_NOPFS} mysys_ssl)
   SET_TARGET_PROPERTIES(mi_test1 PROPERTIES LINKER_LANGUAGE CXX)
 
   ADD_EXECUTABLE(mi_test2 mi_test2.c)
