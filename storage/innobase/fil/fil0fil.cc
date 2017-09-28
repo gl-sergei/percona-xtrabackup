@@ -183,7 +183,8 @@ fil_is_user_tablespace_id(
 	ulint	space_id)
 {
 	return(!srv_is_undo_tablespace(space_id)
-	       && space_id != srv_tmp_space.space_id());
+	       && space_id != srv_tmp_space.space_id()
+	       && space_id != srv_sys_space.space_id());
 }
 
 #ifdef UNIV_DEBUG
