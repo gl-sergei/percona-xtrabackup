@@ -104,6 +104,7 @@ EOF
 $binlog_file	$binlog_pos
 EOF
 	fi
+    #die "Diagnostic suicide"
     xtrabackup --prepare --target-dir=$topdir/backup
 
     normalize_path $xb_binlog_info_innodb
