@@ -490,7 +490,6 @@ fil_node_t *
 datafiles_iter_next(datafiles_iter_t *it)
 {
 	fil_node_t *new_node;
-	fil_node_t *node = NULL;
 
 	mutex_enter(&it->mutex);
 
@@ -503,7 +502,7 @@ datafiles_iter_next(datafiles_iter_t *it)
 		if (it->node != NULL)
 			goto end;
 	}
-loop:
+
 	it->space = (it->space == NULL) ?
 		UT_LIST_GET_FIRST(it->system->space_list) :
 		UT_LIST_GET_NEXT(space_list, it->space);
@@ -515,14 +514,8 @@ loop:
 	if (it->space == NULL)
 		goto end;
 
-	node = it->node = UT_LIST_GET_FIRST(it->space->chain);
-	while (node != NULL && !node->is_open) {
-		node = UT_LIST_GET_NEXT(chain, node);
-	}
+	it->node = UT_LIST_GET_FIRST(it->space->chain);
 
-	if (!node) {
-		goto loop;
-	}
 end:
 	new_node = it->node;
 	mutex_exit(&it->mutex);
