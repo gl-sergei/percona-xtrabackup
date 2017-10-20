@@ -1533,7 +1533,8 @@ fil_space_is_being_truncated(
 {
 	bool	mark_for_truncate;
 	mutex_enter(&fil_system->mutex);
-	mark_for_truncate = fil_space_get_by_id(id)->is_being_truncated;
+	fil_space_t* space = fil_space_get_by_id(id);
+	mark_for_truncate = space ? space->is_being_truncated : false;
 	mutex_exit(&fil_system->mutex);
 	return(mark_for_truncate);
 }
