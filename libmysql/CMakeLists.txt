@@ -230,10 +230,10 @@ IF(WIN32)
   LIST(APPEND LIBS auth_win_client)
 ENDIF()
 
-# LDAP authentication SASL client plugin
-MESSAGE(STATUS "Creating LDAP authentication SASL client library.")
-ADD_SUBDIRECTORY(authentication_ldap)
-  
+## LDAP authentication SASL client plugin
+#MESSAGE(STATUS "Creating LDAP authentication SASL client library.")
+#ADD_SUBDIRECTORY(authentication_ldap)
+
 # Merge several convenience libraries into one big mysqlclient
 MERGE_LIBRARIES(mysqlclient STATIC ${LIBS} COMPONENT Development NOINSTALL 1)
 
