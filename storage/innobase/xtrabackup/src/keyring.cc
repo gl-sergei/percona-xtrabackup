@@ -70,9 +70,9 @@ xb_keyring_init(const char *file_path)
 		if (init_keyring_locks())
 			return(false);
 
-		Buffered_file_io keyring_io(logger.get());
+		IKeyring_io *keyring_io= new Buffered_file_io(logger.get());
 		keys.reset(new Keys_container(logger.get()));
-		if (keys->init(&keyring_io, keyring_file_data_value))
+		if (keys->init(keyring_io, keyring_file_data_value))
 		{
 			is_keys_container_initialized = FALSE;
 			logger->log(MY_ERROR_LEVEL, "keyring_file "
