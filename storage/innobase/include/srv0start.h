@@ -79,7 +79,7 @@ srv_undo_tablespaces_init(
 /*======================*/
 	bool		create_new_db,		/*!< in: TRUE if new db being
 						created */
-	ibool		backup_mode,		/*!< in: TRUE disables reading
+	bool		backup_mode,		/*!< in: TRUE disables reading
 						the system tablespace (used in
 						XtraBackup), FALSE is passed on
 						recovery. */

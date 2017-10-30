@@ -46,6 +46,9 @@ Created 2/16/1996 Heikki Tuuri
 #include "mysql/psi/mysql_stage.h"
 #include "mysql/psi/psi.h"
 
+#include "my_dir.h"
+#include <cstdio>
+
 #include "row0ftsort.h"
 #include "ut0mem.h"
 #include "mem0mem.h"
@@ -792,7 +795,7 @@ srv_undo_tablespaces_init(
 /*======================*/
 	bool		create_new_db,		/*!< in: TRUE if new db being
 						created */
-	ibool		backup_mode,		/*!< in: TRUE disables reading
+	bool		backup_mode,		/*!< in: TRUE disables reading
 						the system tablespace (used in
 						XtraBackup), FALSE is passed on
 						recovery. */
@@ -916,6 +919,28 @@ srv_undo_tablespaces_init(
 		n_undo_tablespaces = n_conf_tablespaces;
 
 		undo_tablespace_ids[n_conf_tablespaces] = ULINT_UNDEFINED;
+	}
+	if (backup_mode) {
+		// Locate all undo files in the srv_undo_dir and
+		// fill corresponding undo_tablespace_ids.
+		int j = 0;
+		MY_DIR* dir = my_dir(srv_undo_dir, MY_WANT_STAT);
+		ut_a(dir);
+		for (uint i = 0; i < dir->number_off_files; ++i) {
+			const fileinfo& file = dir->dir_entry[i];
+			ulint id = 0;
+			if (MY_S_ISREG(file.mystat->st_mode) &&
+			    sscanf(file.name, "undo%03lu", &id) == 1) {
+				undo_tablespace_ids[j++] = id;
+			}
+		}
+		my_dirend(dir);
+		if (j > 0) {
+			srv_undo_space_id_start = undo_tablespace_ids[0];
+			prev_space_id = srv_undo_space_id_start - 1;
+			n_undo_tablespaces = j;
+			undo_tablespace_ids[j] = ULINT_UNDEFINED;
+		}
 	}
 
 	/* Open all the undo tablespaces that are currently in use. If we
