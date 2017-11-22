@@ -361,11 +361,13 @@ read_retry:
 	for (page = cursor->buf, i = 0; i < npages;
 	     page += cursor->page_size, i++) {
 
-		if (Encryption::is_encrypted_page(page)) {
+		byte* buf_page = page;
+
+		if (Encryption::is_encrypted_page(buf_page)) {
 			dberr_t		ret;
 			Encryption	encryption(read_request.encryption_algorithm());
 
-			memcpy(cursor->decrypt, page, cursor->page_size);
+			memcpy(cursor->decrypt, buf_page, cursor->page_size);
 			ret = encryption.decrypt(read_request, cursor->decrypt,
 						 cursor->page_size,
 						 cursor->scratch,
@@ -373,33 +375,20 @@ read_retry:
 			if (ret != DB_SUCCESS) {
 				goto corruption;
 			}
-
-			if (Compression::is_compressed_page(cursor->decrypt)) {
-				if (os_file_decompress_page(false,
-				    cursor->decrypt, cursor->scratch,
-				    cursor->page_size) != DB_SUCCESS) {
-					goto corruption;
-				}
-			}
-
-			if (buf_page_is_corrupted(TRUE, cursor->decrypt,
-						  page_size, false)) {
-				goto corruption;
-			}
-
+			buf_page = cursor->decrypt;
 		}
 
-		if (Compression::is_compressed_page(page)) {
-
-			if (os_file_decompress_page(false, page,
-			    cursor->scratch, cursor->page_size) != DB_SUCCESS) {
+		if (Compression::is_compressed_page(buf_page)) {
+			memcpy(cursor->decrypt, buf_page, cursor->page_size);
+			if (os_file_decompress_page(false,
+			    cursor->decrypt, cursor->scratch,
+			    cursor->page_size) != DB_SUCCESS) {
 				goto corruption;
 			}
-
+			buf_page = cursor->decrypt;
 		}
 
-		if (!Encryption::is_encrypted_page(page) &&
-		    buf_page_is_corrupted(TRUE, page, page_size, false)) {
+		if (buf_page_is_corrupted(TRUE, buf_page, page_size, false)) {
 
 corruption:
 
