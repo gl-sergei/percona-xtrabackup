@@ -15,8 +15,9 @@
 
 #include <my_global.h>
 #include <mysql/plugin_keyring.h>
-#include "keyring.h"
+#include "common/keyring.h"
 #include "buffered_file_io.h"
+#include "keys_container.h"
 
 #ifdef _WIN32
 #define MYSQL_DEFAULT_KEYRINGFILE MYSQL_KEYRINGDIR"\\keyring"
