@@ -515,6 +515,9 @@ datafiles_iter_next(datafiles_iter_t *it)
 		goto end;
 
 	it->node = UT_LIST_GET_FIRST(it->space->chain);
+	if (it->node) {
+		msg("!!! %lu : %s.\n", it->node->space->id, it->node->space->name);
+	}
 
 end:
 	new_node = it->node;
