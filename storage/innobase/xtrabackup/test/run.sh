@@ -857,6 +857,18 @@ then
 fi
 echo | tee -a $OUTFILE
 
+backtrace_tool=`which addr2line`
+
+function filter_worker_output()
+{
+    if [ "$backtrace_tool" ]
+    then
+        ./detailed_stacktrace.sh
+    else
+        cat
+    fi
+}
+
 cat <<EOF
 ==============================================================================
 TEST                                   WORKER    RESULT     TIME(s) or COMMENT
@@ -934,7 +946,7 @@ do
        # errors, as otherwise $? would be 0 in cleanup_on_test_exit resulting in
        # passed test
        (. $t) || exit $?
-   ) > ${worker_outfiles[$worker]} 2>&1 &
+   ) 2>&1 | filter_worker_output > ${worker_outfiles[$worker]} &
 
    worker_pids[$worker]=$!
    worker_stime[$worker]="`now`"
