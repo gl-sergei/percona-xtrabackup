@@ -946,7 +946,7 @@ do
        # errors, as otherwise $? would be 0 in cleanup_on_test_exit resulting in
        # passed test
        (. $t) || exit $?
-   ) 2>&1 | filter_worker_output > ${worker_outfiles[$worker]} &
+   ) > ${worker_outfiles[$worker]} 2>&1 &
 
    worker_pids[$worker]=$!
    worker_stime[$worker]="`now`"
