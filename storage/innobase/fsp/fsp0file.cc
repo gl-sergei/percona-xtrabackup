@@ -665,7 +665,7 @@ Datafile::validate_first_page(lsn_t*	flush_lsn,
 			ut_free(m_encryption_iv);
 			m_encryption_key = NULL;
 			m_encryption_iv = NULL;
-			return(DB_CORRUPTION);
+			return(DB_PAGE_IS_BLANK);
 		}
 
 		if (recv_recovery_is_on()
