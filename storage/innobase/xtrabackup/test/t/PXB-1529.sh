@@ -6,11 +6,9 @@ require_server_version_higher_than 5.7.20
 
 . inc/keyring_file.sh
 
-start_server --innodb-temp-tablespace-encrypt=ON --secure-file-priv=$TEST_VAR_ROOT
+start_server --secure-file-priv=$TEST_VAR_ROOT
 
 vlog "Creating tables"
-
-# sleep 10000000;
 
 mysql test <<EOF &
 
@@ -117,48 +115,29 @@ INSERT INTO t10 (b) SELECT b FROM t10;
 INSERT INTO t10 (b) SELECT b FROM t10;
 INSERT INTO t10 (b) SELECT b FROM t10;
 
-# CREATE INDEX t10_b ON t10 (b);
-# DROP INDEX t10_b ON t10;
-
 CREATE INDEX t10_b ON t10 (b) ALGORITHM=COPY;
 DROP INDEX t10_b ON t10 ALGORITHM=COPY;
 
 
-
-
-
 CREATE TABLE qp11 (c1 INT) ENCRYPTION='Y';
-
 INSERT INTO qp11 (c1) VALUES (1), (2), (3);
 INSERT INTO qp11 (c1) VALUES (10), (20), (30);
-
 INSERT INTO qp11 SELECT * FROM qp11;
 INSERT INTO qp11 SELECT * FROM qp11;
-
-
 
 
 CREATE TABLE qp12 (c1 INT) ENCRYPTION='Y';
-
 INSERT INTO qp12 (c1) VALUES (1), (2), (3);
 INSERT INTO qp12 (c1) VALUES (10), (20), (30);
-
 INSERT INTO qp12 SELECT * FROM qp12;
 INSERT INTO qp12 SELECT * FROM qp12;
-
-
 
 
 CREATE TABLE qp13 (c1 INT) ENCRYPTION='Y';
-
 INSERT INTO qp13 (c1) VALUES (1), (2), (3);
 INSERT INTO qp13 (c1) VALUES (10), (20), (30);
-
 INSERT INTO qp13 SELECT * FROM qp13;
 INSERT INTO qp13 SELECT * FROM qp13;
-
-
-
 
 
 EOF
@@ -179,13 +158,7 @@ rm -rf $mysql_datadir
 
 xtrabackup --copy-back --target-dir=$topdir/backup --transition-key=123
 
-start_server --innodb-temp-tablespace-encrypt=ON
-
-mysql test <<EOF
-
-SHOW VARIABLES LIKE 'keyring%';
-
-EOF
+start_server
 
 xtrabackup --backup --target-dir=$topdir/backup1 \
 	   --transition-key=123
