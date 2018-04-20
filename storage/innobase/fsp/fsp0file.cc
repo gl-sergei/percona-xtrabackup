@@ -649,6 +649,10 @@ Datafile::validate_first_page(lsn_t*	flush_lsn,
 #ifdef	UNIV_ENCRYPT_DEBUG
                 fprintf(stderr, "Got from file %lu:", m_space_id);
 #endif
+                if (!fsp_header_contains_encryption_info_magic(
+                		m_flags, m_first_page)) {
+                	return(DB_PAGE_IS_BLANK);
+                }
 		if (!fsp_header_get_encryption_key(m_flags,
 						   m_encryption_key,
 						   m_encryption_iv,

@@ -346,6 +346,15 @@ fsp_header_get_encryption_key(
 	byte*		iv,
 	page_t*		page);
 
+/** Check if page contains encryption info magic.
+@param[in]	fsp_flags	tablespace flags
+@param[in]	page		page to check
+@return true if contains. */
+bool
+fsp_header_contains_encryption_info_magic(
+	ulint		fsp_flags,
+	const page_t*	page);
+
 /** Check the encryption key from the first page of a tablespace.
 @param[in]	fsp_flags	tablespace flags
 @param[in]	page		first page of a tablespace

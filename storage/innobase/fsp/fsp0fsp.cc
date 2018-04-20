@@ -872,6 +872,31 @@ fsp_header_get_encryption_offset(
 	return offset;
 }
 
+/** Check if page contains encryption info magic.
+@param[in]	fsp_flags	tablespace flags
+@param[in]	page		page to check
+@return true if contains. */
+bool
+fsp_header_contains_encryption_info_magic(
+	ulint		fsp_flags,
+	const page_t*	page)
+{
+	const page_size_t page_size(fsp_flags);
+	ulint offset = fsp_header_get_encryption_offset(page_size);
+
+	if (memcmp(ENCRYPTION_KEY_MAGIC_V1,
+		page + offset, ENCRYPTION_MAGIC_SIZE) == 0) {
+		return(true);
+	}
+
+	if (memcmp(ENCRYPTION_KEY_MAGIC_V2,
+		page + offset, ENCRYPTION_MAGIC_SIZE) == 0) {
+		return(true);
+	}
+
+	return(false);
+}
+
 /** Fill the encryption info.
 @param[in]	space		tablespace
 @param[in,out]	encrypt_info	buffer for encrypt key.
