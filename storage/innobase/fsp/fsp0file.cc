@@ -576,7 +576,8 @@ dberr_t Datafile::validate_first_page(space_id_t space_id, lsn_t *flush_lsn,
     /* The space_id can be most anything, except -1. */
     error_txt = "A bad Space ID was found";
 
-  } else if (m_space_id != 0 && space_id != m_space_id) {
+  } else if (m_space_id != 0 && space_id != m_space_id &&
+             space_id != SPACE_UNKNOWN) {
   /* Tablespace ID mismatch. The file could be in use
   by another tablespace. */
 

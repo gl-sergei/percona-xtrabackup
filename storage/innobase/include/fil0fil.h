@@ -1024,6 +1024,16 @@ void fil_init(ulint max_n_open);
 /** Initializes the tablespace memory cache. */
 void fil_close();
 
+/** Open a file of a tablespace.
+The caller must own the shard mutex.
+@param[in,out]  file    Tablespace file
+@return false if the file can't be opened, otherwise true */
+bool fil_node_open_file(fil_node_t *file);
+
+/** Closes a file.
+@param[in] node file to close. */
+void fil_node_close_file(fil_node_t* node);
+
 /** Opens all log files and system tablespace data files.
 They stay open until the database server shutdown. This should be called
 at a server startup after the space objects for the log and the system

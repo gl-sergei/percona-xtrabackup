@@ -3351,6 +3351,42 @@ void Fil_system::close_all_files() {
 modifications in the files. */
 void fil_close_all_files() { fil_system->close_all_files(); }
 
+/** Open a file of a tablespace.
+The caller must own the shard mutex.
+@param[in,out]  file    Tablespace file
+@return false if the file can't be opened, otherwise true */
+bool fil_node_open_file(fil_node_t *file) {
+  fil_space_t *space = file->space;
+
+  auto shard = fil_system->shard_by_id(space->id);
+
+  shard->mutex_acquire();
+
+  bool res = shard->open_file(file, false);
+
+  shard->mutex_release();
+
+  return res;
+}
+
+/** Closes a file.
+@param[in] file file to close. */
+void fil_node_close_file(fil_node_t* file) {
+  if (!file->is_open) {
+    return;
+  }
+
+  fil_space_t *space = file->space;
+
+  auto shard = fil_system->shard_by_id(space->id);
+
+  shard->mutex_acquire();
+
+  shard->close_file(file, true);
+
+  shard->mutex_release();
+}
+
 /** Close log files.
 @param[in]	free_all	If set then free all instances */
 void Fil_shard::close_log_files(bool free_all) {
