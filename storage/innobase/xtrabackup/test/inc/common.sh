@@ -1,10 +1,5 @@
 set -eu
 
-function innobackupex()
-{
-    run_cmd $IB_BIN $IB_ARGS "$@"
-}
-
 function xtrabackup()
 {
     run_cmd $XB_BIN $XB_ARGS "$@"
@@ -43,16 +38,10 @@ function call_mysql_install_db()
 
         CLIENT_VERSION_STRING=`${MYSQL} --version`
 
-        if [[ ${CLIENT_VERSION_STRING} =~ Ver.*5\.7\.[0-9] ]] ; then
-            INSTALL_CMD="${MYSQLD} \
-            --defaults-file=${MYSQLD_VARDIR}/my.cnf \
-            --basedir=${MYSQL_BASEDIR} \
-            --initialize-insecure"
-        else
-            INSTALL_CMD="${MYSQL_INSTALL_DB} \
-            --defaults-file=${MYSQLD_VARDIR}/my.cnf \
-            --basedir=${MYSQL_BASEDIR}"
-        fi
+        INSTALL_CMD="${MYSQLD} \
+        --defaults-file=${MYSQLD_VARDIR}/my.cnf \
+        --basedir=${MYSQL_BASEDIR} \
+        --initialize-insecure"
 
         if ! ${INSTALL_CMD} ${MYSQLD_EXTRA_ARGS}
         then
@@ -62,8 +51,6 @@ function call_mysql_install_db()
             vlog "----------------"
             exit -1
         fi
-
-        [ -d ${MYSQLD_DATADIR}/test ] || mkdir ${MYSQLD_DATADIR}/test
 
         cd - >/dev/null 2>&1
 }
@@ -257,8 +244,6 @@ function switch_server()
 	MYSQLD_ARGS="$MYSQLD_ARGS --user=root"
     fi
 
-    IB_ARGS="--defaults-file=$MYSQLD_VARDIR/my.cnf \
---no-version-check ${IB_EXTRA_OPTS:-}"
     XB_ARGS="--defaults-file=$MYSQLD_VARDIR/my.cnf \
 --no-version-check ${XB_EXTRA_OPTS:-}"
 
@@ -371,8 +356,10 @@ EOF
         fi
     done
 
-     vlog "Server with id=$id has been started on port $MYSQLD_PORT, \
+    vlog "Server with id=$id has been started on port $MYSQLD_PORT, \
 socket $MYSQLD_SOCKET"
+
+    ${MYSQL} ${MYSQL_ARGS} -e "CREATE DATABASE IF NOT EXISTS test"
 }
 
 ########################################################################

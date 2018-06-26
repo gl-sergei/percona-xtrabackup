@@ -49,7 +49,6 @@ Usage: $0 [-f] [-g] [-h] [-s suite] [-t test_name] [-d mysql_basedir] [-c build_
 -j N        Run tests in N parallel processes.
 -T seconds  Test timeout (default is $TEST_TIMEOUT seconds).
 -x options  Extra options to pass to xtrabackup
--i options  Extra options to pass to innobackupex
 -r path     Use specified path as root directory for test workers.
 EOF
 }
@@ -270,8 +269,6 @@ function set_vars()
 	TAR=tar
     fi
 
-    find_program MYSQL_INSTALL_DB mysql_install_db $MYSQL_BASEDIR/bin \
-	$MYSQL_BASEDIR/scripts
     find_program MYSQLD mysqld $MYSQL_BASEDIR/bin/ $MYSQL_BASEDIR/libexec
     find_program MYSQL mysql $MYSQL_BASEDIR/bin
     find_program MYSQLADMIN mysqladmin $MYSQL_BASEDIR/bin
@@ -281,7 +278,7 @@ function set_vars()
     # appropriately
     if test -d $PWD/../src
     then
-        PATH="$PWD/..:$PWD/../src:$PATH"
+        PATH="$PWD/../../../../runtime_output_directory:$PWD/..:$PWD/../src:$PATH"
         XTRABACKUP_BASEDIR="$PWD/../src"
     fi
 
@@ -327,7 +324,6 @@ function get_version_info()
     MYSQLD_EXTRA_ARGS=
 
     XB_BIN=""
-    IB_ARGS="--user=root --ibbackup=$XB_BIN ${IB_EXTRA_OPTS:-}"
     XB_ARGS="--no-defaults"
     XB_BIN="xtrabackup"
 
@@ -406,13 +402,7 @@ function get_version_info()
                 INNODB_VERSION="$MYSQL_VERSION"
             fi
             ;;
-        5.2 | 5.3 )
-            ;;
-        5.5 )
-            ;;
-        5.6 | 10.0 | 10.1)
-            ;;
-        5.7 )
+        8.0 )
             ;;
         *)
             vlog "Unknown MySQL/InnoDB version: $MYSQL_VERSION/$INNODB_VERSION"
@@ -428,20 +418,11 @@ function get_version_info()
     fi
     XB_BIN="$XB_PATH"
 
-    # Set the correct binary for innobackupex
-    IB_BIN="`which innobackupex`"
-    if [ -z "$IB_BIN" ]
-    then
-	vlog "Cannot find 'innobackupex' in PATH"
-	return 1
-    fi
-
     stop_server >>$OUTFILE 2>&1
 
     export MYSQL_VERSION MYSQL_VERSION_COMMENT MYSQL_FLAVOR \
 	INNODB_VERSION XTRADB_VERSION INNODB_FLAVOR \
-	XB_BIN IB_BIN IB_ARGS XB_ARGS MYSQLD_EXTRA_ARGS \
-        WSREP_READY LIBGALERA_PATH
+	XB_BIN XB_ARGS MYSQLD_EXTRA_ARGS WSREP_READY LIBGALERA_PATH
 }
 
 ###########################################################################
@@ -797,10 +778,6 @@ recognized for compatibility";;
 
             x )
                 XB_EXTRA_MY_CNF_OPTS="$OPTARG"
-                ;;
-
-            i )
-                IB_EXTRA_OPTS="$OPTARG"
                 ;;
 
             r )

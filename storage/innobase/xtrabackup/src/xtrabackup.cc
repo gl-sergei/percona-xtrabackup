@@ -4382,6 +4382,8 @@ xtrabackup_backup_func(void)
 
 	xb_fil_io_init();
 
+	dict_persist_init();
+
 	srv_n_log_files = (ulint) innobase_log_files_in_group;
 	srv_log_file_size = (ulint) innobase_log_file_size;
 
@@ -4773,6 +4775,8 @@ skip_last_cp:
 	row_mysql_close();
 
 	log_sys_close();
+
+	dict_persist_close();
 
 	sync_check_close();
 
