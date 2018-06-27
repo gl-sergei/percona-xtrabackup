@@ -14,7 +14,7 @@ EOF
 # Full backup
 # backup root directory
 vlog "Starting backup"
-innobackupex  --no-timestamp $topdir/full
+xtrabackup --backup --target-dir=$topdir/full
 
 vlog "Rotating the table"
 
@@ -24,19 +24,18 @@ EOF
 
 vlog "Creating incremental backup"
 
-innobackupex --incremental --no-timestamp \
-    --incremental-basedir=$topdir/full $topdir/inc
+xtrabackup --backup --incremental-basedir=$topdir/full --target-dir=$topdir/inc
 
 # remove space_id = something line from .meta file
 sed -ie '/space_id/ d' $topdir/inc/test/t12.ibd.meta
 vlog "Preparing backup"
 
-innobackupex --apply-log --redo-only $topdir/full
+xtrabackup --prepare --apply-log-only --target-dir=$topdir/full
 vlog "Log applied to full backup"
 
 # Command should fail and print error message
-run_cmd_expect_failure $IB_BIN $IB_ARGS --apply-log --redo-only --incremental-dir=$topdir/inc \
-    $topdir/full
+run_cmd_expect_failure $XB_BIN $XB_ARGS --prepare --apply-log-only \
+    --incremental-dir=$topdir/inc --target-dir=$topdir/full
 if ! grep -q "Cannot handle DDL operation" $OUTFILE
 then
 	die "Error message not found!"

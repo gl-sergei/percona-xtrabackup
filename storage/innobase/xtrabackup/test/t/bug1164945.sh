@@ -5,11 +5,11 @@
 
 start_server
 
-innobackupex --no-timestamp $topdir/backup
+xtrabackup --backup --target-dir=$topdir/backup
 
 stop_server
 
-innobackupex --apply-log $topdir/backup
+xtrabackup --prepare --target-dir=$topdir/backup
 
 cp -a $topdir/backup $topdir/backup_copy
 
@@ -22,21 +22,21 @@ function test_force_non_empty_dirs()
     touch $MYSQLD_DATADIR/non_existing_file
 
     vlog "check that $1 fails without --force-non-empty-directories"
-    run_cmd_expect_failure $IB_BIN $IB_ARGS $1 $topdir/backup
+    run_cmd_expect_failure $XB_BIN $XB_ARGS $1 --target-dir=$topdir/backup
 
     rm -rf $topdir/backup
     cp -a $topdir/backup_copy $topdir/backup
 
     vlog "check that $1 works with --force-non-empty-directories"
-    innobackupex $1 --force-non-empty-directories $topdir/backup
+    xtrabackup $1 --force-non-empty-directories --target-dir=$topdir/backup
 
     rm -rf $topdir/backup
     cp -a $topdir/backup_copy $topdir/backup
 
     vlog "check that $1 --force-non-empty-directories does not overwrite files"
     touch $MYSQLD_DATADIR/ibdata1
-    run_cmd_expect_failure $IB_BIN $IB_ARGS $1 --force-non-empty-directories \
-                           $topdir/backup
+    run_cmd_expect_failure $XB_BIN $XB_ARGS $1 --force-non-empty-directories \
+                           --target-dir=$topdir/backup
 
     rm -rf $topdir/backup
     cp -a $topdir/backup_copy $topdir/backup

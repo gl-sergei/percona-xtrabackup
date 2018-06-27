@@ -5,10 +5,9 @@ load_dbase_schema sakila
 load_dbase_data sakila
 
 # Take backup
+backup_dir=$topdir/backup
 mkdir -p $topdir/backup
-innobackupex  $topdir/backup > $OUTFILE 2>&1
-backup_dir=`grep "innobackupex: Backup created in directory" $OUTFILE | awk -F\' '{ print $2}'`
-vlog "Backup dir in $backup_dir"
+xtrabackup --backup --target-dir=$backup_dir
 
 stop_server
 # Remove datadir
@@ -18,14 +17,14 @@ vlog "Applying log"
 echo "###########" >> $OUTFILE
 echo "# PREPARE #" >> $OUTFILE
 echo "###########" >> $OUTFILE
-innobackupex --apply-log $backup_dir >> $OUTFILE 2>&1
+xtrabackup --prepare --target-dir=$backup_dir
 
 vlog "Restoring MySQL datadir"
 mkdir -p $mysql_datadir
 echo "###########" >> $OUTFILE
 echo "# RESTORE #" >> $OUTFILE
 echo "###########" >> $OUTFILE
-innobackupex --copy-back $full_backup_dir >> $OUTFILE 2>&1
+xtrabackup --copy-back --target-dir=$backup_dir
 
 start_server
 # Check sakila

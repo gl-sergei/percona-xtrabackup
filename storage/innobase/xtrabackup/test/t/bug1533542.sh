@@ -9,8 +9,8 @@ start_server
 # Full backup
 vlog "Starting backup"
 
-# Invoke innobackupex with an extra argument 'tmp-dir'
-run_cmd_expect_failure $IB_BIN $IB_ARGS --no-timestamp $topdir/backup tmp-dir
+# Invoke xtrabackup with an extra argument 'tmp-dir'
+run_cmd_expect_failure $XB_BIN $XB_ARGS --backup --target-dir=$topdir/backup tmp-dir
 
 # Should failed with error
-grep -q "Error: extra argument found tmp-dir" $OUTFILE
+grep -q "xtrabackup: Error: unknown argument: 'tmp-dir'" $OUTFILE

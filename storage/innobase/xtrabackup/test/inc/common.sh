@@ -324,9 +324,12 @@ EOF
 	    # Reserve 900 series for SST nodes
             if [[ $id -lt 900 ]];then
                 call_mysql_install_db
-            else 
+            else
                 vlog "Skiping mysql_install_db of node $id for SST"
             fi
+            new_instance=yes
+        else
+            new_instance=no
         fi
 
         # Start the server
@@ -359,7 +362,9 @@ EOF
     vlog "Server with id=$id has been started on port $MYSQLD_PORT, \
 socket $MYSQLD_SOCKET"
 
-    ${MYSQL} ${MYSQL_ARGS} -e "CREATE DATABASE IF NOT EXISTS test"
+    if [ $new_instance = yes ] ; then
+        ${MYSQL} ${MYSQL_ARGS} -e "CREATE DATABASE IF NOT EXISTS test"
+    fi
 }
 
 ########################################################################

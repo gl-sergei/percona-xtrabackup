@@ -24,10 +24,10 @@ start_server
 load_dbase_schema incremental_sample
 
 # Workaround for bug #1072695
-IB_ARGS_NO_DEFAULTS_FILE=`echo $IB_ARGS | sed -e 's/--defaults-file=[^ ]* / /'`
-function innobackupex_no_defaults_file ()
+XB_ARGS_NO_DEFAULTS_FILE=`echo $IB_ARGS | sed -e 's/--defaults-file=[^ ]* / /'`
+function xtrabackup_no_defaults_file ()
 {
-	run_cmd $IB_BIN $IB_ARGS_NO_DEFAULTS_FILE $*
+	run_cmd $XB_BIN $XB_ARGS_NO_DEFAULTS_FILE $*
 }
 
 # Adding initial rows
@@ -40,7 +40,7 @@ mkdir -p $topdir/backup
 
 vlog "Starting backup"
 full_backup_dir=$topdir/backup/full
-innobackupex  --no-timestamp $full_backup_dir
+xtrabackup --backup --target-dir=$full_backup_dir
 vlog "Full backup done to directory $full_backup_dir"
 cat $full_backup_dir/backup-my.cnf
 
@@ -66,8 +66,8 @@ vlog "###############"
 
 # Incremental backup
 inc_backup_dir=$topdir/backup/inc
-innobackupex --no-timestamp --incremental --incremental-basedir=$full_backup_dir \
-    $inc_backup_dir
+xtrabackup --backup --incremental --incremental-basedir=$full_backup_dir \
+    --target=dir=$inc_backup_dir
 vlog "Incremental backup done to directory $inc_backup_dir"
 
 vlog "Preparing backup"
@@ -75,18 +75,18 @@ vlog "Preparing backup"
 vlog "##############"
 vlog "# PREPARE #1 #"
 vlog "##############"
-innobackupex_no_defaults_file --apply-log --redo-only $full_backup_dir
+xtrabackup_no_defaults_file --prepare --apply-log-only --target-dir$full_backup_dir
 vlog "Log applied to full backup"
 vlog "##############"
 vlog "# PREPARE #2 #"
 vlog "##############"
-innobackupex_no_defaults_file --apply-log --redo-only --incremental-dir=$inc_backup_dir \
-    $full_backup_dir
+xtrabackup_no_defaults_file --prepare --apply-log-only --incremental-dir=$inc_backup_dir \
+    --target-dir=$full_backup_dir
 vlog "Delta applied to full backup"
 vlog "##############"
 vlog "# PREPARE #3 #"
 vlog "##############"
-innobackupex_no_defaults_file --apply-log $full_backup_dir
+xtrabackup_no_defaults_file --prepare --target-dir=$full_backup_dir
 vlog "Data prepared for restore"
 
 # Destroying mysql data
@@ -99,7 +99,7 @@ vlog "Copying files"
 vlog "###########"
 vlog "# RESTORE #"
 vlog "###########"
-innobackupex --copy-back $full_backup_dir
+xtrabackup --copy-back --target-dir=$full_backup_dir
 vlog "Data restored"
 
 start_server --innodb_file_per_table --innodb_doublewrite_file=${DBLWR}

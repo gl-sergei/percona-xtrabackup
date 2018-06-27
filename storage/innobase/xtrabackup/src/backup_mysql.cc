@@ -118,7 +118,7 @@ time_t history_end_time;
 time_t history_lock_time;
 
 /* Stream type name, to be used with xtrabackup_stream_fmt */
-const char *xb_stream_format_name[] = {"file", "tar", "xbstream"};
+const char *xb_stream_format_name[] = {"file", "xbstream"};
 
 MYSQL *mysql_connection;
 
@@ -495,9 +495,6 @@ get_mysql_vars(MYSQL *connection)
 		{"innodb_undo_directory", &innodb_undo_directory_var},
 		{"innodb_page_size", &innodb_page_size_var},
 		{"innodb_log_checksums", &innodb_log_checksums_var},
-		// {"innodb_log_checksum_algorithm",
-		// 	&innodb_log_checksum_algorithm_var},
-		// {"innodb_checksum_algorithm", &innodb_checksum_algorithm_var},
 		{"server_uuid", &server_uuid_var},
 		{NULL, NULL}
 	};
@@ -644,19 +641,6 @@ get_mysql_vars(MYSQL *connection)
 		ut_ad(*endptr == 0);
 	}
 
-	// if (!innodb_log_checksum_algorithm_specified &&
-	// 	innodb_log_checksum_algorithm_var) {
-	// 	for (uint i = 0;
-	// 	     i < innodb_checksum_algorithm_typelib.count;
-	// 	     i++) {
-	// 		if (strcasecmp(innodb_log_checksum_algorithm_var,
-	// 		    innodb_checksum_algorithm_typelib.type_names[i])
-	// 		    == 0) {
-	// 			srv_log_checksum_algorithm = i;
-	// 		}
-	// 	}
-	// }
-
 	if (!innodb_checksum_algorithm_specified &&
 		innodb_checksum_algorithm_var) {
 		for (uint i = 0;
@@ -670,16 +654,14 @@ get_mysql_vars(MYSQL *connection)
 		}
 	}
 
-	// if (!innodb_log_checksum_algorithm_specified &&
-	// 	innodb_log_checksums_var) {
-	// 	if (strcasecmp(innodb_log_checksums_var, "ON") == 0) {
-	// 		srv_log_checksum_algorithm =
-	// 			SRV_CHECKSUM_ALGORITHM_STRICT_CRC32;
-	// 	} else {
-	// 		srv_log_checksum_algorithm =
-	// 			SRV_CHECKSUM_ALGORITHM_NONE;
-	// 	}
-	// }
+	if (!innodb_log_checksums_specified &&
+		innodb_log_checksums_var) {
+		if (strcasecmp(innodb_log_checksums_var, "ON") == 0) {
+			srv_log_checksums = true;
+		} else {
+			srv_log_checksums = false;
+		}
+	}
 
 	memset(server_uuid, 0, ENCRYPTION_SERVER_UUID_LEN + 1);
 	if (server_uuid_var != NULL) {
@@ -2005,7 +1987,8 @@ write_backup_config_file()
 	  // << "innodb_log_block_size=" << srv_log_block_size << "\n"
 	  << "innodb_undo_directory=" << srv_undo_dir << "\n"
 	  << "innodb_undo_tablespaces=" << srv_undo_tablespaces << "\n"
-	  << "server_id=" << server_id << "\n";
+	  << "server_id=" << server_id << "\n"
+	  << "innodb_log_checksums=" << (srv_log_checksums ? "ON" : "OFF") << "\n";
 
 	if (innobase_doublewrite_file) {
 		s << "innodb_doublewrite_file="

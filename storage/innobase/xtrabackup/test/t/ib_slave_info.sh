@@ -22,8 +22,8 @@ multi_row_insert incremental_sample.test \({1..100},100\)
 switch_server $slave_id
 
 vlog "Check that --slave-info with --no-lock and no --safe-slave-backup fails"
-run_cmd_expect_failure $IB_BIN $IB_ARGS --no-timestamp --slave-info --no-lock \
-  $topdir/backup
+run_cmd_expect_failure $XB_BIN $XB_ARGS --backup --slave-info --no-lock \
+  --target-dir=$topdir/backup
 
 vlog "Full backup of the slave server"
 xtrabackup --backup --target-dir=$topdir/backup \
@@ -41,15 +41,7 @@ run_cmd egrep "MySQL slave binlog position: $pxb_log_slave_info_pattern" $topdir
 run_cmd egrep -q "$binlog_slave_info_pattern" \
     $topdir/backup/xtrabackup_slave_info
 
-mkdir $topdir/tar_backup $topdir/xbstream_backup
-
-vlog "Full backup of the slave server to a tar stream"
-xtrabackup --backup --no-timestamp --slave-info --binlog-info=on --stream=tar \
-    | tar -x -C $topdir/tar_backup
-
-vlog "Verifying that untared xtrabackup_slave_info is not corrupted"
-run_cmd egrep -q "$binlog_slave_info_pattern" \
-    $topdir/tar_backup/xtrabackup_slave_info
+mkdir $topdir/xbstream_backup
 
 vlog "Full backup of the slave server to a xbstream stream"
 xtrabackup --backup --no-timestamp --slave-info --binlog-info=on --stream=xbstream \

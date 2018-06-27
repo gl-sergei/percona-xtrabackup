@@ -8,7 +8,7 @@
 start_server
 
 backup_dir=$topdir/backup
-innobackupex --no-timestamp $backup_dir
+xtrabackup --backup --target-dir=$backup_dir
 vlog "Backup created in directory $backup_dir"
 
 vlog "Stop mysqld"
@@ -24,10 +24,10 @@ vlog "Apply log"
 # Do not run innobackupex, because it pass option --defaults-file
 # which we should avoid. Our goal is to test that backup-my.cnf
 # will be read by default when apply-log is run.
-run_cmd $IB_BIN --ibbackup=$XB_BIN --apply-log $backup_dir
+run_cmd $XB_BIN --prepare --target-dir=$backup_dir
 
 vlog "Get my.cnf back"
 mv $topdir/my.cnf.bak $topdir/my.cnf
 
 vlog "Copy back"
-innobackupex --copy-back $backup_dir
+xtrabackup --copy-back --target-dir=$backup_dir

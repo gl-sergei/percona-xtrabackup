@@ -25,7 +25,7 @@ Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA
 extern "C" {
 #endif
 
-extern bool innodb_log_checksum_algorithm_specified;
+extern bool innodb_log_checksums_specified;
 extern bool innodb_checksum_algorithm_specified;
 
 extern bool opt_lock_ddl_per_table;

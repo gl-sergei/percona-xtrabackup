@@ -349,7 +349,7 @@ static longlong	innobase_log_file_size_save;
 
 /* set true if corresponding variable set as option config file or
 command argument */
-// bool innodb_log_checksum_algorithm_specified = false;
+bool innodb_log_checksums_specified = false;
 
 /* set true if corresponding variable set as option config file or
 command argument */
@@ -620,7 +620,7 @@ enum options_xtrabackup
   OPT_INNODB_CHECKSUM_ALGORITHM,
   OPT_INNODB_UNDO_DIRECTORY,
   OPT_INNODB_UNDO_TABLESPACES,
-  // OPT_INNODB_LOG_CHECKSUM_ALGORITHM,
+  OPT_INNODB_LOG_CHECKSUMS,
   OPT_XTRA_INCREMENTAL_FORCE_SCAN,
   OPT_DEFAULTS_GROUP,
   OPT_OPEN_FILES_LIMIT,
@@ -1280,11 +1280,10 @@ Disable with --skip-innodb-doublewrite.", (G_PTR*) &innobase_use_doublewrite,
    "INNODB, STRICT_INNODB, NONE, STRICT_NONE]", &srv_checksum_algorithm,
    &srv_checksum_algorithm, &innodb_checksum_algorithm_typelib, GET_ENUM,
    REQUIRED_ARG, SRV_CHECKSUM_ALGORITHM_INNODB, 0, 0, 0, 0, 0},
-  // {"innodb_log_checksum_algorithm", OPT_INNODB_LOG_CHECKSUM_ALGORITHM,
-  // "The algorithm InnoDB uses for log checksumming. [CRC32, STRICT_CRC32, "
-  //  "INNODB, STRICT_INNODB, NONE, STRICT_NONE]", &srv_log_checksum_algorithm,
-  //  &srv_log_checksum_algorithm, &innodb_checksum_algorithm_typelib, GET_ENUM,
-  //  REQUIRED_ARG, SRV_CHECKSUM_ALGORITHM_INNODB, 0, 0, 0, 0, 0},
+  {"innodb_log_checksums", OPT_INNODB_LOG_CHECKSUMS,
+   "Whether to compute and require checksums for InnoDB redo log blocks",
+   &srv_log_checksums, &srv_log_checksums, &innodb_checksum_algorithm_typelib,
+   GET_BOOL, REQUIRED_ARG, TRUE, 0, 0, 0, 0, 0},
   {"innodb_undo_directory", OPT_INNODB_UNDO_DIRECTORY,
    "Directory where undo tablespace files live, this path can be absolute.",
    &srv_undo_dir, &srv_undo_dir, 0, GET_STR_ALLOC, REQUIRED_ARG, 0, 0, 0, 0, 0,
@@ -1900,7 +1899,6 @@ innodb_init_param(void)
 	srv_log_recent_written_size = INNODB_LOG_RECENT_WRITTEN_SIZE_DEFAULT;
 	srv_log_recent_closed_size = INNODB_LOG_RECENT_CLOSED_SIZE_DEFAULT;
 	srv_log_write_max_size = INNODB_LOG_WRITE_MAX_SIZE_DEFAULT;
-	srv_log_checksums = true;
 	log_checksum_algorithm_ptr = srv_log_checksums ?
 		log_block_calc_checksum_crc32 : log_block_calc_checksum_none;
 
@@ -2921,7 +2919,6 @@ xtrabackup_scan_log_recs(
 			return(false);
 		} else if (!checksum_is_ok) {
 			/* Garbage or an incompletely written log block */
-
 			msg("xtrabackup: warning: Log block checksum mismatch"
 			    " (block no %lu at lsn " LSN_PF "): \n"
 			    "expected %lu, calculated checksum %lu\n",

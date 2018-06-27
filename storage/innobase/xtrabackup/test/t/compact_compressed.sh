@@ -15,7 +15,6 @@ fi
 MYSQLD_EXTRA_MY_CNF_OPTS="
 innodb_strict_mode
 innodb_file_per_table
-innodb_file_format=Barracuda
 # Set the minimal log file size to minimize xtrabackup_logfile
 # Recovering compressed pages is extremely slow with UNIV_ZIP_DEBUG
 innodb_log_file_size=1M"

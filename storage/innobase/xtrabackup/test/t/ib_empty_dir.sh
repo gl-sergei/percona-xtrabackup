@@ -3,7 +3,7 @@
 
 start_server
 
-innobackupex --no-timestamp $topdir/backup
+xtrabackup --backup --target-dir=$topdir/backup
 backup_dir=$topdir/backup
 vlog "Backup created in directory $backup_dir"
 
@@ -15,20 +15,20 @@ vlog "Applying log"
 vlog "###########"
 vlog "# PREPARE #"
 vlog "###########"
-innobackupex --apply-log $backup_dir
+xtrabackup --prepare --target-dir=$backup_dir
 vlog "Restoring MySQL datadir"
 mkdir -p $mysql_datadir
 touch $mysql_datadir/anyfile
 vlog "###########"
 vlog "# RESTORE #"
 vlog "###########"
-run_cmd_expect_failure $IB_BIN $IB_ARGS --copy-back $backup_dir
+run_cmd_expect_failure $XB_BIN $XB_ARGS --copy-back --target-dir=$backup_dir
 
 if grep -q "is not empty!" $OUTFILE
 then
-    vlog "innobackupex reported error about non-empty dirrectory correctly"
+    vlog "xtrabackup reported error about non-empty dirrectory correctly"
     exit 0
 else
-    vlog "innobackupex did not report an error about non-empty dir"
+    vlog "xtrabackup did not report an error about non-empty dir"
     exit 1
 fi

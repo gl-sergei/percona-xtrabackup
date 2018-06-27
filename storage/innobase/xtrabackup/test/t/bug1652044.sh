@@ -9,8 +9,3 @@ mysql -e "GRANT ALL PRIVILEGES ON * . * TO 'backup'@'localhost'"
 
 run_cmd ${XB_BIN} --no-defaults --backup -ubackup -S $MYSQLD_SOCKET \
 		  -P $MYSQLD_PORT -psecret --target-dir=$topdir/backup
-
-rm -rf $topdir/backup
-
-run_cmd ${IB_BIN} --no-defaults -ubackup -psecret -S $MYSQLD_SOCKET \
-		  -P $MYSQLD_PORT $topdir/backup

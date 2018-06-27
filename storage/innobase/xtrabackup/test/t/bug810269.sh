@@ -9,8 +9,7 @@ if [ -z "$INNODB_VERSION" ]; then
     skip_test "Requires InnoDB plugin or XtraDB"
 fi
 
-start_server "--innodb_strict_mode --innodb_file_per_table \
---innodb_file_format=Barracuda"
+start_server "--innodb_strict_mode --innodb_file_per_table"
 
 load_dbase_schema incremental_sample
 

@@ -7,12 +7,12 @@
 start_server
 
 mkdir $topdir/backup
-logfile=$topdir/backup/innobackupex_log
+logfile=$topdir/backup/xtrabackup_log
 
-# Don't use run_cmd_* or innobackupex functions here to avoid logging
+# Don't use run_cmd_* or xtrabackup functions here to avoid logging
 # the full command line (including the password in plaintext)
 set +e
-$IB_BIN $IB_ARGS --password=secretpassword $topdir/backup 2>&1 | tee $logfile
+$XB_BIN $XB_ARGS --backup --password=secretpassword --target-dir=$topdir/backup 2>&1 | tee $logfile
 set -e
 
 # Check that the password was not logged in plaintext

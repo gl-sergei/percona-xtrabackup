@@ -12,8 +12,3 @@ run_cmd_expect_failure ${XB_BIN} --defaults-file= --defaults-group=mysqld.2 \
 	  --no-version-check --move-back --force-non-empty-directories \
 	  --target-dir=$topdir/backup 2>&1 | \
 	  grep "Error: datadir must be specified"
-
-run_cmd_expect_failure ${IB_BIN} --defaults-file= --defaults-group=mysqld.2 \
-	  --no-version-check --move-back --force-non-empty-directories \
-	  $topdir/backup 2>&1 | \
-	  grep "Error: datadir must be specified"

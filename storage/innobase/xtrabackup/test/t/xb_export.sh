@@ -66,8 +66,7 @@ then
     fi
 fi
 
-mysql_extra_args="--innodb_file_per_table $import_option \
---innodb_file_format=Barracuda"
+mysql_extra_args="--innodb_file_per_table $import_option"
 
 # Starting database server
 start_server $mysql_extra_args

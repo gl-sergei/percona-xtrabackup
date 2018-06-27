@@ -114,8 +114,8 @@ vlog "===================== case 1 ====================="
 bg_run bg_select_pid "mysql_select 3"
 bg_run bg_update_pid "mysql_update 3"
 
-innobackupex $topdir/full --kill-long-queries-timeout=50 \
-                          --kill-long-query-type=all
+xtrabackup --backup --target-dir=$topdir/full/1 --kill-long-queries-timeout=50 \
+           --kill-long-query-type=all
 
 bg_wait_ok $bg_select_pid
 bg_wait_ok $bg_update_pid
@@ -124,7 +124,7 @@ kill_all_queries
 
 # ==============================================================
 # this case can succeed for two reasons
-# 1. update was waited for by innobackupex an finished successfully
+# 1. update was waited for by xtrabackup an finished successfully
 #    by the time of kill_all_queries
 # 2. update was stared late and did not block FTWRL but was locked by
 #    it. then it may be still alive by the time of kill_all_queries
@@ -133,8 +133,8 @@ bg_run bg_select_pid "mysql_select 200"
 bg_run bg_update_pid "mysql_update 5"
 wait_for_connection_count 2
 
-innobackupex $topdir/full --kill-long-queries-timeout=3 \
-                          --kill-long-query-type=select
+xtrabackup --backup --target-dir=$topdir/full/2 --kill-long-queries-timeout=3 \
+           --kill-long-query-type=select
 
 bg_wait_fail $bg_select_pid
 bg_wait_ok $bg_update_pid
@@ -147,8 +147,8 @@ bg_run bg_select_pid "mysql_select 200"
 bg_run bg_update_pid "mysql_update 200"
 wait_for_connection_count 2
 
-innobackupex $topdir/full --kill-long-queries-timeout=3 \
-                          --kill-long-query-type=all
+xtrabackup --backup --target-dir=$topdir/full/3 --kill-long-queries-timeout=3 \
+           --kill-long-query-type=all
 
 bg_wait_fail $bg_select_pid
 bg_wait_fail $bg_update_pid
@@ -161,7 +161,8 @@ bg_run bg_select_pid "mysql_select 200"
 bg_run bg_update_pid "mysql_update 200"
 wait_for_connection_count 2
 
-run_cmd_expect_failure ${IB_BIN} ${IB_ARGS} $topdir/full \
+run_cmd_expect_failure ${XB_BIN} ${XB_ARGS} --backup \
+                          --target-dir=$topdir/full/4 \
                           --ftwrl-wait-timeout=3 \
                           --ftwrl-wait-query-type=all \
                           --ftwrl-wait-threshold=1 \
@@ -182,7 +183,8 @@ wait_for_connection_count 2
 # sleep at least --ftwrl-wait-threshold seconds
 sleep 1
 
-run_cmd_expect_failure ${IB_BIN} ${IB_ARGS} $topdir/full \
+run_cmd_expect_failure ${XB_BIN} ${XB_ARGS} --backup \
+                          --target-dir=$topdir/full/5 \
                           --ftwrl-wait-timeout=3 \
                           --ftwrl-wait-query-type=update \
                           --ftwrl-wait-threshold=1 \
@@ -204,12 +206,12 @@ wait_for_connection_count 2
 # sleep at least --ftwrl-wait-threshold seconds
 sleep 1
 
-innobackupex $topdir/full \
-                          --ftwrl-wait-timeout=6 \
-                          --ftwrl-wait-query-type=update \
-                          --ftwrl-wait-threshold=1 \
-                          --kill-long-queries-timeout=1 \
-                          --kill-long-query-type=all
+xtrabackup --backup --target-dir=$topdir/full/6 \
+           --ftwrl-wait-timeout=6 \
+           --ftwrl-wait-query-type=update \
+           --ftwrl-wait-threshold=1 \
+           --kill-long-queries-timeout=1 \
+           --kill-long-query-type=all
 
 bg_wait_fail $bg_select_pid
 bg_wait_ok $bg_update_pid

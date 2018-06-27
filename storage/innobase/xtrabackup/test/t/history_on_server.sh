@@ -53,15 +53,6 @@ mkdir $backup_dir
 
 
 ###############################################################################
-# This tests the to make sure that no xtrabackup_history unless --history is
-# specified
-#vlog "Testing no --history"
-#innobackupex --stream=tar $backup_dir > /dev/null
-
-#run_cmd_expect_failure get_one_value "uuid"
-
-
-###############################################################################
 # This tests the basic creation of a history record and that fields are
 # populated with some data. It also tests specifically that
 # partial, incremental, compact, compressed, encrypted and format are exactly
@@ -71,7 +62,8 @@ mkdir $backup_dir
 # manually and doesn't seem to be something that would be required to be
 # validated.
 vlog "Testing basic history record"
-innobackupex --history=test1 --stream=tar $backup_dir > /dev/null
+xtrabackup --backup --history=test1 --stream=xbstream \
+--target-dir=$backup_dir/`date +%s` > /dev/null
 
 for column in uuid name tool_name tool_command tool_version ibbackup_version \
 server_version start_time end_time lock_time binlog_pos innodb_from_lsn \
@@ -85,7 +77,7 @@ do
     check_for_value "$column" "N"
 done
 
-check_for_value "format" "tar"
+check_for_value "format" "xbstream"
 
 # saving for later
 get_one_value "innodb_to_lsn"
@@ -101,8 +93,8 @@ vlog "Testing incremental based on history name"
 
 multi_row_insert incremental_sample.test \({101..200},100\)
 
-innobackupex --history=test1 --incremental \
---incremental-history-name=test1 $backup_dir > /dev/null
+xtrabackup --backup --history=test1 --incremental \
+--incremental-history-name=test1 --target-dir=$backup_dir/`date +%s` > /dev/null
 
 # saving for later
 get_one_value "uuid"
@@ -128,8 +120,8 @@ multi_row_insert incremental_sample.test \({201..300},100\)
 # innodb_from_lsn (third_from_lsn) should be the same as the value in 
 # second_to_lsn. This tests that we find the right record in the test1 series
 # out of the two records that should be present before the backup is done.
-innobackupex --history=test1 --incremental \
---incremental-history-name=test1 $backup_dir > /dev/null
+xtrabackup --backup --history=test1 --incremental-history-name=test1 \
+--target-dir=$backup_dir/`date +%s` > /dev/null
 
 # saving for later
 get_one_value "uuid"
@@ -149,7 +141,7 @@ fi
 ###############################################################################
 # This tests that we can base an incremental on a specific history record
 # identified by its uuid that we captured earlier from a history record or it
-# could be scraped from the output of innobackupex at some point in the past.
+# could be scraped from the output of xtrabackup at some point in the past.
 # It also tests specifically that incremental, compressed, encrypted and format
 # are exactly the correct values after the backup.
 # It tests that --history can be specified, resulting in a history record with
@@ -157,9 +149,10 @@ fi
 vlog "Testing incremental based on history uuid"
 multi_row_insert incremental_sample.test \({301..400},100\)
 
-innobackupex --history --incremental --incremental-history-uuid=$third_uuid \
+xtrabackup --backup --history --incremental-history-uuid=$third_uuid \
 --stream=xbstream --compress --encrypt=AES256 \
---encrypt-key=percona_xtrabackup_is_awesome___ $backup_dir > /dev/null
+--encrypt-key=percona_xtrabackup_is_awesome___ \
+--target-dir=$backup_dir/1 > /dev/null
 
 get_one_value "innodb_from_lsn"
 fourth_from_lsn=$val
@@ -173,12 +166,12 @@ check_for_value "format" "xbstream"
 check_for_value "name" "NULL"
 
 # validate command tool and encrypt key scrubbibng but need to pop off first
-# three arguments in the result added by test framework function innobackupex
+# three arguments in the result added by test framework function xtrabackup
 get_one_value "tool_command"
 val=`set -- $val; shift 2; echo "$@"`
-expected_val="--history --incremental "\
+expected_val="--backup --history "\
 "--incremental-history-uuid=$third_uuid --stream=xbstream --compress "\
-"--encrypt=AES256 --encrypt-key=... $backup_dir"
+"--encrypt=AES256 --encrypt-key=... --target-dir=$backup_dir/1"
 
 if [ -z "$val" ] || [ "$val" != "$expected_val" ]
 then
@@ -194,17 +187,19 @@ fi
 
 
 ###############################################################################
-# This tests that innobackupex fails when an invalid --incremental-history-name
+# This tests that xtrabackup fails when an invalid --incremental-history-name
 # is given.
 vlog "Testing bad --incremental-history-name"
-run_cmd_expect_failure $IB_BIN $IB_ARGS --incremental \
---incremental-history-name=foo --stream=tar $backup_dir > /dev/null
+run_cmd_expect_failure $XB_BIN $XB_ARGS --backup \
+--incremental-history-name=foo --stream=xbstream \
+--target-dir=$backup_dir/`date +%s` > /dev/null
 
 
 
 ###############################################################################
-# This tests that innobackupex fails when an invalid --incremental-history-uuid
+# This tests that xtrabackup fails when an invalid --incremental-history-uuid
 # is given.
 vlog "Testing bad --incremental-history-uuid"
-run_cmd_expect_failure $IB_BIN $IB_ARGS --incremental \
---incremental-history-uuid=foo --stream=tar $backup_dir > /dev/null
+run_cmd_expect_failure $XB_BIN $XB_ARGS --backup \
+--incremental-history-uuid=foo --stream=xbstream \
+--target-dir=$backup_dir/`date +%s` > /dev/null

@@ -19,18 +19,18 @@ innodb_checksum_algorithm=$1
 
     record_db_state sakila
 
-    innobackupex --no-timestamp $topdir/backup
+    xtrabackup --backup --target-dir=$topdir/backup
 
     egrep '^innodb_checksum_algorithm='$1'$' $topdir/backup/backup-my.cnf
 
     stop_server
     rm -rf $MYSQLD_DATADIR/*
 
-    run_cmd ${IB_BIN} \
-        ${IB_ARGS/\/--defaults-file=*my.cnf/$topdir\/backup\/backup-my.cnf} \
-        --apply-log $topdir/backup
+    run_cmd ${XB_BIN} \
+        ${XB_ARGS/\/--defaults-file=*my.cnf/$topdir\/backup\/backup-my.cnf} \
+        --prepare --target-dir=$topdir/backup
 
-    innobackupex --copy-back $topdir/backup
+    xtrabackup --copy-back --target-dir=$topdir/backup
 
     rm -rf $topdir/backup
 
