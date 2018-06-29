@@ -797,6 +797,7 @@ IF(NOT WITHOUT_SERVER)
   MYSQL_CHECK_PROTOBUF()
 ENDIF()
 # Try and set CURL_LIBRARY
+SET(WITH_CURL "system" CACHE STRING "Using system curl by default")
 MYSQL_CHECK_CURL()
 # Add RapidJSON library.
 # TODO: Support -DWITH_RAPIDJSON=system.

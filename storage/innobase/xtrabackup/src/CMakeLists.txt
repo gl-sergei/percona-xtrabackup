@@ -14,7 +14,6 @@
 # Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA
 
 INCLUDE(gcrypt)
-INCLUDE(curl)
 INCLUDE(libev)
 
 INCLUDE(${MYSQL_CMAKE_SCRIPT_DIR}/compile_flags.cmake)
@@ -22,9 +21,7 @@ INCLUDE(${MYSQL_CMAKE_SCRIPT_DIR}/compile_flags.cmake)
 ADD_SUBDIRECTORY(crc)
 ADD_SUBDIRECTORY(jsmn)
 
-SET(WITH_CURL "system" CACHE STRING "Using system curl by default")
 FIND_GCRYPT()
-MYSQL_CHECK_CURL()
 FIND_EV()
 
 # xxd is needed to embed version_check script
@@ -107,10 +104,12 @@ SET_TARGET_PROPERTIES(xtrabackup PROPERTIES ENABLE_EXPORTS TRUE)
 
 TARGET_LINK_LIBRARIES(xtrabackup
   sql_main
+  innobase
   sql_dd
   sql_gis
-  rpl
+  sql_main
   slave
+  rpl
   mysqlservices
   binlog
   mysqlclient

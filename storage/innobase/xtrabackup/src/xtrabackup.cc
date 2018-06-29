@@ -5656,7 +5656,7 @@ xb_space_create_file(
 
 		success = os_file_set_size(
 			path, *file, size * UNIV_PAGE_SIZE, srv_read_only_mode,
-			false);
+			false, false);
 	}
 #else
 	success = os_file_set_size(path, *file, size * UNIV_PAGE_SIZE,
@@ -6318,7 +6318,7 @@ xb_process_datadir(
 			process_datadir_l1cbk(path, fullpath, l1name,
 				suffix, func, data);
 		}, false);
-	return(ret ? DB_SUCCESS : DB_ERROR);
+	return ret;
 }
 
 /************************************************************************
