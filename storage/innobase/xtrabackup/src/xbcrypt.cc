@@ -309,11 +309,11 @@ process(File filein, ds_file_t* fileout, const char* action)
 			    "written\n.", my_progname, action, ttlchunkswritten,
 			    ttlbyteswritten);
 	}
-	free(chunkbuf);
+	my_free(chunkbuf);
 	return 0;
 
 err:
-	free(chunkbuf);
+	my_free(chunkbuf);
 	return 1;
 }
 

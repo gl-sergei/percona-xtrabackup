@@ -8,15 +8,15 @@ innodb_data_home_dir=
 "
 start_server
 
-innobackupex --no-timestamp $topdir/backup
+xtrabackup --backup --target-dir=$topdir/backup
 
 stop_server
 
 rm -rf $MYSQLD_DATADIR/*
 
-innobackupex --apply-log $topdir/backup
+xtrabackup --prepare --target-dir=$topdir/backup
 
-innobackupex --copy-back $topdir/backup
+xtrabackup --copy-back --target-dir=$topdir/backup
 
 test -f $MYSQLD_DATADIR/ibdata1
 

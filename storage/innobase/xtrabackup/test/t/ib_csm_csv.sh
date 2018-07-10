@@ -19,7 +19,7 @@ vlog "Initial rows added"
 mkdir -p $topdir/backup
 
 vlog "Starting backup"
-innobackupex $topdir/backup
+xtrabackup --backup --target-dir=$topdir/backup
 full_backup_dir=`grep "Backup created in directory" $OUTFILE | awk -F\' '{print $2}'`
 vlog "Full backup done to directory $full_backup_dir"
 
@@ -32,7 +32,7 @@ vlog "Preparing backup"
 vlog "###########"
 vlog "# PREPARE #"
 vlog "###########"
-innobackupex --apply-log $full_backup_dir
+xtrabackup --prepare --target-dir=$full_backup_dir
 vlog "Data prepared for restore"
 
 # Destroying mysql data
@@ -45,7 +45,7 @@ vlog "Copying files"
 vlog "###########"
 vlog "# RESTORE #"
 vlog "###########"
-innobackupex --copy-back $full_backup_dir
+xtrabackup --copy-back --target-dir=$full_backup_dir
 vlog "Data restored"
 
 start_server --innodb_file_per_table

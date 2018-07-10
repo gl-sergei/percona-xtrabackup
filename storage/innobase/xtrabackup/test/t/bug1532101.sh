@@ -33,7 +33,7 @@ job_master=$!
 
 sleep 5
 
-innobackupex --no-timestamp $topdir/backup
+xtrabackup --backup --target-dir=$topdir/backup
 
 kill -SIGKILL $job_master
 stop_server

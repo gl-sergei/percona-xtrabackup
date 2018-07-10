@@ -12,4 +12,4 @@ INSERT INTO t1 VALUES (4), (5), (6);
 EOF
 
 vlog "Starting backup"
-innobackupex  --no-timestamp $topdir/backup --log-copy-interval=590
+xtrabackup --backup --target-dir=$topdir/backup --log-copy-interval=590

@@ -27,7 +27,7 @@ INSERT INTO t(c) SELECT c FROM t;
 COMMIT;
 EOF
 
-innobackupex --no-timestamp $topdir/backup
+xtrabackup --backup --target-dir=$topdir/backup
 
 # Check that the value of gtid_executed is in xtrabackup_binlog_info
 if ! egrep -q '^mysql-bin.[0-9]+[[:space:]]+[0-9]+[[:space:]]+[a-f0-9:-]+$' \

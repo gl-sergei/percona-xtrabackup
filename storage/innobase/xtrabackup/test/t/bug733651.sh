@@ -27,7 +27,7 @@ fi
 
 start_server
 
-innobackupex --no-timestamp $topdir/backup
+xtrabackup --backup --target-dir=$topdir/backup
 
 # test presence of options
 for option in $options ; do

@@ -3654,6 +3654,7 @@ ulint
 xb_data_files_init(void)
 /*====================*/
 {
+	os_create_block_cache();
 	xb_fil_io_init();
 
 	return(xb_load_tablespaces());
@@ -3696,6 +3697,8 @@ xb_data_files_close(void)
 		ib::warn() << os_thread_count << " threads created by InnoDB"
 			" had not exited at shutdown!";
 	}
+
+	undo_spaces_deinit();
 
 	os_aio_free();
 
@@ -6044,8 +6047,9 @@ xtrabackup_apply_delta(
 	os_file_set_nocache(src_file.m_file, src_path, "OPEN");
 
 	dst_file = xb_delta_open_matching_space(
-			entry.db_name.c_str(), space_name, info.space_id,
-			info.zip_size, dst_path, sizeof(dst_path), &success);
+			entry.db_name.empty() ? nullptr : entry.db_name.c_str(),
+			space_name, info.space_id, info.zip_size, dst_path,
+			sizeof(dst_path), &success);
 	if (!success) {
 		msg("xtrabackup: error: cannot open %s\n", dst_path);
 		goto error;
@@ -7086,6 +7090,7 @@ skip_check:
 	os_thread_open();
 	trx_pool_init();
 	ut_crc32_init();
+	clone_init();
 
 	xb_filters_init();
 
@@ -7158,6 +7163,7 @@ skip_check:
 
 		xb_filter_hash_free(inc_dir_tables_hash);
 	}
+	clone_free();
 	fil_close();
 
 	trx_pool_close();

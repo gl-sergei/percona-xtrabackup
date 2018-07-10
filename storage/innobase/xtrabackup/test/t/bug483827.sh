@@ -21,8 +21,8 @@ modify_args
 sed -e 's/\[mysqld\]/[mysqld1]/' $topdir/my.cnf > $topdir/my_multi.cnf
 
 # Backup
-innobackupex --no-timestamp --defaults-group=mysqld1 $backup_dir
-innobackupex --apply-log $backup_dir
+xtrabackup --backup --defaults-group=mysqld1 --target-dir=$backup_dir
+xtrabackup --prepare --target-dir=$backup_dir
 
 stop_server
 
@@ -30,7 +30,7 @@ stop_server
 rm -rf ${mysql_datadir}/*
 
 # restore backup
-innobackupex --copy-back --defaults-group=mysqld1 $backup_dir
+xtrabackup --copy-back --defaults-group=mysqld1 --target-dir=$backup_dir
 
 # make sure that data are in correct place
 if [ ! -f ${mysql_datadir}/ibdata1 ] ; then

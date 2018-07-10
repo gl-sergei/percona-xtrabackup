@@ -27,7 +27,7 @@ has_backup_locks && skip_test "Requires server without backup locks support"
 
 # take a backup with stream mode
 mkdir -p $topdir/backup
-innobackupex --galera-info --stream=xbstream $topdir/backup > $topdir/backup/stream.xbs
+xtrabackup --backup --galera-info --stream=xbstream --target-dir=$topdir/backup > $topdir/backup/stream.xbs
 
 xbstream -xv -C $topdir/backup < $topdir/backup/stream.xbs
 if [ -f $topdir/backup/xtrabackup_galera_info ] ; then

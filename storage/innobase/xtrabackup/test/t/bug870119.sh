@@ -15,7 +15,7 @@ start_server
 load_dbase_schema sakila
 load_dbase_data sakila
 
-innobackupex --no-timestamp $topdir/backup --parallel=16
+xtrabackup --backup --target-dir=$topdir/backup --parallel=16
 
 # No need to prepare and verify the backup, as the bug was resulting in a fatal
 # error during the backup

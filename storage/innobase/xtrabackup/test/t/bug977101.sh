@@ -16,7 +16,7 @@ setup_slave $slave_id $master_id
 switch_server $slave_id
 
 # Check that binlog info is correct with --safe-slave-backup
-innobackupex --no-timestamp --safe-slave-backup $topdir/backup
+xtrabackup --backup --safe-slave-backup --target-dir=$topdir/backup
 cat $topdir/backup/xtrabackup_binlog_info
 run_cmd egrep -q '^mysql-bin.[0-9]+[[:space:]]+[0-9]+$' \
     $topdir/backup/xtrabackup_binlog_info
@@ -24,7 +24,7 @@ run_cmd egrep -q '^mysql-bin.[0-9]+[[:space:]]+[0-9]+$' \
 # Check that both binlog info and slave info are correct with 
 # --safe-slave-backup
 rm -rf $topdir/backup
-innobackupex --no-timestamp --slave-info --safe-slave-backup $topdir/backup
+xtrabackup --backup --slave-info --safe-slave-backup --target-dir=$topdir/backup
 cat $topdir/backup/xtrabackup_binlog_info
 run_cmd egrep -q '^mysql-bin.[0-9]+[[:space:]]+[0-9]+$' \
     $topdir/backup/xtrabackup_binlog_info

@@ -1335,7 +1335,6 @@ bool copy_if_ext_matches(
 	void *arg)
 {
 	char name[FN_REFLEN];
-	char path[FN_REFLEN];
 
 	if (!entry.db_name.empty()) {
 		snprintf(name, FN_REFLEN, "%s/%s",
@@ -1343,9 +1342,6 @@ bool copy_if_ext_matches(
 	} else {
 		snprintf(name, FN_REFLEN, "%s", entry.file_name.c_str());
 	}
-
-	fn_format(path, name, entry.datadir.c_str(), "",
-		  MY_UNPACK_FILENAME | MY_SAFE_PATH);
 
 	if (entry.is_empty_dir ||
 	    !filename_matches(name, ext_list)) {
@@ -1356,8 +1352,8 @@ bool copy_if_ext_matches(
 		unlink(name);
 	}
 
-	if (!copy_file(ds_data, path, name, 1)) {
-		msg("Failed to copy file %s\n", path);
+	if (!copy_file(ds_data, entry.path.c_str(), name, 1)) {
+		msg("Failed to copy file %s\n", entry.path.c_str());
 		return false;
 	}
 
@@ -1438,7 +1434,13 @@ cleanup:
 	return(ret);
 }
 
-bool rm_empty_dirs_if_ext_matches(
+/* Removes empty directories and files in database subdirectories if those files
+match given list of file extensions.
+@param[in]	ext_list	list of extensions to match against
+@param[in]	entry		datadir entry
+@param[in]	arg		unused
+@return true if success */
+bool rm_for_cleanup_full_backup(
 	const char **ext_list,
 	const datadir_entry_t& entry,
 	void* arg)
@@ -1450,22 +1452,26 @@ bool rm_empty_dirs_if_ext_matches(
 		snprintf(name, FN_REFLEN, "%s/%s", entry.db_name.c_str(),
 			 entry.file_name.c_str());
 	} else {
-		snprintf(name, FN_REFLEN, "%s", entry.file_name.c_str());
+		return(true);
 	}
 
 	fn_format(path, name, entry.datadir.c_str(), "",
 		  MY_UNPACK_FILENAME | MY_SAFE_PATH);
 
 	if (entry.is_empty_dir) {
-		rmdir(path);
+		if (rmdir(path) != 0) {
+			return(false);
+		}
 	}
 
 	if (xtrabackup_incremental && !entry.is_empty_dir
 	    && !filename_matches(path, ext_list)) {
-		unlink(path);
+		if (unlink(path) != 0) {
+			return(false);
+		}
 	}
 
-	return true;
+	return(true);
 }
 
 bool
@@ -1479,7 +1485,7 @@ cleanup_full_backup()
 	we copy files from incremental dir. */
 
 	ret = xb_process_datadir(xtrabackup_target_dir, "",
-		std::bind(rm_empty_dirs_if_ext_matches,
+		std::bind(rm_for_cleanup_full_backup,
 			  ext_list, std::placeholders::_1,
 			  std::placeholders::_2), nullptr);
 

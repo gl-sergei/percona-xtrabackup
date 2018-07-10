@@ -16,7 +16,7 @@ ${MYSQL} ${MYSQL_ARGS} -e "select * from information_schema.XTRADB_ADMIN_COMMAND
 
 # take a backup with stream mode
 mkdir -p $topdir/backup
-innobackupex --stream=xbstream $topdir/backup > $topdir/backup/stream.xbs
+xtrabackup --backup --stream=xbstream --target-dir=$topdir/backup > $topdir/backup/stream.xbs
 
 xbstream -xv -C $topdir/backup < $topdir/backup/stream.xbs
 if [ -f $topdir/backup/ib_lru_dump ] ; then

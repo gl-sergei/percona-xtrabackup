@@ -15,15 +15,15 @@ start_server
 load_sakila
 
 # backup
-innobackupex --no-timestamp $topdir/backup
-innobackupex --incremental --no-timestamp \
-    --incremental-basedir=$topdir/backup $topdir/inc1
-innobackupex --incremental --no-timestamp \
-    --incremental-basedir=$topdir/inc1 $topdir/inc2
+xtrabackup --backup --target-dir=$topdir/backup
+xtrabackup --backup \
+    --incremental-basedir=$topdir/backup --target-dir=$topdir/inc1
+xtrabackup --backup \
+    --incremental-basedir=$topdir/inc1 --target-dir=$topdir/inc2
 
 # prepare (last one would fail)
-innobackupex --apply-log --redo-only $topdir/backup
-innobackupex --apply-log --redo-only --incremental-dir=$topdir/inc1 \
-    $topdir/backup
-innobackupex --apply-log --redo-only --incremental-dir=$topdir/inc2 \
-    $topdir/backup
+xtrabackup --prepare --apply-log-only --target-dir=$topdir/backup
+xtrabackup --prepare --apply-log-only --incremental-dir=$topdir/inc1 \
+    --target-dir=$topdir/backup
+xtrabackup --prepare --apply-log-only --incremental-dir=$topdir/inc2 \
+    --target-dir=$topdir/backup

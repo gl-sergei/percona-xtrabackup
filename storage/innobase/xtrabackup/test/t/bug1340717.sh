@@ -27,9 +27,9 @@ job_master=$!
 
 sleep 5;
 
-innobackupex --no-timestamp --include="sakila.actor" $topdir/backup
+xtrabackup --backup --include="sakila.actor" --target-dir=$topdir/backup
 
 kill -SIGKILL $job_master
 stop_server
 
-innobackupex --apply-log $topdir/backup
+xtrabackup --prepare --target-dir=$topdir/backup

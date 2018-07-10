@@ -16,26 +16,25 @@ EOF
 # Full backup
 # backup root directory
 vlog "Starting backup"
-innobackupex  --no-timestamp $topdir/full
+xtrabackup --backup --target-dir=$topdir/full
 
 vlog "Creating incremental backup"
 
-innobackupex --incremental --no-timestamp \
-    --incremental-basedir=$topdir/full $topdir/inc
+xtrabackup --backup --incremental-basedir=$topdir/full --target-dir=$topdir/inc
 
 # remove space_id = something line from .meta file
 sed -ie '/space_id/ d' $topdir/inc/test/t1.ibd.meta
 
 vlog "Preparing backup"
 
-innobackupex --apply-log --redo-only $topdir/full
+xtrabackup --prepare --apply-log-only --target-dir=$topdir/full
 vlog "Log applied to full backup"
 
-innobackupex --apply-log --redo-only --incremental-dir=$topdir/inc \
-    $topdir/full
+xtrabackup --prepare --apply-log-only --incremental-dir=$topdir/inc \
+    --target-dir=$topdir/full
 vlog "Delta applied to full backup"
 
-innobackupex --apply-log $topdir/full
+xtrabackup --prepare --target-dir=$topdir/full
 vlog "Data prepared for restore"
 
 grep -q "This backup was taken with XtraBackup 2.0.1" $OUTFILE

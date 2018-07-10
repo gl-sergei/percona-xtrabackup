@@ -12,8 +12,8 @@ start_server --innodb_file_per_table
 load_sakila
 
 # Take a full compressed backup
-innobackupex --compress --no-timestamp $topdir/full
+xtrabackup --backup --compress --target-dir=$topdir/full
 
 # Test that incremental backups work without uncompressing the full one
-innobackupex --compress --no-timestamp --incremental \
-    --incremental-basedir=$topdir/full $topdir/incremental
+xtrabackup --backup --compress \
+    --incremental-basedir=$topdir/full --target-dir=$topdir/incremental

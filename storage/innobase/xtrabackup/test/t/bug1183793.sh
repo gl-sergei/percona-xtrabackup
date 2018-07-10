@@ -8,7 +8,7 @@ open_files_limit=1234
 
 start_server
 
-innobackupex --no-timestamp $topdir/backup
+xtrabackup --backup --target-dir=$topdir/backup
 
 grep -q 'open files limit requested 1234' $OUTFILE \
     || die "Could not set the open files limit"

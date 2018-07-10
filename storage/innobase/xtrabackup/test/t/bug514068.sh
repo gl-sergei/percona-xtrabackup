@@ -7,7 +7,7 @@
 
 start_server
 
-innobackupex  --no-timestamp $topdir/backup >$topdir/stdout 2>$topdir/stderr
+xtrabackup --backup --target-dir=$topdir/backup >$topdir/stdout 2>$topdir/stderr
 
 stop_server
 # Remove datadir
@@ -15,11 +15,11 @@ rm -r $mysql_datadir
 
 # Restore sakila
 vlog "Applying log"
-innobackupex --apply-log $topdir/backup >>$topdir/stdout 2>>$topdir/stderr
+xtrabackup --prepare --target-dir=$topdir/backup >>$topdir/stdout 2>>$topdir/stderr
 
 vlog "Restoring MySQL datadir"
 mkdir -p $mysql_datadir
-innobackupex --copy-back $topdir/backup >>$topdir/stdout 2>>$topdir/stderr
+xtrabackup --copy-back --target-dir=$topdir/backup >>$topdir/stdout 2>>$topdir/stderr
 
 if [ "`cat $topdir/stdout | wc -l`" -gt 0 ]
 then

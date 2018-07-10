@@ -16,9 +16,10 @@ ${MYSQL} ${MYSQL_ARGS} -e "select * from information_schema.XTRADB_ADMIN_COMMAND
 
 # take a backup with stream mode
 mkdir -p $topdir/backup
-innobackupex --stream=tar $topdir/backup > $topdir/backup/stream.tar
+xtrabackup --backup --stream=xbstream --target-dir=$topdir/backup > $topdir/backup/stream.xbstream
 
-if $TAR itf $topdir/backup/stream.tar | grep ib_lru_dump ; then
+mkdir $topdir/backup/tmp
+if xbstream -C $topdir/backup/tmp xv < $topdir/backup/stream.xbstream 2>&1 | grep ib_lru_dump ; then
     vlog "LRU dump has been backed up"
 else
     vlog "LRU dump has not been backed up"

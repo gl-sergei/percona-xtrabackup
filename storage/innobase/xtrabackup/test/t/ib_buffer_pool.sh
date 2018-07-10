@@ -22,8 +22,8 @@ mkdir $mysql_datadir/pool
 ${MYSQL} ${MYSQL_ARGS} -e "SET GLOBAL innodb_buffer_pool_dump_now=ON;"
 
 # take a backup and apply log
-innobackupex --no-timestamp $topdir/backup
-innobackupex --apply-log $topdir/backup
+xtrabackup --backup --target-dir=$topdir/backup
+xtrabackup --prepare --target-dir=$topdir/backup
 
 if [ -f $topdir/backup/pool/dump ] ; then
     vlog "Buffer pool dump has been backed up"
@@ -34,18 +34,22 @@ fi
 
 # take streaming backup
 mkdir -p $topdir/backup
-innobackupex --stream=tar $topdir/backup > $topdir/backup/stream.tar
+xtrabackup --backup --stream=xbstream --target-dir=$topdir/backup > $topdir/backup/stream.xbstream
 
-if $TAR itf $topdir/backup/stream.tar | grep 'pool/dump' ; then
+mkdir $topdir/backup/t
+
+if xbstream -C $topdir/backup/t -xv < $topdir/backup/stream.xbstream 2>&1 | grep 'pool/dump' ; then
     vlog "Buffer pool dump has been restored"
 else
     vlog "Buffer pool dump has not been restored"
     exit -1
 fi
 
+rm -rf $topdir/backup/t
+
 # restore from backup
 rm -rf $mysql_datadir/*
-innobackupex --copy-back $topdir/backup
+xtrabackup --copy-back --target-dir=$topdir/backup
 
 if [ -f $mysql_datadir/pool/dump ] ; then
     vlog "Buffer pool dump has been restored"

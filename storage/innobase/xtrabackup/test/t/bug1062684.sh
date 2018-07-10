@@ -23,7 +23,7 @@ mkdir -p $topdir/backup
 
 vlog "Starting backup"
 full_backup_dir=$topdir/backup/full
-innobackupex --no-timestamp $full_backup_dir
+xtrabackup --backup --target-dir=$full_backup_dir
 vlog "Full backup done to directory $full_backup_dir"
 
 # Changing data
@@ -48,8 +48,8 @@ vlog "###############"
 
 # Incremental backup
 inc_backup_dir=$topdir/backup/inc
-innobackupex --incremental --incremental-basedir=$full_backup_dir \
-    --no-timestamp $inc_backup_dir
+xtrabackup --backup --incremental-basedir=$full_backup_dir \
+    --target-dir=$inc_backup_dir
 vlog "Incremental backup done to directory $inc_backup_dir"
 
 vlog "Preparing backup"
@@ -57,18 +57,18 @@ vlog "Preparing backup"
 vlog "##############"
 vlog "# PREPARE #1 #"
 vlog "##############"
-innobackupex --apply-log --redo-only $full_backup_dir
+xtrabackup --prepare --apply-log-only --target-dir=$full_backup_dir
 vlog "Log applied to full backup"
 vlog "##############"
 vlog "# PREPARE #2 #"
 vlog "##############"
-innobackupex --apply-log --redo-only --incremental-dir=$inc_backup_dir \
-    $full_backup_dir
+xtrabackup --prepare --apply-log-only --incremental-dir=$inc_backup_dir \
+    --target-dir=$full_backup_dir
 vlog "Delta applied to full backup"
 vlog "##############"
 vlog "# PREPARE #3 #"
 vlog "##############"
-innobackupex --apply-log $full_backup_dir
+xtrabackup --prepare --target-dir=$full_backup_dir
 vlog "Data prepared for restore"
 
 # Destroying mysql data
@@ -81,7 +81,7 @@ vlog "Copying files"
 vlog "###########"
 vlog "# RESTORE #"
 vlog "###########"
-innobackupex --copy-back $full_backup_dir
+xtrabackup --copy-back --target-dir=$full_backup_dir
 vlog "Data restored"
 
 start_server

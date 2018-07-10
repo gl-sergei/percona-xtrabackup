@@ -19,14 +19,14 @@ ${XB_BIN} --defaults-file=$topdir/my.cnf --print-param | \
 mkdir $mysql_datadir/pool
 
 # take a backup
-innobackupex --no-timestamp $topdir/backup
+xtrabackup --backup --target-dir=$topdir/backup
 
 # produce buffer pool dump
 ${MYSQL} ${MYSQL_ARGS} -e "SET GLOBAL innodb_buffer_pool_dump_now=ON;"
 
 # incremental backup
-innobackupex --no-timestamp --incremental --incremental-basedir=$topdir/backup \
-    $topdir/incremental
+xtrabackup --backup --incremental-basedir=$topdir/backup \
+    --target-dir=$topdir/incremental
 
 if [ -f $topdir/incremental/pool/dump ] ; then
     vlog "Buffer pool dump has been backed up"
@@ -36,16 +36,16 @@ else
 fi
 
 # prepare
-innobackupex --apply-log --redo-only $topdir/backup
+xtrabackup --prepare --apply-log-only --target-dir=$topdir/backup
 
-innobackupex --apply-log --redo-only --incremental-dir=$topdir/incremental \
-    $topdir/backup
+xtrabackup --prepare --apply-log-only --incremental-dir=$topdir/incremental \
+    --target-dir=$topdir/backup
 
-innobackupex --apply-log $topdir/backup
+xtrabackup --prepare --target-dir=$topdir/backup
 
 # restore from backup
 rm -rf $mysql_datadir/*
-innobackupex --copy-back $topdir/backup
+xtrabackup --copy-back --target-dir=$topdir/backup
 
 if [ -f $mysql_datadir/pool/dump ] ; then
     vlog "Buffer pool dump has been restored"

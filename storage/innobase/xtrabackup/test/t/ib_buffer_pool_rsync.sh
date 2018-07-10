@@ -26,7 +26,7 @@ mkdir $mysql_datadir/pool
 ${MYSQL} ${MYSQL_ARGS} -e "SET GLOBAL innodb_buffer_pool_dump_now=ON;"
 
 # take a backup with rsync mode
-innobackupex --rsync --no-timestamp $topdir/backup
+xtrabackup --backup --rsync --target-dir=$topdir/backup
 
 if [ -f $topdir/backup/pool/dump ] ; then
     vlog "Buffer pool dump has been backed up"

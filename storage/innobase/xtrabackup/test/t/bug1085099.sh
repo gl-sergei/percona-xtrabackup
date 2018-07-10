@@ -22,4 +22,4 @@ mkdir $topdir/new_tmpdir
 # Make the default tmpdir inaccessible
 chmod 000 $MYSQLD_TMPDIR
 
-innobackupex --tmpdir=$topdir/new_tmpdir --no-timestamp $topdir/backup
+xtrabackup --tmpdir=$topdir/new_tmpdir --backup --target-dir=$topdir/backup

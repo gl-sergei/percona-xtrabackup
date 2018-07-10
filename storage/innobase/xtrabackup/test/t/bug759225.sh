@@ -21,7 +21,7 @@ load_sakila
 
 # Take backup
 mkdir -p $topdir/backup
-innobackupex --stream=tar $topdir/backup > $topdir/backup/out.tar
+xtrabackup --backup --stream=xbstream --target-dir=$topdir/backup > $topdir/backup/out.xbstream
 stop_server
 
 # Remove datadir
@@ -30,12 +30,12 @@ rm -r $mysql_datadir
 vlog "Applying log"
 backup_dir=$topdir/backup
 cd $backup_dir
-$TAR -ixvf out.tar
+xbstream -xv < out.xbstream
 cd - >/dev/null 2>&1
-innobackupex --apply-log $backup_dir
+xtrabackup --prepare --target-dir=$backup_dir
 vlog "Restoring MySQL datadir"
 mkdir -p $mysql_datadir
-innobackupex --copy-back $backup_dir
+xtrabackup --copy-back --target-dir=$backup_dir
 
 start_server
 # Check sakila

@@ -17,7 +17,7 @@ EOF
 # Full backup
 # backup root directory
 vlog "Starting backup"
-innobackupex  --no-timestamp $topdir/full
+xtrabackup --backup --target-dir=$topdir/full
 
 vlog "Rotating the table"
 
@@ -38,19 +38,18 @@ EOF
 
 vlog "Creating incremental backup"
 
-innobackupex --incremental --no-timestamp \
-    --incremental-basedir=$topdir/full $topdir/inc
+xtrabackup --backup --incremental-basedir=$topdir/full --target-dir=$topdir/inc
 
 vlog "Preparing backup"
 
-innobackupex --apply-log --redo-only $topdir/full
+xtrabackup --prepare --apply-log-only --target-dir=$topdir/full
 vlog "Log applied to full backup"
 
-innobackupex --apply-log --redo-only --incremental-dir=$topdir/inc \
-    $topdir/full
+xtrabackup --prepare --apply-log-only \
+    --incremental-dir=$topdir/inc --target-dir=$topdir/full
 vlog "Delta applied to full backup"
 
-innobackupex --apply-log $topdir/full
+xtrabackup --apply-log $topdir/full
 vlog "Data prepared for restore"
 
 checksum_t1_a=`checksum_table test t1`
@@ -65,7 +64,7 @@ vlog "Data destroyed"
 # Restore backup
 vlog "Copying files"
 
-innobackupex --copy-back $topdir/full
+xtrabackup --copy-back --target-dir=$topdir/full
 vlog "Data restored"
 
 start_server --innodb_file_per_table

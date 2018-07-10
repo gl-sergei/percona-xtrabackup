@@ -9,7 +9,7 @@ require_qpress
 start_server --innodb_file_per_table
 load_sakila
 
-innobackupex --compress --no-timestamp $topdir/backup
+xtrabackup --backup --compress --target-dir=$topdir/backup
 
 stop_server
 rm -rf ${MYSQLD_DATADIR}/*
@@ -19,7 +19,7 @@ cd $topdir/backup
 for i in *.qp sakila/*.qp;  do qpress -d $i ./; done;
 cd -
 
-innobackupex --copy-back $topdir/backup
+xtrabackup --copy-back --target-dir=$topdir/backup
 
 run_cmd_expect_failure ls ${MYSQLD_DATADIR}/*.qp
 run_cmd_expect_failure ls ${MYSQLD_DATADIR}/sakila/*.qp

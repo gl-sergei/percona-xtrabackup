@@ -5,14 +5,12 @@
 
 start_server --skip-log-bin
 
-xtrabackup --history --backup --target-dir=$topdir/backup
+mkdir $topdir/backup
 
-cat $topdir/backup/xtrabackup_info
+xtrabackup --history --backup --target-dir=$topdir/backup/1
 
 run_cmd $MYSQL $MYSQL_ARGS -e "SELECT * FROM PERCONA_SCHEMA.xtrabackup_history\G"
 
-innobackupex --history $topdir/backup
-
-cat $topdir/backup/xtrabackup_info
+xtrabackup --backup --history --target-dir=$topdir/backup/2
 
 run_cmd $MYSQL $MYSQL_ARGS -e "SELECT * FROM PERCONA_SCHEMA.xtrabackup_history\G"

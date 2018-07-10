@@ -2,8 +2,9 @@
 
 function check_partitioning()
 {
-    $MYSQL $MYSQL_ARGS -Ns -e "SHOW PLUGINS" 2> /dev/null |
-      egrep -q "^partition"
+	( is_server_version_higher_than 8.0.0 ) ||
+    ( $MYSQL $MYSQL_ARGS -Ns -e "SHOW PLUGINS" 2> /dev/null |
+      egrep -q "^partition")
 }
 
 function require_partitioning()
@@ -60,11 +61,11 @@ function ib_part_add_mandatory_tables()
 {
 	local mysql_datadir=$1
 	local tables_file=$2
-	for table in $mysql_datadir/mysql/*.frm
+	for table in $(find $mysql_datadir/mysql -name '*.frm')
 	do
 	        echo mysql.`basename ${table%.*}` >> $tables_file
 	done
-	for table in $mysql_datadir/performance_schema/*.frm
+	for table in $(find $mysql_datadir/performance_schema -name '*.frm')
 	do
 	    echo performance_schema.`basename ${table%.*}` >> $tables_file
 	done

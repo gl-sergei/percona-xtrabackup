@@ -9,14 +9,12 @@ start_server
 options="innodb_data_file_path"
 
 mkdir -p $topdir/backup
-innobackupex  $topdir/backup
-backup_dir=`grep "Backup created in directory" $OUTFILE | awk -F\' '{ print $2}'`
-vlog "Backup created in directory $backup_dir"
+xtrabackup --backup --target-dir=$topdir/backup
 
 # test presence of options
 for option in $options ; do
 
-	if ! grep $option $backup_dir/backup-my.cnf ; then
+	if ! grep $option $topdir/backup/backup-my.cnf ; then
 		vlog "Option $option is absent"
 		exit -1
 	else

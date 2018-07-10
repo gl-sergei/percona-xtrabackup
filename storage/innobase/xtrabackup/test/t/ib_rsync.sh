@@ -20,17 +20,17 @@ EOF
 chmod +x $topdir/cp
 
 # Calling with $topdir in the path first so the 'fake' cp is used
-PATH=$topdir:$PATH innobackupex --rsync --no-timestamp $topdir/backup
+PATH=$topdir:$PATH xtrabackup --backup --rsync --target-dir=$topdir/backup
 
 stop_server
 
 run_cmd rm -r $mysql_datadir
 
-innobackupex --apply-log $topdir/backup
+xtrabackup --prepare --target-dir=$topdir/backup
 
 run_cmd mkdir -p $mysql_datadir
 
-innobackupex --copy-back $topdir/backup
+xtrabackup --copy-back --target-dir=$topdir/backup
 
 start_server
 run_cmd ${MYSQL} ${MYSQL_ARGS} -e "SELECT COUNT(*) FROM actor" sakila

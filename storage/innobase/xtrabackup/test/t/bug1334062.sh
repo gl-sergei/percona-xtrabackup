@@ -11,14 +11,14 @@ sed -i -e 's/innodb_log_file_size=.*//' $MYSQLD_VARDIR/my.cnf
 grep innodb_log_file_size $MYSQLD_VARDIR/my.cnf &&
   die "innodb_log_file_size is present in my.cnf"
 
-innobackupex --no-timestamp $topdir/backup
+xtrabackup --backup --target-dir=$topdir/backup
 
-innobackupex --apply-log $topdir/backup
+xtrabackup --prepare --target-dir=$topdir/backup
 
 stop_server
 
 rm -rf $MYSQLD_DATADIR/*
 
-innobackupex --copy-back $topdir/backup
+xtrabackup --copy-back --target-dir=$topdir/backup
 
 start_server

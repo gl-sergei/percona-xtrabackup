@@ -17,6 +17,6 @@ mysql -e "GRANT ALL PRIVILEGES ON * . * TO 'backup'@'localhost'"
 run_cmd mysql_config_editor \
 	set --login-path=backup --user=backup --host=localhost
 
-innobackupex --no-timestamp --login-path=backup --password=secret $topdir/backup
+xtrabackup --backup --login-path=backup --password=secret --target-dir=$topdir/backup
 
 rm -rf $HOME/.mylogin.cnf

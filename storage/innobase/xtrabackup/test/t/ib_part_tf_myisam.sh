@@ -11,6 +11,8 @@
 
 start_server
 
+require_server_version_lower_than 8.0.0
+
 require_partitioning
 
 # Create MyISAM partitioned table with some partitions in
@@ -26,8 +28,8 @@ cat >$topdir/tables <<EOF
 test.test
 EOF
 ib_part_add_mandatory_tables $mysql_datadir $topdir/tables
-innobackupex --no-timestamp --tables-file=$topdir/tables $topdir/backup
-innobackupex --apply-log $topdir/backup
+xtrabackup --backup --tables-file=$topdir/tables --target-dir=$topdir/backup
+xtrabackup --prepare --target-dir=$topdir/backup
 vlog "Backup taken"
 
 stop_server

@@ -8,7 +8,7 @@ load_dbase_schema incremental_sample
 # Backup dir
 mkdir -p $topdir/backup
 
-innobackupex --no-timestamp $topdir/backup/full
+xtrabackup --backup --target-dir=$topdir/backup/full
 
 vlog "Creating and filling a new table"
 run_cmd $MYSQL $MYSQL_ARGS test <<EOF
@@ -20,17 +20,17 @@ EOF
 force_checkpoint
 
 vlog "Making incremental backup"
-innobackupex --incremental --no-timestamp --incremental-basedir=$topdir/backup/full $topdir/backup/delta
+xtrabackup --backup --incremental-basedir=$topdir/backup/full --target-dir=$topdir/backup/delta
 
 vlog "Preparing full backup"
-innobackupex --apply-log --redo-only $topdir/backup/full
+xtrabackup --prepare --apply-log-only --target-dir=$topdir/backup/full
 
 # The following would fail before the bugfix
 vlog "Applying incremental delta"
-innobackupex --apply-log --redo-only --incremental-dir=$topdir/backup/delta $topdir/backup/full
+xtrabackup --prepare --apply-log-only --incremental-dir=$topdir/backup/delta --target-dir=$topdir/backup/full
 
 vlog "Preparing full backup"
-innobackupex --apply-log $topdir/backup/full
+xtrabackup --prepare --target-dir=$topdir/backup/full
 vlog "Data prepared for restore"
 
 stop_server

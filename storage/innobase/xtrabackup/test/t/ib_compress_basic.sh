@@ -9,18 +9,18 @@ require_qpress
 start_server --innodb_file_per_table
 load_sakila
 
-innobackupex --compress --no-timestamp $topdir/backup
+xtrabackup --backup --compress --target-dir=$topdir/backup
 
 stop_server
 rm -rf ${MYSQLD_DATADIR}/*
 
 cd $topdir/backup
 
-innobackupex --decompress $topdir/backup
+xtrabackup --decompress --target-dir=$topdir/backup
 
-innobackupex --apply-log $topdir/backup
+xtrabackup --prepare --target-dir=$topdir/backup
 
-innobackupex --copy-back $topdir/backup
+xtrabackup --copy-back --target-dir=$topdir/backup
 
 start_server
 

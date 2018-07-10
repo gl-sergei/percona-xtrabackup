@@ -51,18 +51,18 @@ AND TABLE_TYPE='BASE TABLE' AND ENGINE='InnoDB'"`
 
   backup_dir="$topdir/backup"
 
-  innobackupex --no-timestamp --compact $backup_dir
+  xtrabackup --backup --compact --target-dir=$backup_dir
   record_db_state sakila
 
   stop_server
 
   rm -r $mysql_datadir
 
-  innobackupex --apply-log --rebuild-indexes --rebuild-threads=2 $backup_dir
+  xtrabackup --prepare --rebuild-indexes --rebuild-threads=2 --target-dir=$backup_dir
 
   vlog "Restoring MySQL datadir"
   mkdir -p $mysql_datadir
-  innobackupex --copy-back $backup_dir
+  xtrabackup --copy-back --target-dir=$backup_dir
 
   start_server
 

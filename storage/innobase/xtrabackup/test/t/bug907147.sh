@@ -7,7 +7,7 @@
 start_server
 load_sakila
 
-innobackupex --no-timestamp $topdir/backup
+xtrabackup --backup --target-dir=$topdir/backup
 
 run_cmd_expect_failure grep "xtrabackup ping" \
     $topdir/backup/xtrabackup_binlog_info

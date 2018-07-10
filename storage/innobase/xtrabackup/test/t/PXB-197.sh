@@ -38,10 +38,3 @@ run_cmd xtrabackup --backup --no-version-check --stream=xbstream --target-dir=$t
     | xbstream -x -C $topdir/tmp2
 
 check_pipestatus
-
-run_cmd innobackupex --backup --no-version-check --stream=xbstream $topdir/backup2 \
-    | xbcrypt --encrypt-algo=$algo --encrypt-key=$key \
-    | xbcrypt -d --encrypt-algo=$algo --encrypt-key=$key \
-    | xbstream -x -C $topdir/tmp3
-
-check_pipestatus

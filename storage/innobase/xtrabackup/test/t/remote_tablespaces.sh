@@ -34,7 +34,7 @@ done
 
 checksum_a=`checksum_table test t`
 
-innobackupex --no-timestamp $topdir/backup
+xtrabackup --backup --target-dir=$topdir/backup
 
 stop_server
 
@@ -46,11 +46,11 @@ do
     test -f $topdir/backup/test/t${i}.ibd || die "Remote tablespace is missing from backup!"
 done
 
-innobackupex --apply-log $topdir/backup
+xtrabackup --prepare --target-dir=$topdir/backup
 
 for cmd in "--copy-back" "--move-back" ; do
 
-    innobackupex $cmd $topdir/backup
+    xtrabackup $cmd --target-dir=$topdir/backup
 
     if [ ! -f $remote_dir/test/t.ibd ] ; then
         vlog "Tablepace $remote_dir/t.ibd is missing!"

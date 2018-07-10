@@ -22,8 +22,8 @@ cat <<EOF | run_cmd $MYSQL $MYSQL_ARGS
 
 EOF
 
-innobackupex --no-timestamp --databases=test\ test1.b\ test1.c\ mysql\ performance_schema $topdir/backup
-innobackupex --apply-log $topdir/backup
+xtrabackup --backup --databases=test\ test1.b\ test1.c\ mysql\ performance_schema --target-dir=$topdir/backup
+xtrabackup --prepare --target-dir=$topdir/backup
 vlog "Backup taken"
 
 stop_server
@@ -34,7 +34,7 @@ rm -rf $mysql_datadir/*
 vlog "Original database removed"
 
 # Restore database from backup
-innobackupex --copy-back $topdir/backup
+xtrabackup --copy-back --target-dir=$topdir/backup
 vlog "database restored from backup"
 
 start_server

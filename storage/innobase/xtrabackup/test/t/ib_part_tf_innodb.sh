@@ -25,8 +25,8 @@ cat >$topdir/tables <<EOF
 test.test
 EOF
 ib_part_add_mandatory_tables $mysql_datadir $topdir/tables
-innobackupex --no-timestamp --tables-file=$topdir/tables $topdir/backup
-innobackupex --apply-log $topdir/backup
+xtrabackup --backup --tables-file=$topdir/tables --target-dir=$topdir/backup
+xtrabackup --prepare --target-dir=$topdir/backup
 vlog "Backup taken"
 
 COUNT=`xtrabackup --stats --tables-file=$topdir/tables --datadir=$topdir/backup \

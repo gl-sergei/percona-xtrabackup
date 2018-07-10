@@ -32,8 +32,8 @@ test
 test1.b
 test1.c
 EOF
-innobackupex --no-timestamp --databases=$topdir/databases_file $topdir/backup
-innobackupex --apply-log $topdir/backup
+xtrabackup --backup --databases-file=$topdir/databases_file --target-dir=$topdir/backup
+xtrabackup --prepare --target-dir=$topdir/backup
 vlog "Backup taken"
 
 stop_server
@@ -44,7 +44,7 @@ rm -rf $mysql_datadir/*
 vlog "Original database removed"
 
 # Restore database from backup
-innobackupex --copy-back $topdir/backup
+xtrabackup --copy-back --target-dir=$topdir/backup
 vlog "database restored from backup"
 
 start_server

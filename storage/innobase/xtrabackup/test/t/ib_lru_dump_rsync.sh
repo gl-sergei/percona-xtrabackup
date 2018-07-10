@@ -19,7 +19,7 @@ start_server
 ${MYSQL} ${MYSQL_ARGS} -e "select * from information_schema.XTRADB_ADMIN_COMMAND /*!XTRA_LRU_DUMP*/;"
 
 # take a backup with rsync mode
-innobackupex --rsync --no-timestamp $topdir/backup
+xtrabackup --backup --rsync --target-dir=$topdir/backup
 
 if [ -f $topdir/backup/ib_lru_dump ] ; then
     vlog "LRU dump has been backed up"

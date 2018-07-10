@@ -32,8 +32,8 @@ EOF
 force_checkpoint
 
 # Test that specifying partitions with --include works
-innobackupex --no-timestamp --include='^test.*#P#p5' $topdir/backup
-innobackupex --apply-log $topdir/backup
+xtrabackup --backup --include='^test.*#P#p5' --target-dir=$topdir/backup
+xtrabackup --prepare --target-dir=$topdir/backup
 
 file_cnt=`ls $topdir/backup/test | wc -l`
 
@@ -47,9 +47,9 @@ rm -rf $topdir/backup
 
 # Test that specifying partitions with --databases works
 
-innobackupex --no-timestamp \
-    --databases='test.t_myisam#P#p5 test.t_innodb#P#p5' $topdir/backup
-innobackupex --apply-log $topdir/backup
+xtrabackup --backup \
+    --databases='test.t_myisam#P#p5 test.t_innodb#P#p5' --target-dir=$topdir/backup
+xtrabackup --prepare --target-dir=$topdir/backup
 
 test "$file_cnt" -eq 3
 test -f $topdir/backup/test/t_innodb#P#p5.ibd
@@ -63,8 +63,8 @@ cat >$topdir/tables_file <<EOF
 test.t_myisam#P#p5
 test.t_innodb#P#p5
 EOF
-innobackupex --no-timestamp --tables-file=$topdir/tables_file $topdir/backup
-innobackupex --apply-log $topdir/backup
+xtrabackup --backup --tables-file=$topdir/tables_file --target-dir=$topdir/backup
+xtrabackup --preapre --target-dir=$topdir/backup
 
 test "$file_cnt" -eq 3
 test -f $topdir/backup/test/t_myisam#P#p5.MYD

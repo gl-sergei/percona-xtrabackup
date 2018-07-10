@@ -23,7 +23,7 @@ multi_row_insert incremental_sample.test \({1..100},100\)
 
 vlog "Starting backup"
 full_backup_dir=$topdir/full_backup
-innobackupex --no-timestamp $full_backup_dir
+xtrabackup --backup --target-dir=$full_backup_dir
 
 # Changing data
 
@@ -53,7 +53,7 @@ vlog "###############"
 
 # Incremental backup
 inc_backup_dir=$topdir/backup_incremental
-if [ $ib_inc_use_lsn = "1" ]
+if [ "$ib_inc_use_lsn" = "1" ]
 then
     inc_lsn=`grep to_lsn $full_backup_dir/xtrabackup_checkpoints | \
              sed 's/to_lsn = //'`
@@ -65,25 +65,25 @@ else
     ib_inc_extra_args="${ib_inc_extra_args:-""} --incremental-basedir=$full_backup_dir"
 fi
 
-innobackupex --no-timestamp --incremental $ib_inc_extra_args $inc_backup_dir
+xtrabackup --backup $ib_inc_extra_args --target-dir=$inc_backup_dir
 
 vlog "Preparing backup"
 # Prepare backup
 vlog "##############"
 vlog "# PREPARE #1 #"
 vlog "##############"
-innobackupex --apply-log --redo-only $full_backup_dir
+xtrabackup --prepare --apply-log-only $full_backup_dir
 vlog "Log applied to full backup"
 vlog "##############"
 vlog "# PREPARE #2 #"
 vlog "##############"
-innobackupex --apply-log --redo-only --incremental-dir=$inc_backup_dir \
+xtrabackup --prepare --apply-log-only --incremental-dir=$inc_backup_dir \
     $full_backup_dir
 vlog "Delta applied to full backup"
 vlog "##############"
 vlog "# PREPARE #3 #"
 vlog "##############"
-innobackupex --apply-log $full_backup_dir
+xtrabackup --prepare --target-dir=$full_backup_dir
 vlog "Data prepared for restore"
 
 # Destroying mysql data
@@ -96,7 +96,7 @@ vlog "Copying files"
 vlog "###########"
 vlog "# RESTORE #"
 vlog "###########"
-innobackupex --copy-back $full_backup_dir
+xtrabackup --copy-back --target-dir=$full_backup_dir
 vlog "Data restored"
 
 start_server

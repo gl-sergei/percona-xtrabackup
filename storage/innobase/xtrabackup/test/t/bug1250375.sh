@@ -24,7 +24,7 @@ CREATE TABLE t1(a INT PRIMARY KEY) ENGINE=InnoDB;
 INSERT INTO t1 VALUES (1), (2), (3);
 EOF
 
-innobackupex --no-timestamp --galera-info $topdir/backup 
+xtrabackup --backup --galera-info --target-dir=$topdir/backup 
 backup_dir=$topdir/backup
 vlog "Backup created in directory $backup_dir"
 

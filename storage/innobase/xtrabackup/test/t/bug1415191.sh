@@ -22,7 +22,7 @@ start_server
 
 $MYSQL $MYSQL_ARGS -e "DELETE FROM test.foo WHERE text1 = 'abcdef'" test
 
-innobackupex --no-timestamp $topdir/backup
+xtrabackup --backup --target-dir=$topdir/backup
 
 # prepare will crash if bug is present
-innobackupex --apply-log $topdir/backup
+xtrabackup --prepare --target-dir=$topdir/backup

@@ -6,4 +6,4 @@ start_server
 # Take backup
 chmod -R 500 $mysql_datadir
 mkdir -p $topdir/backup
-innobackupex --stream=tar $topdir/backup > $topdir/backup/out.tar
+xtrabackup --backup --stream=xbstream --target-dir=$topdir/backup > $topdir/backup/out.xbstream

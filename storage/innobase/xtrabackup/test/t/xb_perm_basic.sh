@@ -4,4 +4,4 @@
 start_server
 
 chmod -R 500 $mysql_datadir
-innobackupex  --no-timestamp $topdir/backup
+xtrabackup --backup --target-dir=$topdir/backup

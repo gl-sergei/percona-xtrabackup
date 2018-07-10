@@ -41,7 +41,7 @@ load_dbase_data sakila
 
 checksum_1=`checksum_table sakila actor`
 
-innobackupex --no-timestamp --include='actor' $backup_dir
+xtrabackup --backup --include='actor' --target-dir=$backup_dir
 
 stop_server
 
@@ -53,7 +53,7 @@ then
     exit 1
 fi
 
-innobackupex --apply-log --export $backup_dir
+xtrabackup --prepare --export --target-dir=$backup_dir
 
 start_server
 

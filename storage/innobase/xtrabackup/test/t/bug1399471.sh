@@ -21,17 +21,17 @@ job_id=$!
 
 vlog "Starting backup"
 
-innobackupex --no-timestamp $topdir/backup
+xtrabackup --backup --target-dir=$topdir/backup
 
 kill -SIGKILL $job_id
 
 vlog "Preparing backup"
-innobackupex --apply-log $topdir/backup
+xtrabackup --prepare --target-dir=$topdir/backup
 
 stop_server
 
 rm -rf ${mysql_datadir}/*
 
-innobackupex --copy-back $topdir/backup
+xtrabackup --copy-back --target-dir=$topdir/backup
 
 start_server

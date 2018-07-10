@@ -21,8 +21,8 @@ checksum_a=`checksum_table test test`
 
 # Take a backup
 # Only backup of test.test table will be taken
-innobackupex --no-timestamp --include='^(mysql.*|performance_schema.*|test.test)$' $topdir/backup
-innobackupex --apply-log $topdir/backup
+xtrabackup --backup --include='^(mysql.*|performance_schema.*|test.test)$' --target-dir=$topdir/backup
+xtrabackup --prepare --target-dir=$topdir/backup
 vlog "Backup taken"
 
 # also test xtrabackup --stats work with --tables-file

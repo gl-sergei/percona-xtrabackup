@@ -12,7 +12,7 @@ ${MYSQL} ${MYSQL_ARGS} -e "create table test.topt (a int auto_increment primary 
 
 # take a backup with stream mode
 mkdir -p $topdir/backup
-innobackupex --stream=xbstream $topdir/backup > $topdir/backup/stream.xbs
+xtrabackup --backup --stream=xbstream --target-dir=$topdir/backup > $topdir/backup/stream.xbs
 
 # will fail if table topt backed up twice
 xbstream -xv -C $topdir/backup < $topdir/backup/stream.xbs

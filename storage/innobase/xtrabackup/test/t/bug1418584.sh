@@ -24,7 +24,7 @@ backup_dir=$topdir/backup
 
 backup_dir=$topdir/backup
 
-innobackupex --no-timestamp --galera-info $backup_dir
+xtrabackup --backup --galera-info --target-dir=$backup_dir
 
 test -f $backup_dir/xtrabackup_galera_info ||
   die "xtrabackup_galera_info was not created"
@@ -33,7 +33,7 @@ echo "test" > $backup_dir/xtrabackup_galera_info
 
 cp $backup_dir/xtrabackup_galera_info $backup_dir/xtrabackup_galera_info_copy
 
-innobackupex --apply-log $backup_dir
+xtrabackup --prepare --target-dir=$backup_dir
 
 # Test that xtrabackup_galera_info has not been overwritten on --apply-log
 diff -u $backup_dir/xtrabackup_galera_info \

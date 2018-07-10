@@ -4,6 +4,4 @@
 
 start_server
 
-innobackupex --slave-info --no-timestamp $topdir/backup1
-
 xtrabackup --slave-info --backup --target-dir=$topdir/backup2

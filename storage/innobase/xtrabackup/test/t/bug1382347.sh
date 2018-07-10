@@ -23,15 +23,15 @@ load_sakila
 checksum1=`checksum_table sakila payment`
 test -n "$checksum1" || die "Failed to checksum table sakila.payment"
 
-innobackupex --no-timestamp $topdir/backup
+xtrabackup --backup --target-dir=$topdir/backup
 
 stop_server
 
 rm -rf $MYSQLD_DATADIR
 rm -rf ${TEST_VAR_ROOT}/dir
 
-innobackupex --apply-log $topdir/backup
-innobackupex --copy-back $topdir/backup
+xtrabackup --prepare --target-dir=$topdir/backup
+xtrabackup --copy-back --target-dir=$topdir/backup
 
 start_server
 

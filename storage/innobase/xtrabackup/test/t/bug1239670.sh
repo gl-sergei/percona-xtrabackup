@@ -39,7 +39,7 @@ switch_server $slave_id
 
 $MYSQL $MYSQL_ARGS -e "SHOW SLAVE STATUS\G"
 
-innobackupex --no-timestamp --slave-info $topdir/backup
+xtrabackup --backup --slave-info --target-dir=$topdir/backup
 
 vlog "Verifying format of xtrabackup_slave_info:"
 f=$topdir/backup/xtrabackup_slave_info

@@ -40,7 +40,7 @@ test -n "$checksum1" || die "Failed to checksum table sakila.payment"
 start_uncomitted_transaction &
 job_master=$!
 
-innobackupex --no-timestamp $topdir/backup
+xtrabackup --backup --target-dir=$topdir/backup
 
 kill -SIGKILL $job_master
 stop_server
@@ -48,9 +48,9 @@ stop_server
 rm -rf $MYSQLD_DATADIR/*
 rm -rf $undo_directory/*
 
-innobackupex --apply-log $topdir/backup
+xtrabackup --prepare --target-dir=$topdir/backup
 
-innobackupex --copy-back $topdir/backup
+xtrabackup --copy-back --target-dir=$topdir/backup
 
 
 

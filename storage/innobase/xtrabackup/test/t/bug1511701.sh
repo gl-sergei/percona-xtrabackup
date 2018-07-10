@@ -8,6 +8,4 @@ start_server
 cp ${MYSQLD_VARDIR}/my.cnf ${MYSQLD_VARDIR}/my.cnf.orig
 sed -ie '/tmpdir/d' ${MYSQLD_VARDIR}/my.cnf
 
-innobackupex --rsync --datadir=$mysql_datadir --no-timestamp $topdir/backup1
-
 xtrabackup --rsync --datadir=$mysql_datadir --backup --target-dir=$topdir/backup2

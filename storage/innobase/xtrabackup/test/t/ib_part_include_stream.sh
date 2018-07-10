@@ -21,11 +21,10 @@ checksum_a=`checksum_table test test`
 
 # Take a backup
 mkdir -p $topdir/backup
-innobackupex --stream=tar --include='^(mysql.*|performance_schema.*|test.test)$' $topdir/backup > $topdir/backup/backup.tar
-$TAR ixvf $topdir/backup/backup.tar -C $topdir/backup 
-$TAR cvhf $topdir/backup/backup11.tar $mysql_datadir/test/*
+xtrabackup --backup --stream=xbstream --include='^(mysql.*|performance_schema.*|test.test)$' --target-dir=$topdir/backup > $topdir/backup/backup.xbs
+xbstream -xv < $topdir/backup/backup.xbs -C $topdir/backup
 
-innobackupex --apply-log $topdir/backup
+xtrabackup --prepare --target-dir=$topdir/backup
 
 vlog "Backup taken"
 

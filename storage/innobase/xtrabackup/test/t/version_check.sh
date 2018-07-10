@@ -20,16 +20,16 @@ vc_file=$PTDEBUG_VERSION_CHECK_HOME/percona-version-check
 # to IB_ARGS so we don't execute it for all tests.
 # First test that --no-version-check (with default IB_ARGS) disables the feature
 
-innobackupex --no-timestamp $topdir/backup1
+xtrabackup --backup --target-dir=$topdir/backup1
 
 if [ -f $vc_file ]
 then
     die "$vc_file has been created with --no-version-check!"
 fi
 
-IB_ARGS=`echo $IB_ARGS | sed -e 's/--no-version-check//g'`
+XB_ARGS=`echo $XB_ARGS | sed -e 's/--no-version-check//g'`
 
-innobackupex --no-timestamp $topdir/backup2
+xtrabackup --backup --target-dir=$topdir/backup2
 
 if [ ! -f $vc_file ]
 then
@@ -50,5 +50,5 @@ mkdir $topdir/backup3
 
 rm -f $vc_file
 
-innobackupex --no-timestamp --stream=tar $topdir/backup3 | \
-  $TAR -C $topdir/backup3 -xivf -
+xtrabackup --backup --stream=xbstream --target-dir=$topdir/backup3 | \
+  xbstream -C $topdir/backup3 -xv

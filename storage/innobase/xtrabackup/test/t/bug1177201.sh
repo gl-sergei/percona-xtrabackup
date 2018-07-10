@@ -9,14 +9,14 @@ dd if=/dev/zero of=$topdir/zeroes bs=1 count=4096
 
 cat $topdir/zeroes >>$MYSQLD_DATADIR/ibdata1
 
-innobackupex --no-timestamp $topdir/backup
+xtrabackup --backup --target-dir=$topdir/backup
 
 stop_server
 
 rm -rf $MYSQLD_DATADIR/*
 
-innobackupex --apply-log $topdir/backup
+xtrabackup --prepare --target-dir=$topdir/backup
 
-innobackupex --copy-back $topdir/backup
+xtrabackup --copy-back --target-dir=$topdir/backup
 
 start_server

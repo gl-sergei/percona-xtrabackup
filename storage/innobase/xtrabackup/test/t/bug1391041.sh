@@ -27,7 +27,7 @@ INSERT INTO t(c) SELECT c FROM t;
 COMMIT;
 EOF
 
-innobackupex --no-timestamp $topdir/backup
+xtrabackup --backup --target-dir=$topdir/backup
 
 binlog_info=$topdir/backup/xtrabackup_binlog_info
 
@@ -54,7 +54,7 @@ MYSQLD_EXTRA_MY_CNF_OPTS=
 stop_server
 start_server
 
-innobackupex --no-timestamp $topdir/backup
+xtrabackup --backup --target-dir=$topdir/backup
 
 if egrep -q "GTID of the last change" $OUTFILE ; then
 	die "Found GTID of the last change with GTID_MODE=OFF"

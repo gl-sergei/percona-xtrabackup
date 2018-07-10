@@ -4,7 +4,7 @@
 
 [ -z ${XB_DISTRIBUTION:-} ] && skip_test "Requires XB_DISTRIBUTION to be set"
 
-innobackupex --version
+xtrabackup --version
 
 link="http://www.percona.com/xb/$XB_DISTRIBUTION"
 

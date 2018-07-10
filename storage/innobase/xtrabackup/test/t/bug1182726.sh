@@ -24,6 +24,6 @@ multi_row_insert incremental_sample.test \({1..100},100\)
 # Full backup of the slave server
 switch_server $slave_id
 
-innobackupex --no-timestamp --slave-info --safe-slave-backup --no-lock $topdir/backup
+xtrabackup --backup --slave-info --safe-slave-backup --no-lock --target-dir=$topdir/backup
 egrep -q '^CHANGE MASTER TO MASTER_LOG_FILE='\''mysql-bin.[0-9]+'\'', MASTER_LOG_POS=[0-9]+;$' \
     $topdir/backup/xtrabackup_slave_info

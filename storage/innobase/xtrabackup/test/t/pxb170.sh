@@ -10,19 +10,17 @@ start_server --innodb_file_per_table
 # full backup
 run_cmd ${MYSQL} ${MYSQL_ARGS} -e "CREATE TABLE t (a INT) ENGINE=InnoDB" test
 run_cmd ${MYSQL} ${MYSQL_ARGS} -e "INSERT INTO t values (1), (2), (3)" test
-innobackupex --no-timestamp $topdir/backup
+xtrabackup --backup --target-dir=$topdir/backup
 
 # incremental backup
 run_cmd ${MYSQL} ${MYSQL_ARGS} -e "INSERT INTO t values (11), (12), (13)" test
-innobackupex --no-timestamp --incremental \
-		--incremental-basedir=$topdir/backup \
-		$topdir/inc1
+xtrabackup --backup --incremental-basedir=$topdir/backup \
+		--target-dir=$topdir/inc1
 
 # incremental backup
 run_cmd ${MYSQL} ${MYSQL_ARGS} -e "INSERT INTO t values (21), (22), (23)" test
-innobackupex --no-timestamp --incremental \
-		--incremental-basedir=$topdir/inc1 \
-		$topdir/inc2
+xtrabackup --backup --incremental-basedir=$topdir/inc1 \
+		--target-dir=$topdir/inc2
 
 # prepare
 xtrabackup --prepare --apply-log-only --target-dir=$topdir/backup

@@ -25,16 +25,16 @@ $MYSQL $MYSQL_ARGS -e "CREATE TABLE test.t(a INT)"
 
 record_db_state test
 
-innobackupex --no-timestamp $topdir/backup
+xtrabackup --backup --target-dir=$topdir/backup
 
 stop_server
 
 rm -rf $MYSQLD_DATADIR/*
 rm -rf $innodb_data_home_dir/*
 
-innobackupex --apply-log $topdir/backup
+xtrabackup --prepare --target-dir=$topdir/backup
 
-innobackupex --copy-back $topdir/backup
+xtrabackup --copy-back --target-dir=$topdir/backup
 
 test -f $innodb_data_home_dir/ibdata1
 test -f $innodb_data_home_dir/ibdata2

@@ -10,4 +10,4 @@ start_server
 
 backup_dir=$topdir/backup
 
-innobackupex --no-timestamp --debug-sleep-before-unlock=6 $backup_dir
+xtrabackup --backup --debug-sleep-before-unlock=6 --target-dir=$backup_dir

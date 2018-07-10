@@ -16,10 +16,10 @@ load_sakila
 vlog "Starting backup"
 
 full_backup_dir=${MYSQLD_VARDIR}/full_backup
-innobackupex  --no-timestamp $full_backup_dir
+xtrabackup --backup --target-dir=$full_backup_dir
 
 vlog "Preparing backup"
-innobackupex --apply-log --redo-only $full_backup_dir
+xtrabackup --prepare --apply-log-only --target-dir=$full_backup_dir
 vlog "Log applied to full backup"
 
 # Destroying mysql data
@@ -29,7 +29,7 @@ vlog "Data destroyed"
 
 # Restore backup
 vlog "Copying files to their original locations"
-innobackupex --copy-back $full_backup_dir
+xtrabackup --copy-back --target-dir=$full_backup_dir
 vlog "Data restored"
 
 start_server --innodb_log_block_size=4096

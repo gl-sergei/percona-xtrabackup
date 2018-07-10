@@ -8,17 +8,17 @@ fi
 start_server --innodb_file_per_table
 load_sakila
 
-innobackupex --rsync --no-lock --no-timestamp $topdir/backup
+xtrabackup --backup --rsync --no-lock --target-dir=$topdir/backup
 
 stop_server
 
 run_cmd rm -r $mysql_datadir
 
-innobackupex --apply-log $topdir/backup
+xtrabackup --prepare --target-dir=$topdir/backup
 
 run_cmd mkdir -p $mysql_datadir
 
-innobackupex --copy-back $topdir/backup
+xtrabackup --copy-back --target-dir=$topdir/backup
 
 start_server
 run_cmd ${MYSQL} ${MYSQL_ARGS} -e "SELECT COUNT(*) FROM actor" sakila

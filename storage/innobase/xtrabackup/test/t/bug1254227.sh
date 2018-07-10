@@ -25,20 +25,20 @@ XA END 'xatrx';
 XA PREPARE 'xatrx';
 EOF
 
-innobackupex --no-timestamp $topdir/full
+xtrabackup --backup --target-dir=$topdir/full
 
 # Terminate the background client
 echo "exit" >&3
 exec 3>&-
 wait $client_pid
 
-innobackupex --apply-log $topdir/full
+xtrabackup --prepare --target-dir=$topdir/full
 
 stop_server
 
 rm -rf $MYSQLD_DATADIR/*
 
-innobackupex --copy-back $topdir/full
+xtrabackup --copy-back --target-dir=$topdir/full
 
 # The server will fail to start if it has MySQL bug #47134 fixed.
 start_server

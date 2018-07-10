@@ -11,9 +11,9 @@ CREATE TABLE t (a INT) ENGINE=InnoDB;
 INSERT INTO t VALUES (1), (2), (3);
 EOF
 
-innobackupex --no-timestamp $topdir/backup
+xtrabackup --backup --target-dir=$topdir/backup
 
-innobackupex --apply-log $topdir/backup
+xtrabackup --prepare --target-dir=$topdir/backup
 
 # The size of t.ibd should be 96K, not 1M
 size_src=`ls -l $MYSQLD_DATADIR/test/t.ibd | awk '{print $5}'`

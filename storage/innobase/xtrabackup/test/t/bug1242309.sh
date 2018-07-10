@@ -4,7 +4,7 @@
 
 start_server
 
-innobackupex --no-timestamp --compress $topdir/backup
+xtrabackup --backup --compress --target-dir=$topdir/backup
 
 if [ ! -f $topdir/backup/xtrabackup_logfile.qp ] ; then
 	die "xtrabackup_logfile is not compressed!"
@@ -12,7 +12,7 @@ fi
 
 rm -rf $topdir/backup/*
 
-innobackupex --no-timestamp --compress --stream=xbstream $topdir/backup | xbstream -xv -C $topdir/backup
+xtrabackup --backup --compress --stream=xbstream --target-dir=$topdir/backup | xbstream -xv -C $topdir/backup
 
 if [ ! -f $topdir/backup/xtrabackup_logfile.qp ] ; then
 	die "xtrabackup_logfile is not compressed!"

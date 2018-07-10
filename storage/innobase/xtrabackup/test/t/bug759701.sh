@@ -12,7 +12,7 @@ load_sakila
 vlog "Starting backup"
 
 full_backup_dir=$topdir/full_backup
-innobackupex  --no-timestamp $full_backup_dir
+xtrabackup --backup --target-dir=$full_backup_dir
 
 # Changing data
 
@@ -28,19 +28,19 @@ vlog "Making incremental backup"
 
 # Incremental backup
 inc_backup_dir=$topdir/incremental_backup
-innobackupex --incremental --no-timestamp \
-    --incremental-basedir=$full_backup_dir $inc_backup_dir
+xtrabackup --backup \
+    --incremental-basedir=$full_backup_dir --target-dir=$inc_backup_dir
 vlog "Incremental backup created in directory $inc_backup_dir"
 
 vlog "Preparing backup"
-innobackupex --apply-log --redo-only $full_backup_dir
+xtrabackup --prepare --apply-log-only --target-dir=$full_backup_dir
 vlog "Log applied to full backup"
 
-innobackupex --apply-log --redo-only --incremental-dir=$inc_backup_dir \
-    $full_backup_dir
+xtrabackup --prepare --apply-log-only --incremental-dir=$inc_backup_dir \
+    --target-dir=$full_backup_dir
 vlog "Delta applied to full backup"
 
-innobackupex --apply-log $full_backup_dir
+xtrabackup --prepare --target-dir=$full_backup_dir
 vlog "Data prepared for restore"
 
 # Destroying mysql data
@@ -50,7 +50,7 @@ vlog "Data destroyed"
 
 # Restore backup
 vlog "Copying files to their original locations"
-innobackupex --copy-back $full_backup_dir
+xtrabackup --copy-back --target-dir=$full_backup_dir
 vlog "Data restored"
 
 start_server --innodb_file_per_table

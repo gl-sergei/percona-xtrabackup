@@ -15,7 +15,7 @@ start_server
 ${MYSQL} ${MYSQL_ARGS} -e "select * from information_schema.XTRADB_ADMIN_COMMAND /*!XTRA_LRU_DUMP*/;"
 
 # take a backup
-innobackupex --no-timestamp $topdir/backup
+xtrabackup --backup --target-dir=$topdir/backup
 
 if [ -f $topdir/backup/ib_lru_dump ] ; then
     vlog "LRU dump has been backed up"
@@ -26,7 +26,7 @@ fi
 
 # restore from backup
 rm -rf $mysql_datadir/*
-innobackupex --copy-back $topdir/backup
+xtrabackup --copy-back --target-dir=$topdir/backup
 
 if [ -f $mysql_datadir/ib_lru_dump ] ; then
     vlog "LRU dump has been restored"

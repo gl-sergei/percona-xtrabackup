@@ -26,8 +26,8 @@ mysql
 performance_schema
 test.test
 EOF
-innobackupex --no-timestamp --databases=$topdir/databases_file $topdir/backup
-innobackupex --apply-log $topdir/backup
+xtrabackup --backup --databases=$topdir/databases_file --target-dir=$topdir/backup
+xtrabackup --prepare --target-dir=$topdir/backup
 vlog "Backup taken"
 
 stop_server

@@ -11,4 +11,4 @@ innodb_flush_method=O_DIRECT_NO_FSYNC
 
 start_server
 
-innobackupex --no-timestamp $topdir/backup
+xtrabackup --backup --taregt-dir=$topdir/backup

@@ -1221,7 +1221,7 @@ static void undo_spaces_init() {
 
 /** Free the resources occupied by undo::spaces and trx_sys_undo_spaces,
 called once during thread de-initialization. */
-static void undo_spaces_deinit() {
+void undo_spaces_deinit() {
   if (srv_downgrade_logs) {
     srv_undo_tablespaces_downgrade();
   }
