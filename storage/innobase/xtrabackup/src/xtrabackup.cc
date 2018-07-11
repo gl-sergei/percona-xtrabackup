@@ -286,9 +286,6 @@ char*	innobase_ignored_opt			= NULL;
 char*	innobase_data_home_dir			= NULL;
 char*   innobase_data_file_path                 = NULL;
 char*   innobase_temp_data_file_path            = NULL;
-/* The following has a misleading name: starting from 4.0.5, this also
-affects Windows: */
-char*	innobase_unix_file_flush_method		= NULL;
 
 /* Below we have boolean-valued start-up parameters, and their default
 values */
@@ -1486,18 +1483,13 @@ xb_get_one_option(int optid,
 
   case OPT_INNODB_FLUSH_METHOD:
 
-    ADD_PRINT_PARAM_OPT(innobase_unix_file_flush_method);
+    ADD_PRINT_PARAM_OPT(innodb_flush_method_names[innodb_flush_method]);
     break;
 
   case OPT_INNODB_PAGE_SIZE:
 
     ADD_PRINT_PARAM_OPT(innobase_page_size);
     break;
-
-  // case OPT_INNODB_FAST_CHECKSUM:
-
-  //   ADD_PRINT_PARAM_OPT(!!innobase_fast_checksum);
-  //   break;
 
   case OPT_INNODB_LOG_BLOCK_SIZE:
 
@@ -5571,8 +5563,7 @@ xb_space_create_file(
 /*==================*/
 	const char*	path,		/*!<in: path to tablespace */
 	ulint		space_id,	/*!<in: space id */
-	ulint		flags __attribute__((unused)),/*!<in: tablespace
-					flags */
+	ulint		flags,		/*!<in: tablespace flags */
 	pfs_os_file_t*	file)		/*!<out: file handle */
 {
 	const ulint	size = FIL_IBD_FILE_INITIAL_SIZE;
@@ -5657,13 +5648,12 @@ xb_space_create_file(
 		}
 	} else {
 
-		success = os_file_set_size(
-			path, *file, size * UNIV_PAGE_SIZE, srv_read_only_mode,
-			false, false);
+		success = os_file_set_size(path, *file, 0,
+			size * UNIV_PAGE_SIZE, srv_read_only_mode, false);
 	}
 #else
-	success = os_file_set_size(path, *file, size * UNIV_PAGE_SIZE,
-		srv_read_only_mode, false, false);
+	success = os_file_set_size(path, *file, 0,
+		size * UNIV_PAGE_SIZE, srv_read_only_mode, false);
 #endif /* !NO_FALLOCATE && UNIV_LINUX */
 
 	if (!success) {
@@ -5740,6 +5730,13 @@ xb_space_create_file(
 		os_file_close(*file);
 		os_file_delete(innodb_data_file_key, path);
 		return(false);
+	}
+
+	fil_space_t *space = fil_space_get(space_id);
+
+	if (fil_node_create(path, size, space, false, false) == nullptr) {
+		ib::fatal() << "Unable to add tablespace node '"
+			<< path << "' to the tablespace cache.";
 	}
 
 	return(true);
@@ -7151,11 +7148,9 @@ skip_check:
 			xb_filter_hash_free(inc_dir_tables_hash);
 			goto error_cleanup;
 		}
-	}
-	if (xtrabackup_incremental) {
+
 		xb_data_files_close();
-	}
-	if (xtrabackup_incremental) {
+
 		/* Cleanup datadir from tablespaces deleted between full and
 		incremental backups */
 
