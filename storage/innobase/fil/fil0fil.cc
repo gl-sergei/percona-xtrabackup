@@ -4654,7 +4654,7 @@ bool Fil_shard::space_rename(space_id_t space_id, const char *old_path,
   char *old_space_name = space->name;
   char *new_space_name = mem_strdup(new_name);
 
-#ifndef UNIV_HOTBACKUP
+#if !defined(UNIV_HOTBACKUP) && !defined(XTRABACKUP)
   if (!recv_recovery_on) {
     mtr_t mtr;
 
@@ -4664,7 +4664,7 @@ bool Fil_shard::space_rename(space_id_t space_id, const char *old_path,
 
     mtr.commit();
   }
-#endif /* !UNIV_HOTBACKUP */
+#endif /* !UNIV_HOTBACKUP && !XTRABACKUP */
 
   ut_ad(strchr(old_file_name, OS_PATH_SEPARATOR) != nullptr);
   ut_ad(strchr(new_file_name, OS_PATH_SEPARATOR) != nullptr);

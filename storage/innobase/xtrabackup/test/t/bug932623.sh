@@ -49,7 +49,7 @@ xtrabackup --prepare --apply-log-only \
     --incremental-dir=$topdir/inc --target-dir=$topdir/full
 vlog "Delta applied to full backup"
 
-xtrabackup --apply-log $topdir/full
+xtrabackup --prepare --target-dir=$topdir/full
 vlog "Data prepared for restore"
 
 checksum_t1_a=`checksum_table test t1`
