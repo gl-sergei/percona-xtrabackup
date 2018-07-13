@@ -103,6 +103,7 @@ xb_fil_cur_open(
 
 	cursor->space_id = node->space->id;
 	cursor->is_system = fsp_is_system_or_temp_tablespace(node->space->id);
+	cursor->is_ibd = fsp_is_ibd_tablespace(node->space->id);
 
 	strncpy(cursor->abs_path, node->name, sizeof(cursor->abs_path));
 
@@ -116,8 +117,10 @@ xb_fil_cur_open(
 
 	/* In the backup mode we should already have a tablespace handle created
 	by fil_load_single_table_tablespace() unless it is a system
-	tablespace. Otherwise we open the file here. */
-	if (cursor->is_system || !srv_backup_mode || srv_close_files) {
+	tablespace or srv_close_files is true. Otherwise we open the file here.
+	srv_close_files has an effect only on IBD tablespaces. */
+	if (cursor->is_system || !srv_backup_mode ||
+		(srv_close_files && cursor->is_ibd)) {
 		node->handle =
 			os_file_create_simple_no_error_handling(0, node->name,
 								OS_FILE_OPEN,

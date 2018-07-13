@@ -44,6 +44,8 @@ struct xb_fil_cur_t {
 					page_size */
 	bool		is_system;	/*!< TRUE for system tablespace, FALSE
 					otherwise */
+	bool		is_ibd;		/*!< TRUE for IBD tablespace tablespace,
+					FALSE otherwise */
 	xb_read_filt_t*	read_filter;	/*!< read filter */
 	xb_read_filt_ctxt_t	read_filter_ctxt;
 					/*!< read filter context */
