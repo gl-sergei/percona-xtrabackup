@@ -2122,7 +2122,7 @@ mdl_lock_table(ulint space_id)
 	mutex_enter(&mdl_lock_con_mutex);
 
 	xb_a(asprintf(&query,
-		"SELECT NAME FROM INFORMATION_SCHEMA.INNODB_SYS_TABLES "
+		"SELECT NAME FROM INFORMATION_SCHEMA.INNODB_TABLES "
 		"WHERE SPACE = %lu", space_id));
 
 	mysql_result = xb_mysql_query(mdl_con, query, true);
