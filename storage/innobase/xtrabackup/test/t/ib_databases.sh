@@ -41,6 +41,11 @@ start_server
 
 OUT=`run_cmd $MYSQL $MYSQL_ARGS -e "USE test; SHOW TABLES; USE test1; SHOW TABLES;" | tr -d '\n'`
 
-if [ $OUT != "Tables_in_testabcTables_in_test1bc" ] ; then
+if [ $OUT != "Tables_in_testabcTables_in_test1abc" ] ; then
 	die "Backed up tables set doesn't match filter"
 fi
+
+run_cmd $MYSQL $MYSQL_ARGS -e "USE test; SELECT * FROM a;"
+run_cmd_expect_failure $MYSQL $MYSQL_ARGS -e "USE test1; SELECT * FROM a;"
+run_cmd $MYSQL $MYSQL_ARGS -e "USE test1; DROP TABLE a;"
+
