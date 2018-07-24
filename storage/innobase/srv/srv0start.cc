@@ -2205,15 +2205,11 @@ files_checked:
     /* We have gone through the redo log, now check if all the
     tablespaces were found and recovered. */
 
-    if (srv_force_recovery == 0 && fil_check_missing_tablespaces()) {
-      ib::error(ER_IB_MSG_1139);
-
-      /* Set the abort flag to true. */
-      auto p = recv_recovery_from_checkpoint_finish(*log_sys, true);
-
-      ut_a(p == nullptr);
-
-      return (srv_init_abort(DB_ERROR));
+    if(srv_force_recovery == 0 && fil_check_missing_tablespaces()) {
+      // Missing tablespaces in the redo log are a valid possibility
+      // with partial backups.
+      // But keep them in the output for visibility
+      ib::warn(ER_IB_MSG_1139);
     }
 
     /* We have successfully recovered from the redo log. The
