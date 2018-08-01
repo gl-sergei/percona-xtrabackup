@@ -6,18 +6,21 @@ start_server ${mysqld_additional_args}
 
 load_dbase_schema incremental_sample
 
+FULL_DIR="$topdir/full"
+DELTA_DIR="$topdir/delta"
+
 # Full backup
 
 # Full backup folder
-rm -rf $topdir/data/full
-mkdir -p $topdir/data/full
+rm -rf $FULL_DIR
+mkdir -p $FULL_DIR
 # Incremental data
-rm -rf $topdir/data/delta
-mkdir -p $topdir/data/delta
+rm -rf $DELTA_DIR
+mkdir -p $DELTA_DIR
 
 vlog "Starting backup"
 
-xtrabackup --datadir=$mysql_datadir --backup --target-dir=$topdir/data/full \
+xtrabackup --datadir=$mysql_datadir --backup --target-dir=$FULL_DIR \
     $mysqld_additional_args
 
 vlog "Full backup done"
@@ -41,7 +44,7 @@ vlog "Making incremental backup"
 
 # Incremental backup
 xtrabackup --datadir=$mysql_datadir --backup \
-    --target-dir=$topdir/data/delta --incremental-basedir=$topdir/data/full \
+    --target-dir=$DELTA_DIR --incremental-basedir=$FULL_DIR \
     $mysqld_additional_args
 
 vlog "Incremental backup done"
@@ -49,15 +52,15 @@ vlog "Preparing backup"
 
 # Prepare backup
 xtrabackup --datadir=$mysql_datadir --prepare --apply-log-only \
-    --target-dir=$topdir/data/full $mysqld_additional_args
+    --target-dir=$FULL_DIR $mysqld_additional_args
 vlog "Log applied to backup"
 
 xtrabackup --datadir=$mysql_datadir --prepare --apply-log-only \
-    --target-dir=$topdir/data/full --incremental-dir=$topdir/data/delta \
+    --target-dir=$FULL_DIR --incremental-dir=$DELTA_DIR \
     $mysqld_additional_args
 vlog "Delta applied to backup"
 
-xtrabackup --datadir=$mysql_datadir --prepare --target-dir=$topdir/data/full \
+xtrabackup --datadir=$mysql_datadir --prepare --target-dir=$FULL_DIR \
     $mysqld_additional_args
 vlog "Data prepared for restore"
 
@@ -71,7 +74,7 @@ stop_server
 
 vlog "Copying files"
 
-cd $topdir/data/full/
+cd $FULL_DIR
 cp -r * $mysql_datadir
 cd -
 
