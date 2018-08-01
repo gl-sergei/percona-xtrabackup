@@ -91,6 +91,7 @@ function kill_worker()
 {
     local worker=$1
     local pid=${worker_pids[$worker]}
+    local cpids=`pgrep -P $pid`
 
     worker_pids[$worker]=""
 
@@ -102,6 +103,7 @@ function kill_worker()
 
     # First send SIGTERM to let worker exit gracefully
     kill -SIGTERM $pid >/dev/null 2>&1 || true
+    for cpid in $cpids ; do kill -SIGTERM $cpid >/dev/null 2>&1 ; done
 
     sleep 1
 
@@ -113,6 +115,7 @@ function kill_worker()
 
     # Now kill with SIGKILL
     kill -SIGKILL $pid >/dev/null 2>&1 || true
+    for cpid in $cpids ; do kill -SIGKILL $cpid >/dev/null 2>&1 ; done
     wait $pid >/dev/null 2>&1 || true
     release_port_locks $pid
 }
