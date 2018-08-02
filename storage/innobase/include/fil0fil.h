@@ -1051,6 +1051,25 @@ flushed modifications in the files.
 @param[in]	free_all	Whether to free the instances. */
 void fil_close_log_files(bool free_all);
 
+/** Iterate over the tablespaces. */
+class Fil_space_iterator {
+ public:
+  using Function = std::function<dberr_t(fil_space_t *)>;
+
+  /** For each space.
+  @param[in]  include_log include redo log space if true
+  @param[in]  f   Callback */
+  template <typename F>
+  static dberr_t for_each_space(bool include_log, F &&f) {
+    return (iterate(include_log, [=](fil_space_t *sp) { return (f(sp)); }));
+  }
+
+  /** Iterate over the spaces.
+  @param[in]  include_log if true then fetch redo log space too
+  @param[in,out]  f   Callback */
+  static dberr_t iterate(bool include_log, Function &&f);
+};
+
 /** Iterate over the files in all the tablespaces. */
 class Fil_iterator {
  public:

@@ -946,6 +946,13 @@ class Fil_shard {
                 const page_size_t &page_size, ulint byte_offset, ulint len,
                 void *buf, void *message) MY_ATTRIBUTE((warn_unused_result));
 
+  /** Iterate through all tablespaces
+  @param[in]  include_log Include redo log space, if true
+  @param[in]  f   Callback
+  @return any error returned by the callback function. */
+  dberr_t iterate_spaces(bool include_log, Fil_space_iterator::Function &f)
+      MY_ATTRIBUTE((warn_unused_result));
+
   /** Iterate through all persistent tablespace files
   (FIL_TYPE_TABLESPACE) returning the nodes via callback function cbk.
   @param[in]	include_log	include log files, if true
@@ -1301,6 +1308,13 @@ class Fil_system {
   /** Close all the log files in all shards.
   @param[in]	free_all	If set then free all instances */
   void close_all_log_files(bool free_all);
+
+  /** Iterate through all tablespaces
+  @param[in]  include_log Include redo log space, if true
+  @param[in]  f   Callback
+  @return any error returned by the callback function. */
+  dberr_t iterate_spaces(bool include_log, Fil_space_iterator::Function &f)
+      MY_ATTRIBUTE((warn_unused_result));
 
   /** Iterate through all persistent tablespace files
   (FIL_TYPE_TABLESPACE) returning the nodes via callback function cbk.
@@ -3444,6 +3458,38 @@ void fil_close_log_files(bool free_all) {
   fil_system->close_all_log_files(free_all);
 }
 
+/** Iterate through all tablespaces
+@param[in]  include_log Include redo log space, if true
+@param[in]  f   Callback
+@return any error returned by the callback function. */
+dberr_t Fil_shard::iterate_spaces(bool include_log,
+                                  Fil_space_iterator::Function &f) {
+  mutex_acquire();
+
+  for (auto &elem : m_spaces) {
+    auto space = elem.second;
+
+    if (space->purpose != FIL_TYPE_TABLESPACE &&
+        (!include_log || space->purpose != FIL_TYPE_LOG)) {
+      continue;
+    }
+
+    dberr_t err = f(space);
+
+    if (err != DB_SUCCESS) {
+      mutex_release();
+
+      return (err);
+      ;
+    }
+  }
+
+  mutex_release();
+
+  return (DB_SUCCESS);
+}
+
+
 /** Iterate through all persistent tablespace files (FIL_TYPE_TABLESPACE)
 returning the nodes via callback function cbk.
 @param[in]	include_log	Include log files, if true
@@ -3479,6 +3525,23 @@ dberr_t Fil_shard::iterate(bool include_log, Fil_iterator::Function &f) {
   return (DB_SUCCESS);
 }
 
+/** Iterate through all tablespaces
+@param[in]  include_log Include redo log space, if true
+@param[in]  f   Callback
+@return any error returned by the callback function. */
+dberr_t Fil_system::iterate_spaces(bool include_log,
+                                   Fil_space_iterator::Function &f) {
+  for (auto shard : m_shards) {
+    dberr_t err = shard->iterate_spaces(include_log, f);
+
+    if (err != DB_SUCCESS) {
+      return (err);
+    }
+  }
+
+  return (DB_SUCCESS);
+}
+
 /** Iterate through all persistent tablespace files (FIL_TYPE_TABLESPACE)
 returning the nodes via callback function cbk.
 @param[in]	include_log	include log files, if true
@@ -3496,10 +3559,19 @@ dberr_t Fil_system::iterate(bool include_log, Fil_iterator::Function &f) {
   return (DB_SUCCESS);
 }
 
-/** Iterate through all persistent tablespace files (FIL_TYPE_TABLESPACE)
-returning the nodes via callback function cbk.
+/** Iterate through all spaces
+returning the them via callback function cbk.
 @param[in]	include_log	include log files, if true
 @param[in]	f		Callback
+@return any error returned by the callback function. */
+dberr_t Fil_space_iterator::iterate(bool include_log, Function &&f) {
+  return (fil_system->iterate_spaces(include_log, f));
+}
+
+/** Iterate through all persistent tablespace files (FIL_TYPE_TABLESPACE)
+returning the nodes via callback function cbk.
+@param[in]  include_log include log files, if true
+@param[in]  f   Callback
 @return any error returned by the callback function. */
 dberr_t Fil_iterator::iterate(bool include_log, Function &&f) {
   return (fil_system->iterate(include_log, f));
