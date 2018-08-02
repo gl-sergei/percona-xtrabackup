@@ -2,6 +2,8 @@
 
 start_server --innodb_file_per_table
 
+FULL_DIR="$topdir/full"
+
 vlog "Loading data from sql file"
 run_cmd ${MYSQL} ${MYSQL_ARGS} test < inc/bug723097.sql
 
@@ -10,17 +12,17 @@ checksum_a=`checksum_table test messages`
 vlog "Checksum before is $checksum_a"
 
 vlog "Creating backup directory"
-mkdir -p $topdir/data/full
+mkdir -p $FULL_DIR
 vlog "Starting backup"
 
-xtrabackup --datadir=$mysql_datadir --backup --target-dir=$topdir/data/full
+xtrabackup --datadir=$mysql_datadir --backup --target-dir=$FULL_DIR
 vlog "Backup is done"
-xtrabackup --datadir=$mysql_datadir --prepare --target-dir=$topdir/data/full
+xtrabackup --datadir=$mysql_datadir --prepare --target-dir=$FULL_DIR
 vlog "Data prepared fo restore"
 stop_server
 
-cd $topdir/data/full/test
-cp -r * $mysql_datadir/test
+cd $FULL_DIR/test
+cp -r * $FULL_DIR/test
 cd -
 start_server --innodb_file_per_table
 checksum_b=`checksum_table test messages`

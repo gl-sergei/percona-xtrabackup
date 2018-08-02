@@ -2,6 +2,9 @@
 
 [ -n "$INNODB_VERSION" ] || skip_test "Requires InnoDB plugin or XtraDB"
 
+FULL_DIR="$topdir/full"
+DELTA_DIR="$topdir/delta"
+
 function test_bug_1028949()
 {
   mysqld_additional_args="--innodb_file_per_table --innodb_strict_mode"
@@ -13,15 +16,15 @@ function test_bug_1028949()
   # Full backup
 
   # Full backup folder
-  rm -rf $topdir/data/full
-  mkdir -p $topdir/data/full
+  rm -rf $FULL_DIR
+  mkdir -p $FULL_DIR
   # Incremental data
-  rm -rf $topdir/data/delta
-  mkdir -p $topdir/data/delta
+  rm -rf $DELTA_DIR
+  mkdir -p $DELTA_DIR
 
   vlog "Starting backup"
 
-  xtrabackup --datadir=$mysql_datadir --backup --target-dir=$topdir/data/full \
+  xtrabackup --datadir=$mysql_datadir --backup --target-dir=$FULL_DIR \
       $mysqld_additional_args
 
   vlog "Full backup done"
@@ -52,7 +55,7 @@ function test_bug_1028949()
 
   # Incremental backup
   xtrabackup --datadir=$mysql_datadir --backup \
-      --target-dir=$topdir/data/delta --incremental-basedir=$topdir/data/full \
+      --target-dir=$DELTA_DIR --incremental-basedir=$FULL_DIR \
       $mysqld_additional_args
 
   vlog "Incremental backup done"
@@ -60,15 +63,15 @@ function test_bug_1028949()
 
   # Prepare backup
   xtrabackup --datadir=$mysql_datadir --prepare --apply-log-only \
-      --target-dir=$topdir/data/full $mysqld_additional_args
+      --target-dir=$FULL_DIR $mysqld_additional_args
   vlog "Log applied to backup"
 
   xtrabackup --datadir=$mysql_datadir --prepare --apply-log-only \
-      --target-dir=$topdir/data/full --incremental-dir=$topdir/data/delta \
+      --target-dir=$FULL_DIR --incremental-dir=$DELTA_DIR \
       $mysqld_additional_args
   vlog "Delta applied to backup"
 
-  xtrabackup --datadir=$mysql_datadir --prepare --target-dir=$topdir/data/full \
+  xtrabackup --datadir=$mysql_datadir --prepare --target-dir=$FULL_DIR \
       $mysqld_additional_args
   vlog "Data prepared for restore"
 
@@ -86,7 +89,7 @@ function test_bug_1028949()
 
   vlog "Copying files"
 
-  cd $topdir/data/full/
+  cd $FULL_DIR
   cp -r * $mysql_datadir
   cd -
 
