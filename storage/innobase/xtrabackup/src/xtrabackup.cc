@@ -78,6 +78,15 @@ Place, Suite 330, Boston, MA 02111-1307 USA
 #include <mysql.h>
 #include <sql/current_thd.h>
 #include <clone0api.h>
+#include <mysqld_thd_manager.h>
+#include <table_cache.h>
+
+#include <api0api.h>
+#include <api0misc.h>
+#include <dict0sdi-decompress.h>
+
+#include "sql_thd_internal_api.h"
+#include "sql/dd/impl/sdi.h"
 
 #define G_PTR uchar*
 
@@ -451,7 +460,8 @@ TYPELIB ssl_fips_mode_typelib;
 
 #include "caching_sha2_passwordopt-vars.h"
 
-static PSI_mutex_key key_LOCK_global_system_variables;
+extern struct rand_struct sql_rand;
+extern mysql_mutex_t LOCK_sql_rand;
 
 static void
 check_all_privileges();
@@ -2005,8 +2015,154 @@ error:
 	return(TRUE);
 }
 
+typedef bool (*load_table_predicate_t)(const char*, const char*);
+dberr_t
+xb_load_single_table_tablespaces(load_table_predicate_t pred);
+
+dberr_t dict_load_tables_from_space_id(space_id_t space_id, THD *thd,
+				       ib_trx_t trx)
+{
+	dd::sdi_vector sdi_vector;
+	ib_sdi_vector_t ib_vector;
+	ib_vector.sdi_vector = &sdi_vector;
+
+	if (!fsp_has_sdi(space_id)) {
+		return (DB_SUCCESS);
+	}
+
+	uint32_t compressed_buf_len = 1024 * 1024;
+	uint32_t uncompressed_buf_len = 1024 * 1024;
+	byte *compressed_sdi = static_cast<byte *>(
+			ut_malloc_nokey(compressed_buf_len));
+	byte *sdi = static_cast<byte *>(
+			ut_malloc_nokey(uncompressed_buf_len));
+
+	ib_err_t err = ib_sdi_get_keys(space_id, &ib_vector, trx);
+
+	if (err != DB_SUCCESS) {
+		goto error;
+	}
+
+	for (dd::sdi_container::iterator it =
+	     ib_vector.sdi_vector->m_vec.begin();
+	     it != ib_vector.sdi_vector->m_vec.end(); it++) {
+
+		ib_sdi_key_t ib_key;
+		ib_key.sdi_key = &(*it);
+
+		uint32_t compressed_sdi_len = compressed_buf_len;
+		uint32_t uncompressed_sdi_len = uncompressed_buf_len;
+
+		while (true) {
+			err = ib_sdi_get(
+				space_id, &ib_key,
+				compressed_sdi, &compressed_sdi_len,
+				&uncompressed_sdi_len,
+				trx);
+			if (err == DB_OUT_OF_MEMORY) {
+				compressed_buf_len = compressed_sdi_len;
+				uncompressed_buf_len = uncompressed_sdi_len;
+				compressed_sdi = static_cast<byte *>(
+					ut_realloc(compressed_sdi,
+						   compressed_buf_len));
+				sdi = static_cast<byte *>(
+					ut_realloc(sdi, uncompressed_buf_len));
+				continue;
+			}
+			break;
+		}
+
+		if (err != DB_SUCCESS) {
+			goto error;
+		}
+
+		compressed_sdi[compressed_sdi_len] = 0;
+
+		Sdi_Decompressor decompressor(static_cast<byte *>(sdi),
+			uncompressed_sdi_len, compressed_sdi,
+			compressed_sdi_len);
+		decompressor.decompress();
+
+		sdi[uncompressed_sdi_len] = 0;
+
+		if (ib_key.sdi_key->type != 1/* dd::Sdi_type::TABLE */) {
+			continue;
+		}
+
+		using Table_Ptr = std::unique_ptr<dd::Table>;
+
+		Table_Ptr dd_table{dd::create_object<dd::Table>()};
+		dd::String_type schema_name;
+
+		bool res = dd::deserialize(thd, dd::Sdi_type((const char *)sdi),
+			dd_table.get(), &schema_name);
+
+		if (res) {
+			err = DB_ERROR;
+			goto error;
+		}
+
+		using Client = dd::cache::Dictionary_client;
+		using Releaser = dd::cache::Dictionary_client::Auto_releaser;
+
+		Client *dc = dd::get_dd_client(thd);
+		Releaser releaser{dc};
+
+		dict_table_t *ib_table = nullptr;
+
+		if (dd_table_open_on_dd_obj(dc, *dd_table.get(), ib_table, thd,
+					    &schema_name) != 0) {
+			err = DB_ERROR;
+			goto error;
+		}
+	}
+
+	return (DB_SUCCESS);
+
+error:
+	ut_free(compressed_sdi);
+	ut_free(sdi);
+
+	return (err);
+}
+
+static void
+dict_load_from_spaces_sdi()
+{
+	msg("Populating InnoDB table cache.\n");
+
+	xb_load_single_table_tablespaces(NULL);
+
+	my_thread_init();
+
+	THD *thd = create_thd(false, true, true, 0);
+
+	ib_trx_t trx = ib_trx_begin(IB_TRX_READ_COMMITTED, false, false, thd);
+
+	std::vector<space_id_t> space_ids;
+
+	Fil_space_iterator::for_each_space(
+		false,
+		[&](fil_space_t* space) {
+			space_ids.push_back(space->id);
+			return (DB_SUCCESS);
+		});
+
+	for (auto space_id : space_ids) {
+		if (!fsp_is_ibd_tablespace(space_id)) continue;
+		dict_load_tables_from_space_id(space_id, thd, trx);
+	}
+
+	ib_trx_commit(trx);
+	ib_trx_release(trx);
+
+	destroy_thd(thd);
+
+	my_thread_end();
+}
+
 static bool
-innodb_init(void)
+innodb_init(bool init_dd)
 {
 	/* Check if the data files exist or not. */
 	dberr_t err = srv_sys_space.check_file_spec(
@@ -2018,12 +2174,6 @@ innodb_init(void)
 
 	/* InnoDB files should be found in the following locations only. */
 	std::string directories;
-
-	// if (innobase_directories != nullptr && *innobase_directories != 0) {
-	// 	Fil_path::normalize(innobase_directories);
-	// 	directories.append(Fil_path::parse(innobase_directories));
-	// 	directories.push_back(FIL_PATH_SEPARATOR);
-	// }
 
 	directories.append(srv_data_home);
 
@@ -2044,7 +2194,13 @@ innodb_init(void)
 		goto error;
 	}
 
-	innodb_inited= 1;
+	if (init_dd) {
+		dict_load_from_spaces_sdi();
+	}
+
+	srv_start_threads(false);
+
+	innodb_inited = 1;
 
 	return(false);
 
@@ -2058,6 +2214,10 @@ innodb_end(void)
 {
 	srv_fast_shutdown = (ulint) innobase_fast_shutdown;
 	innodb_inited = 0;
+
+	while (trx_rollback_or_clean_is_active) {
+		os_thread_sleep(1000);
+	}
 
 	msg("xtrabackup: starting shutdown with innodb_fast_shutdown = %lu\n",
 	    srv_fast_shutdown);
@@ -3418,6 +3578,13 @@ xb_load_single_table_tablespace(
 	err = file->validate_first_page(SPACE_UNKNOWN, &flush_lsn, false);
 
 	if (err == DB_SUCCESS) {
+
+		if (fil_space_get(file->space_id())) {
+			/* space already exists */
+			ut_free(name);
+			delete file;
+			return;
+		}
 
 		os_offset_t	node_size = os_file_get_size(file->handle());
 		bool		is_tmp = FSP_FLAGS_GET_TEMPORARY(file->flags());
@@ -5052,7 +5219,7 @@ xtrabackup_stats_func(int argc, char **argv)
 	    "xtrabackup: Using %lld bytes for buffer pool (set by "
 	    "--use-memory parameter)\n", xtrabackup_use_memory);
 
-	if(innodb_init())
+	if(innodb_init(true))
 		exit(EXIT_FAILURE);
 
 	xb_filters_init();
@@ -7005,6 +7172,52 @@ store_master_key_id(
 }
 
 static void
+init_mysql_environment() {
+	ulong server_start_time = my_time(0);
+
+	randominit(&sql_rand, server_start_time, server_start_time / 2);
+
+	mysql_mutex_init(PSI_NOT_INSTRUMENTED, &LOCK_status,
+			 MY_MUTEX_INIT_FAST);
+	mysql_mutex_init(PSI_NOT_INSTRUMENTED, &LOCK_plugin,
+			 MY_MUTEX_INIT_FAST);
+	mysql_mutex_init(PSI_NOT_INSTRUMENTED, &LOCK_global_system_variables,
+			 MY_MUTEX_INIT_FAST);
+	mysql_mutex_init(PSI_NOT_INSTRUMENTED, &LOCK_sql_rand,
+			MY_MUTEX_INIT_FAST);
+
+	Global_THD_manager::create_instance();
+
+	my_thread_stack_size = DEFAULT_THREAD_STACK;
+	my_default_lc_messages = &my_locale_en_US;
+	global_system_variables.collation_connection = default_charset_info;
+	global_system_variables.character_set_results = default_charset_info;
+	global_system_variables.character_set_client = default_charset_info;
+	global_system_variables.lc_messages = my_default_lc_messages;
+
+	table_cache_instances = Table_cache_manager::DEFAULT_MAX_TABLE_CACHES;
+
+	table_def_init();
+	transaction_cache_init();
+
+	mdl_init();
+}
+
+static void
+cleanup_mysql_environment() {
+	mysql_mutex_destroy(&LOCK_status);
+	mysql_mutex_destroy(&LOCK_plugin);
+	mysql_mutex_destroy(&LOCK_global_system_variables);
+	mysql_mutex_destroy(&LOCK_sql_rand);
+
+	Global_THD_manager::destroy_instance();
+
+	transaction_cache_free();
+	table_def_free();
+	mdl_destroy();
+}
+
+static void
 xtrabackup_prepare_func(int argc, char **argv)
 {
 	ulint	err;
@@ -7013,9 +7226,6 @@ xtrabackup_prepare_func(int argc, char **argv)
 	fil_space_t		*space;
 	char			 metadata_path[FN_REFLEN];
 	IORequest		write_request(IORequest::WRITE);
-
-	mysql_mutex_init(key_LOCK_global_system_variables,
-			 &LOCK_global_system_variables, MY_MUTEX_INIT_FAST);
 
 	/* cd to target-dir */
 
@@ -7074,6 +7284,8 @@ skip_check:
 		    "'from_lsn' of the incremental.\n");
 		exit(EXIT_FAILURE);
 	}
+
+	init_mysql_environment();
 
 	/* Create logfiles for recovery from 'xtrabackup_logfile', before start InnoDB */
 	srv_max_n_threads = 1000;
@@ -7187,8 +7399,9 @@ skip_check:
 	    "xtrabackup: Using %lld bytes for buffer pool "
 	    "(set by --use-memory parameter)\n", xtrabackup_use_memory);
 
-	if(innodb_init())
+	if (innodb_init(true)) {
 		goto error_cleanup;
+	}
 
 	it = datafiles_iter_new();
 	if (it == NULL) {
@@ -7517,7 +7730,7 @@ next_node:
 
 		srv_shutdown_state = SRV_SHUTDOWN_NONE;
 
-		if(innodb_init())
+		if(innodb_init(false))
 			goto error;
 
 		if(innodb_end())
@@ -7531,7 +7744,7 @@ next_node:
 		xb_keyring_shutdown();
 	}
 
-	mysql_mutex_destroy(&LOCK_global_system_variables);
+	cleanup_mysql_environment();
 
 	xb_filters_free();
 
@@ -7545,7 +7758,7 @@ error_cleanup:
 
 	xtrabackup_close_temp_log(FALSE);
 
-	mysql_mutex_destroy(&LOCK_global_system_variables);
+	cleanup_mysql_environment();
 
 	xb_filters_free();
 

@@ -48,6 +48,7 @@ Data dictionary interface */
 #include "dd/types/foreign_key_element.h"
 #include "dd/types/index.h"
 #include "dd/types/index_element.h"
+#include "dd/types/column_type_element.h"
 #include "dd/types/partition.h"
 #include "dd/types/partition_index.h"
 #include "dd/types/table.h"
@@ -578,6 +579,11 @@ dberr_t dd_table_check_for_child(dd::cache::Dictionary_client *client,
                                  bool check_charsets,
                                  dict_err_ignore_t ignore_err,
                                  dict_names_t *fk_tables);
+
+int dd_table_open_on_dd_obj(dd::cache::Dictionary_client *client,
+                            const dd::Table &dd_table,
+                            dict_table_t *&table, THD *thd,
+                            const dd::String_type *schema_name);
 
 /** Instantiate an InnoDB in-memory table metadata (dict_table_t)
 based on a Global DD object.
