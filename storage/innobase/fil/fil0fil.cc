@@ -6955,6 +6955,23 @@ dberr_t Fil_shard::get_file_for_io(const IORequest &req_type,
       return (DB_SUCCESS);
 
     } else {
+      /* Extend the file if the page_no does not fall inside its bounds;
+      because xtrabackup may have copied it when it was smaller */
+      if (f.size > 0 && f.size <= *page_no) {
+        auto shard = fil_system->shard_by_id(space->id);
+
+        shard->mutex_release();
+        bool success = shard->space_extend(space, *page_no + 1);
+        shard->mutex_acquire();
+
+        if (!success) {
+          file = nullptr;
+          return (DB_ERROR);
+        }
+
+        file = &f;
+        return (DB_SUCCESS);
+      }
 #ifndef UNIV_HOTBACKUP
       if (space->id != TRX_SYS_SPACE && req_type.is_read() &&
           undo::is_inactive(space->id)) {
