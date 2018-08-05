@@ -2801,7 +2801,6 @@ xtrabackup_copy_datafile(fil_node_t* node, uint thread_n)
 	xb_write_filt_ctxt_t	 write_filt_ctxt;
 	const char		*action;
 	xb_read_filt_t		*read_filter;
-	ibool			is_system;
 	bool			rc = FALSE;
 
 	/* Get the name and the path for the tablespace. node->name always
@@ -2816,7 +2815,10 @@ xtrabackup_copy_datafile(fil_node_t* node, uint thread_n)
 	const char* const node_name = node->space->name;
 	const char* const node_path = node->name;
 
-	is_system = !fsp_is_ibd_tablespace(node->space->id);
+	bool is_system = !fsp_is_ibd_tablespace(node->space->id);
+	bool is_undo = fsp_is_undo_tablespace(node->space->id);
+
+	ut_ad(!is_undo || is_system);
 
 	if (!is_system && opt_lock_ddl_per_table) {
 		mdl_lock_table(node->space->id);
@@ -2842,6 +2844,9 @@ xtrabackup_copy_datafile(fil_node_t* node, uint thread_n)
 
 	if (!is_system) {
 		snprintf(dst_name, sizeof(dst_name), "%s.ibd", node_name);
+	} else if (is_undo) {
+		/* copy undo spaces into the backup root */
+		fn_format(dst_name, cursor.abs_path, "", "", MY_REPLACE_DIR);
 	} else {
 		strncpy(dst_name, cursor.rel_path, sizeof(dst_name));
 	}
