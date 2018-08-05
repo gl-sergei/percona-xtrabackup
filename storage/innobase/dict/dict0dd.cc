@@ -320,6 +320,7 @@ ulint get_innobase_type_from_dd(const dd::Column *col, ulint &unsigned_type) {
 }
 
 dict_table_t *dd_table_create_on_dd_obj(const dd::Table *dd_table,
+                                        const dd::Partition *dd_part,
                                         const dd::String_type *schema_name,
                                         bool is_implicit) {
   mem_heap_t *heap = mem_heap_create(1000);
@@ -752,11 +753,14 @@ dict_table_t *dd_table_create_on_dd_obj(const dd::Table *dd_table,
   }
 
   /* Now fill the space ID and Root page number for each index */
+  i = 0;
   dict_index_t *index = table->first_index();
   for (const auto dd_index : dd_table->indexes()) {
     ut_ad(index != nullptr);
 
-    const dd::Properties &se_private_data = dd_index->se_private_data();
+    const dd::Properties &se_private_data =
+      dd_part == nullptr ? dd_index->se_private_data() :
+                           dd_part->indexes()[i]->se_private_data();
     uint64 id = 0;
     uint32 root = 0;
     uint32 sid = 0;
@@ -767,7 +771,7 @@ dict_table_t *dd_table_create_on_dd_obj(const dd::Table *dd_table,
     } else if (dd_table->tablespace_id() == dict_sys_t::s_dd_temp_space_id) {
       sid = dict_sys_t::s_temp_space_id;
     } else {
-      if (dd_index->se_private_data().get_uint32(
+      if (se_private_data.get_uint32(
               dd_index_key_strings[DD_INDEX_SPACE_ID], &sid)) {
         return (nullptr);
       }
@@ -798,6 +802,7 @@ dict_table_t *dd_table_create_on_dd_obj(const dd::Table *dd_table,
       index->rtr_srs.reset(fetch_srs(index->srid));
 
     index = index->next();
+    ++i;
   }
 
   mutex_enter(&dict_sys->mutex);
@@ -811,11 +816,45 @@ dict_table_t *dd_table_create_on_dd_obj(const dd::Table *dd_table,
   return (table);
 }
 
+table_id_t dd_table_id_and_part(space_id_t space_id, const dd::Table &dd_table,
+                                const dd::Partition *&dd_part) {
+  table_id_t table_id = dd_table.se_private_id();
+
+  dd_part = nullptr;
+
+  if (table_id == dd::INVALID_OBJECT_ID) {
+    /* Partitioned table */
+    ut_ad(dd_table_is_partitioned(dd_table));
+
+    for (auto part : dd_table.leaf_partitions()) {
+      for (auto index : *part->indexes()) {
+        uint64_t prop_space_id;
+
+        dd::Properties &p = index->se_private_data();
+        p.get_uint64(dd_index_key_strings[DD_INDEX_SPACE_ID], &prop_space_id);
+
+        if (prop_space_id == space_id) {
+          p.get_uint64(dd_index_key_strings[DD_TABLE_ID], &table_id);
+          dd_part = part;
+          goto done;
+        }
+      }
+    }
+  }
+
+done:
+  ut_ad(table_id != dd::INVALID_OBJECT_ID);
+
+  return (table_id);
+}
+
 int dd_table_open_on_dd_obj(dd::cache::Dictionary_client *client,
+                            space_id_t space_id,
                             const dd::Table &dd_table,
                             dict_table_t *&table, THD *thd,
                             const dd::String_type *schema_name) {
-  const table_id_t table_id = dd_table.se_private_id();
+  const dd::Partition *dd_part = nullptr;
+  const table_id_t table_id = dd_table_id_and_part(space_id, dd_table, dd_part);
   const ulint fold = ut_fold_ull(table_id);
 
   ut_ad(table_id != dd::INVALID_OBJECT_ID);
@@ -835,7 +874,7 @@ int dd_table_open_on_dd_obj(dd::cache::Dictionary_client *client,
     return (0);
   }
 
-  table = dd_table_create_on_dd_obj(&dd_table, schema_name, false);
+  table = dd_table_create_on_dd_obj(&dd_table, dd_part, schema_name, false);
 
   if (table != nullptr) {
     return (0);

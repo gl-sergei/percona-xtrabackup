@@ -1908,6 +1908,7 @@ innodb_init_param(void)
         changes the value so that it becomes the number of database pages. */
 
 	srv_buf_pool_chunk_unit = 134217728;
+	srv_buf_pool_size = (ulint) xtrabackup_use_memory;
 	srv_buf_pool_instances = 1;
 	srv_buf_pool_size = buf_pool_size_align(srv_buf_pool_size);
 
@@ -2110,7 +2111,8 @@ dberr_t dict_load_tables_from_space_id(space_id_t space_id, THD *thd,
 
 		dict_table_t *ib_table = nullptr;
 
-		if (dd_table_open_on_dd_obj(dc, *dd_table.get(), ib_table, thd,
+		if (dd_table_open_on_dd_obj(dc, space_id, *dd_table.get(),
+					    ib_table, thd,
 					    &schema_name) != 0) {
 			err = DB_ERROR;
 			goto error;
@@ -5188,6 +5190,8 @@ xtrabackup_stats_func(int argc, char **argv)
 		exit(EXIT_FAILURE);
 	}
 
+	srv_max_n_threads = 1000;
+
 	/* initialize components */
 	if(innodb_init_param()) {
 		exit(EXIT_FAILURE);
@@ -5224,7 +5228,7 @@ xtrabackup_stats_func(int argc, char **argv)
 	    "xtrabackup: Using %lld bytes for buffer pool (set by "
 	    "--use-memory parameter)\n", xtrabackup_use_memory);
 
-	if(innodb_init(true))
+	if(innodb_init(false))
 		exit(EXIT_FAILURE);
 
 	xb_filters_init();

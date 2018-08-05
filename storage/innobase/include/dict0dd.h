@@ -581,6 +581,7 @@ dberr_t dd_table_check_for_child(dd::cache::Dictionary_client *client,
                                  dict_names_t *fk_tables);
 
 int dd_table_open_on_dd_obj(dd::cache::Dictionary_client *client,
+                            space_id_t space_id,
                             const dd::Table &dd_table,
                             dict_table_t *&table, THD *thd,
                             const dd::String_type *schema_name);

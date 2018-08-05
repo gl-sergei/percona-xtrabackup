@@ -28,7 +28,6 @@ function test_incremental_compressed()
   MYSQLD_EXTRA_MY_CNF_OPTS="${MYSQLD_EXTRA_MY_CNF_OPTS:-""}
 innodb_strict_mode
 innodb_file_per_table
-innodb_file_format=Barracuda
 innodb_max_dirty_pages_pct=0
 innodb_log_file_size=4M"
   
@@ -49,15 +48,15 @@ KEY_BLOCK_SIZE=$page_size" incremental_sample
   # Full backup
 
   # Full backup folder
-  rm -rf $topdir/data/full
-  mkdir -p $topdir/data/full
+  rm -rf $topdir/full
+  mkdir -p $topdir/full
   # Incremental data
-  rm -rf $topdir/data/delta
-  mkdir -p $topdir/data/delta
+  rm -rf $topdir/delta
+  mkdir -p $topdir/delta
 
   vlog "Starting backup"
 
-  xtrabackup --datadir=$mysql_datadir --backup --target-dir=$topdir/data/full
+  xtrabackup --datadir=$mysql_datadir --backup --target-dir=$topdir/full
 
   vlog "Full backup done"
 
@@ -113,17 +112,17 @@ incremental_sample`
  
   # Incremental backup
   xtrabackup --datadir=$mysql_datadir --backup \
-      --target-dir=$topdir/data/delta --incremental-basedir=$topdir/data/full \
+      --target-dir=$topdir/delta --incremental-basedir=$topdir/full \
       $suspend_arg &
 
   xb_pid=$!
 
   if [ -n "$first_inc_suspend_command" ]
   then
-      wait_for_xb_to_suspend $topdir/data/delta/xtrabackup_debug_sync
+      wait_for_xb_to_suspend $topdir/delta/xtrabackup_debug_sync
       ${MYSQL} ${MYSQL_ARGS} -e "$first_inc_suspend_command"
 
-      resume_suspended_xb $topdir/data/delta/xtrabackup_debug_sync
+      resume_suspended_xb $topdir/delta/xtrabackup_debug_sync
   fi
 
   wait $xb_pid
@@ -133,14 +132,14 @@ incremental_sample`
 
   # Prepare backup
   xtrabackup --datadir=$mysql_datadir --prepare \
-      --apply-log-only --target-dir=$topdir/data/full
+      --apply-log-only --target-dir=$topdir/full
   vlog "Log applied to backup"
   xtrabackup --datadir=$mysql_datadir --prepare \
-      --apply-log-only --target-dir=$topdir/data/full \
-      --incremental-dir=$topdir/data/delta
+      --apply-log-only --target-dir=$topdir/full \
+      --incremental-dir=$topdir/delta
   vlog "Delta applied to backup"
   xtrabackup --datadir=$mysql_datadir --prepare \
-      --target-dir=$topdir/data/full
+      --target-dir=$topdir/full
   vlog "Data prepared for restore"
 
   # removing rows
@@ -155,7 +154,7 @@ incremental_sample`
 
   vlog "Copying files"
 
-  cd $topdir/data/full/
+  cd $topdir/full/
   cp -r * $mysql_datadir
   cd -
 
