@@ -4327,8 +4327,8 @@ open_or_create_log_file(
 	ut_a(*log_space != NULL);
 	ut_a(fil_validate());
 
-	ut_a(fil_node_create(name, srv_log_file_size, *log_space,
-			     false, false) != NULL);
+	ut_a(fil_node_create(name, srv_log_file_size / univ_page_size.physical(),
+			     *log_space, false, false) != NULL);
 
 	return(DB_SUCCESS);
 }
@@ -4681,7 +4681,6 @@ reread_log_header:
 
 		checkpoint_lsn_start = mach_read_from_8(buf + LOG_CHECKPOINT_LSN);
 		checkpoint_no_start = mach_read_from_8(buf + LOG_CHECKPOINT_NO);
-		// mutex_exit(&log_sys->mutex);
 		goto reread_log_header;
 	}
 
