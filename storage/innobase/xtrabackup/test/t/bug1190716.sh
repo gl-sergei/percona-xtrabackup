@@ -6,6 +6,6 @@
 
 start_server
 
-innobackupex --no-timestamp --safe-slave-backup $topdir/backup
+xtrabackup --backup --safe-slave-backup --target-dir=$topdir/backup
 
 grep -q "Not checking slave open temp tables for --safe-slave-backup because host is not a slave" $OUTFILE
