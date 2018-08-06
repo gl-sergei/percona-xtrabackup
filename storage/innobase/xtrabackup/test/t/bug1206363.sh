@@ -11,4 +11,4 @@ innodb_flush_method=O_DIRECT_NO_FSYNC
 
 start_server
 
-xtrabackup --backup --taregt-dir=$topdir/backup
+xtrabackup --backup --target-dir=$topdir/backup
