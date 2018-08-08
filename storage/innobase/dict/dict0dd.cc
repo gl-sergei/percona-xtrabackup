@@ -752,6 +752,31 @@ dict_table_t *dd_table_create_on_dd_obj(const dd::Table *dd_table,
     }
   }
 
+  /* Fill autoincrement data */
+  i = 0;
+  for (auto dd_col : dd_table->columns()) {
+    if (dd_col->is_se_hidden()) continue;
+
+    ++i;
+
+    if (!dd_col->is_auto_increment()) continue;
+
+    const dd::Properties &p = dd_table->table().se_private_data();
+    dict_table_autoinc_set_col_pos(table, i - 1);
+    uint64 version, autoinc = 0;
+    if (p.get_uint64(dd_table_key_strings[DD_TABLE_VERSION], &version) ||
+        p.get_uint64(dd_table_key_strings[DD_TABLE_AUTOINC], &autoinc)) {
+      ut_ad(!"problem setting AUTO_INCREMENT");
+      return (nullptr);
+    }
+
+    table->version = version;
+    dict_table_autoinc_lock(table);
+    dict_table_autoinc_initialize(table, autoinc + 1);
+    dict_table_autoinc_unlock(table);
+    table->autoinc_persisted = autoinc;
+  }
+
   /* Now fill the space ID and Root page number for each index */
   i = 0;
   dict_index_t *index = table->first_index();
