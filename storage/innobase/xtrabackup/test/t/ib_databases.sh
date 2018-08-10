@@ -22,6 +22,10 @@ cat <<EOF | run_cmd $MYSQL $MYSQL_ARGS
 
 EOF
 
+# wait for InnoDB to flush all changes to make sure that tables will not be
+# create from redo logs during prepare
+innodb_wait_for_flush_all
+
 xtrabackup --backup --databases=test\ test1.b\ test1.c\ mysql\ performance_schema --target-dir=$topdir/backup
 xtrabackup --prepare --target-dir=$topdir/backup
 vlog "Backup taken"
