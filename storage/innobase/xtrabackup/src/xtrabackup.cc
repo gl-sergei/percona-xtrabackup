@@ -6378,6 +6378,21 @@ rm_if_not_found(
 	return(true);
 }
 
+/** Make sure that we have a read access to the given datadir entry
+@param[in]	statinfo	entry stat info
+@param[out]	name		entry name */
+static void
+check_datadir_enctry_access(const char *name, const struct stat *statinfo)
+{
+	const char *entry_type = S_ISDIR(statinfo->st_mode) ?
+		"directory" : "file";
+	if ((statinfo->st_mode & S_IRUSR) != S_IRUSR) {
+		msg("xtrabackup: Error: %s '%s' is not readable by "
+			"XtraBackup\n", entry_type, name);
+		exit(EXIT_FAILURE);
+	}
+}
+
 /** Process single second level datadir entry for
 xb_process_datadir
 @param[in]	datadir	datadir path
@@ -6407,6 +6422,7 @@ process_datadir_l2cbk(
 	if (S_ISREG(statinfo.st_mode) &&
 		(strlen(name) > suffix_len &&
 		 strcmp(name + strlen(name) - suffix_len, suffix) == 0)) {
+		check_datadir_enctry_access(name, &statinfo);
 		func(datadir_entry_t(datadir, path, dbname, name, false), data);
 	}
 }
@@ -6434,8 +6450,9 @@ process_datadir_l1cbk(
 		return;
 	}
 
-	if (S_ISDIR(statinfo.st_mode)) {
+	if (S_ISDIR(statinfo.st_mode) && !check_if_skip_database_by_path(name)) {
 		bool is_empty_dir = true;
+		check_datadir_enctry_access(name, &statinfo);
 		os_file_scan_directory(path,
 			[&] (const char *l2path, const char *l2name)
 				mutable -> void {
@@ -6461,6 +6478,7 @@ process_datadir_l1cbk(
 	if (S_ISREG(statinfo.st_mode) &&
 		(strlen(name) > suffix_len &&
 		 strcmp(name + strlen(name) - suffix_len, suffix) == 0)) {
+		check_datadir_enctry_access(name, &statinfo);
 		func(datadir_entry_t(datadir, path, "", name, false), data);
 	}
 }

@@ -94,6 +94,7 @@ expect_dir_contents $backup_dir <<EOF
 ./database2/t2.ibd
 ./database2/thisisatable.ibd
 ./database2/t.ibd
+./mysql.ibd
 ./test1/ancor.ibd
 ./test1/t.ibd
 ./testdatabase/t.ibd
@@ -126,6 +127,7 @@ expect_dir_contents $backup_dir <<EOF
 ./database2/t2.ibd
 ./database2/thisisatable.ibd
 ./database2/t.ibd
+./mysql.ibd
 ./test1/ancor.ibd
 ./test1/t.ibd
 ./testdatabase/t.ibd
@@ -166,6 +168,7 @@ xtrabackup --backup \
 	--tables-file=$topdir/list \
 	--target-dir=$backup_dir --datadir=$mysql_datadir
 expect_dir_contents $backup_dir <<EOF
+./mysql.ibd
 ./test1/ancor.ibd
 ./test1/t.ibd
 ./testdatabase/t.ibd
@@ -189,6 +192,7 @@ expect_dir_contents $backup_dir <<EOF
 ./database2/t2.ibd
 ./database2/thisisatable.ibd
 ./database2/t.ibd
+./mysql.ibd
 ./test1/ancor.ibd
 ./test1/t1.ibd
 ./test1/t2.ibd
@@ -220,6 +224,7 @@ expect_dir_contents $backup_dir <<EOF
 ./database2/t1.ibd
 ./database2/t2.ibd
 ./database2/t.ibd
+./mysql.ibd
 EOF
 rm -rf $backup_dir/*
 
@@ -235,6 +240,7 @@ expect_dir_contents $backup_dir <<EOF
 ./database2/t1.ibd
 ./database2/t2.ibd
 ./database2/t.ibd
+./mysql.ibd
 EOF
 rm -rf $backup_dir/*
 
@@ -268,6 +274,7 @@ expect_dir_contents $backup_dir <<EOF
 ./database2/t2.ibd
 ./database2/thisisatable.ibd
 ./database2/t.ibd
+./mysql.ibd
 EOF
 rm -rf $backup_dir/*
 
