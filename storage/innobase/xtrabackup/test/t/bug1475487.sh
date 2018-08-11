@@ -2,6 +2,10 @@
 # Bug 1475487: xtrabackup handling of space id conflicts
 #
 
+# MySQL 8 fails with multiple files having the same tablespace id found in
+# the datadir
+require_server_version_lower_than 8.0.1
+
 start_server --innodb_file_per_table
 
 ${MYSQL} ${MYSQL_ARGS} -e "CREATE TABLE t (a INT) engine=InnoDB" test
@@ -12,7 +16,7 @@ datadir=$mysql_datadir
 
 shutdown_server
 
-cp $datadir/test/t.ibd $datadir/test/a.ibd 
+cp $datadir/test/t.ibd $datadir/test/a.ibd
 
 start_server --innodb_file_per_table
 

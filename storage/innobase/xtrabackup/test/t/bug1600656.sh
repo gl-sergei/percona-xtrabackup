@@ -15,11 +15,11 @@ vlog "#########################################################################"
 vlog "Taking a backup and stream stuff, saving extra stuff into lsndir"
 
 xtrabackup --backup \
-    --stream=tar \
+    --stream=xbstream \
     --extra-lsndir=$topdir/lsndir \
-    > $topdir/backup/stream.tar
+    > $topdir/backup/stream.xbs
 
-tar -xf $topdir/backup/stream.tar -C $topdir/backup
+xbstream -xv -C $topdir/backup < $topdir/backup/stream.xbs
 
 vlog "#########################################################################"
 vlog "Verifying that streamed and 'extra copy' of xtrabackup_info do not differ"

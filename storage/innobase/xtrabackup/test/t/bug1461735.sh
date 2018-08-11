@@ -53,6 +53,7 @@ EOF
 
 	xb_pid=`cat $pid_file`
 
+	$MYSQL $MYSQL_ARGS -Ns -e "INSERT INTO t (a) VALUES (10), (20), (30);" sakila
 	$MYSQL $MYSQL_ARGS -Ns -e "DROP DATABASE sakila"
 
 	# Resume the xtrabackup process

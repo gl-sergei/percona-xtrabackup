@@ -43,8 +43,8 @@ then
 
 vlog "Creating user 'pxb'"
 
-${MYSQL} ${MYSQL_ARGS} -e "CREATE USER pxb@'localhost' IDENTIFIED BY 'password1'"
-${MYSQL} ${MYSQL_ARGS} -e "GRANT PROCESS, RELOAD, LOCK TABLES, REPLICATION CLIENT ON *.* TO pxb@'localhost' REQUIRE SSL"
+${MYSQL} ${MYSQL_ARGS} -e "CREATE USER pxb@'localhost' IDENTIFIED BY 'password1' REQUIRE SSL"
+${MYSQL} ${MYSQL_ARGS} -e "GRANT PROCESS, RELOAD, LOCK TABLES, REPLICATION CLIENT ON *.* TO pxb@'localhost'"
 ${MYSQL} ${MYSQL_ARGS} -e "FLUSH PRIVILEGES"
 
 vlog 'connecting with MYSQL cli'
@@ -54,7 +54,6 @@ run_cmd ${MYSQL} \
 	--password=password1 \
 	--host=127.0.0.1 \
 	--port=${MYSQLD_PORT} \
-	--ssl \
 	--ssl-ca=${PWD}/inc/ssl-certs/cacert.pem \
 	--ssl-cert=${PWD}/inc/ssl-certs/client-cert.pem \
 	--ssl-key=${PWD}/inc/ssl-certs/client-key.pem \
@@ -68,7 +67,6 @@ run_cmd ${XB_BIN} \
 	--password=password1 \
 	--host=127.0.0.1 \
 	--port=${MYSQLD_PORT} \
-	--ssl \
 	--ssl-ca=${PWD}/inc/ssl-certs/cacert.pem \
 	--ssl-cert=${PWD}/inc/ssl-certs/client-cert.pem \
 	--ssl-key=${PWD}/inc/ssl-certs/client-key.pem \

@@ -21,9 +21,7 @@ xtrabackup --datadir=$mysql_datadir --prepare --target-dir=$FULL_DIR
 vlog "Data prepared fo restore"
 stop_server
 
-cd $FULL_DIR/test
-cp -r * $FULL_DIR/test
-cd -
+cp -r $FULL_DIR/test/* $mysql_datadir/test
 start_server --innodb_file_per_table
 checksum_b=`checksum_table test messages`
 vlog "Checksum after is $checksum_b"

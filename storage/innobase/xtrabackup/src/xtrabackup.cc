@@ -1529,13 +1529,11 @@ xb_get_one_option(int optid,
     innodb_checksum_algorithm_specified = true;
     break;
 
-  // case OPT_INNODB_LOG_CHECKSUM_ALGORITHM:
+  case OPT_INNODB_LOG_CHECKSUMS:
 
-  //   ut_a(srv_log_checksum_algorithm <= SRV_CHECKSUM_ALGORITHM_STRICT_NONE);
-
-  //   ADD_PRINT_PARAM_OPT(innodb_checksum_algorithm_names[srv_log_checksum_algorithm]);
-  //   innodb_log_checksum_algorithm_specified = true;
-  //   break;
+    ADD_PRINT_PARAM_OPT(srv_log_checksums);
+    innodb_log_checksums_specified = true;
+    break;
 
   case OPT_INNODB_BUFFER_POOL_FILENAME:
 
