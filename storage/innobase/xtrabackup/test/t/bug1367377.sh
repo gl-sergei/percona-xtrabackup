@@ -4,6 +4,8 @@
 
 start_server
 
+test -d xtrabackup_backupfiles && rm -rf xtrabackup_backupfiles
+
 run_cmd_expect_failure $XB_BIN $XB_ARGS --backup foo
 
 test -d xtrabackup_backupfiles && die "Default backup directory found" || true
