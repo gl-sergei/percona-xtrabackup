@@ -23,6 +23,10 @@ cat <<EOF | run_cmd $MYSQL $MYSQL_ARGS
 
 EOF
 
+# wait for InnoDB to flush all changes to make sure that tables will not be
+# create from redo logs during prepare
+innodb_wait_for_flush_all
+
 # Take a backup
 # Backup the whole test and b,c from test1
 cat >$topdir/databases_file <<EOF
