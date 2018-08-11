@@ -35,14 +35,14 @@ vlog "Initial rows added"
 # Full backup
 
 # Full backup folder
-mkdir -p $topdir/data/full
+mkdir -p $topdir/backup/full
 # Incremental data
-mkdir -p $topdir/data/delta
+mkdir -p $topdir/backup/delta
 
 vlog "Starting backup"
 
 xtrabackup --no-defaults --datadir=$mysql_datadir --backup \
-    --target-dir=$topdir/data/full
+    --target-dir=$topdir/backup/full
 
 vlog "Full backup done"
 
@@ -69,20 +69,20 @@ vlog "Making incremental backup"
 
 # Incremental backup
 xtrabackup --no-defaults --datadir=$mysql_datadir --backup \
-    --target-dir=$topdir/data/delta --incremental-basedir=$topdir/data/full
+    --target-dir=$topdir/backup/delta --incremental-basedir=$topdir/backup/full
 
 vlog "Incremental backup done"
 vlog "Preparing backup"
 
 # Prepare backup
 xtrabackup --no-defaults --datadir=$mysql_datadir --prepare --apply-log-only \
-    --target-dir=$topdir/data/full
+    --target-dir=$topdir/backup/full
 vlog "Log applied to backup"
 xtrabackup --no-defaults --datadir=$mysql_datadir --prepare --apply-log-only \
-    --target-dir=$topdir/data/full --incremental-dir=$topdir/data/delta
+    --target-dir=$topdir/backup/full --incremental-dir=$topdir/backup/delta
 vlog "Delta applied to backup"
 xtrabackup --no-defaults --datadir=$mysql_datadir --prepare \
-    --target-dir=$topdir/data/full
+    --target-dir=$topdir/backup/full
 vlog "Data prepared for restore"
 
 # removing rows
@@ -95,7 +95,7 @@ stop_server
 
 vlog "Copying files"
 
-cd $topdir/data/full/
+cd $topdir/backup/full/
 cp -r * $mysql_datadir
 cd $topdir
 
