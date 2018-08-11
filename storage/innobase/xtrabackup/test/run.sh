@@ -264,12 +264,22 @@ function set_vars()
 {
     if gnutar --version > /dev/null 2>&1
     then
-	TAR=gnutar
+        TAR=gnutar
     elif gtar --version > /dev/null 2>&1
     then
-	TAR=gtar
+        TAR=gtar
     else
-	TAR=tar
+        TAR=tar
+    fi
+
+    if gnused --version > /dev/null 2>&1
+    then
+        SED=gnused
+    elif gtar --version > /dev/null 2>&1
+    then
+        SED=gsed
+    else
+        SED=sed
     fi
 
     find_program MYSQLD mysqld $MYSQL_BASEDIR/bin/ $MYSQL_BASEDIR/libexec
@@ -299,7 +309,7 @@ function set_vars()
     fi
     DYLD_LIBRARY_PATH="$LD_LIBRARY_PATH"
 
-    export TAR MYSQL_BASEDIR MYSQL MYSQLD MYSQLADMIN \
+    export TAR SED MYSQL_BASEDIR MYSQL MYSQLD MYSQLADMIN \
 MYSQL_INSTALL_DB PATH LD_LIBRARY_PATH DYLD_LIBRARY_PATH MYSQLDUMP \
 XTRABACKUP_BASEDIR
 
