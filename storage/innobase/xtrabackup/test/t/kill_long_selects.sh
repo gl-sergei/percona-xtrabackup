@@ -90,9 +90,11 @@ EOF
 
 function wait_for_connection_count()
 {
-  n=$(($1 + 1))
+  n=$1
+  QUERY="SELECT COUNT(*) FROM PROCESSLIST \
+WHERE CURRENT_USER() LIKE CONCAT(USER, '%') AND ID <> CONNECTION_ID()"
   for i in {1..200} ; do
-    count=`${MYSQL} ${MYSQL_ARGS} -N -e "SHOW PROCESSLIST" test | wc -l`
+    count=`${MYSQL} ${MYSQL_ARGS} -N -e "${QUERY}" information_schema`
     [ $count != $n ] || break
     sleep 0.3
   done
