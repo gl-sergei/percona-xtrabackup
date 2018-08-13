@@ -7491,6 +7491,11 @@ skip_check:
 			    "failed.\n");
 			exit(EXIT_FAILURE);
 		}
+
+		my_thread_init();
+
+		THD* thd = create_thd(false, true, true, 0);
+
 		while ((node = datafiles_iter_next(it)) != NULL) {
 			int		 len;
 			char		*next, *prev, *p;
@@ -7525,9 +7530,9 @@ skip_check:
 
 			info_file_path[len - 4] = '.';
 
-			mutex_enter(&(dict_sys->mutex));
+			table = dd_table_open_on_name(thd, NULL, table_name, false, true);
 
-			table = dict_table_get_low(table_name);
+			mutex_enter(&(dict_sys->mutex));
 			if (!table) {
 				msg("xtrabackup: error: "
 				    "cannot find dictionary "
@@ -7614,6 +7619,9 @@ skip_check:
 				goto next_node;
 			}
 next_node:
+			if(table != nullptr) {
+				dd_table_close(table, thd, nullptr, true);
+			}
 			if (info_file != XB_FILE_UNDEFINED) {
 				os_file_close(info_file);
 				info_file = XB_FILE_UNDEFINED;
@@ -7624,6 +7632,9 @@ next_node:
 		ut_free(buf);
 
 		datafiles_iter_free(it);
+
+		destroy_thd(thd);
+		my_thread_end();
 	}
 
 	/* print the binary log position  */
