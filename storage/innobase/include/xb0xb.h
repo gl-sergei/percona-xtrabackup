@@ -21,10 +21,6 @@ Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA
 #ifndef xb0xb_h
 #define xb0xb_h
 
-#ifdef __cplusplus
-extern "C" {
-#endif
-
 extern bool innodb_log_checksums_specified;
 extern bool innodb_checksum_algorithm_specified;
 
@@ -53,8 +49,21 @@ xb_compact_rebuild_indexes(void);
 void
 xb_fetch_tablespace_key(ulint space_id, byte *key, byte *iv);
 
-#ifdef __cplusplus
-}
-#endif
+/** Add file to tablespace map.
+@param[in]	file_name	file name
+@param[in]	tablespace_name	corresponding tablespace name */
+void
+xb_tablespace_map_add(const char *file_name, const char *tablespace_name);
+
+/** Delete tablespace from mapping.
+@param[in]	tablespace_name	tablespace name */
+void
+xb_tablespace_map_delete(const char *tablespace_name);
+
+/** Lookup backup file name for given file.
+@param[in]	file_name	file name
+@return		local file name */
+std::string
+xb_tablespace_backup_file_path(const std::string &file_name);
 
 #endif

@@ -127,9 +127,10 @@ and "./ibdata1" yield "ibdata1" in the output. */
 const char *
 xb_get_relative_path(
 /*=================*/
+	ulint		flags,		/*!< in: tablespace flags */
 	const char*	path,		/*!< in: tablespace path (either
 			  		relative or absolute) */
-	ibool		is_system);	/*!< in: TRUE for system tablespaces,
+	bool		is_system);	/*!< in: TRUE for system tablespaces,
 					i.e. when only the filename must be
 					returned. */
 

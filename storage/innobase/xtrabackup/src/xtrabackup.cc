@@ -112,6 +112,7 @@ Place, Suite 330, Boston, MA 02111-1307 USA
 #include "ds_encrypt.h"
 #include "xbcrypt_common.h"
 #include "crc_glue.h"
+#include "space_map.h"
 
 /* TODO: replace with appropriate macros used in InnoDB 5.6 */
 #define PAGE_ZIP_MIN_SIZE_SHIFT	10
@@ -2842,9 +2843,7 @@ xtrabackup_copy_datafile(fil_node_t* node, uint thread_n)
 		goto error;
 	}
 
-	if (!is_system) {
-		snprintf(dst_name, sizeof(dst_name), "%s.ibd", node_name);
-	} else if (is_undo) {
+	if (is_undo) {
 		/* copy undo spaces into the backup root */
 		fn_format(dst_name, cursor.abs_path, "", "", MY_REPLACE_DIR);
 	} else {
@@ -3539,19 +3538,11 @@ xb_fil_io_init(void)
 	fsp_init();
 }
 
-Datafile *xb_new_datafile(
-	const char *name)
-{
-	Datafile *file = new Datafile();
-	file->set_name(name);
-	file->make_filepath(".", name, IBD);
-	return(file);
-}
-
 void
 xb_load_single_table_tablespace(
 	const char *dirname,
-	const char *filname)
+	const char *filname,
+	const char *tablespace_name)
 {
 	/* The name ends in .ibd or .isl;
 	try opening the file */
@@ -3573,44 +3564,46 @@ xb_load_single_table_tablespace(
 		name[pathlen - 5] = 0;
 	}
 
-	Datafile *file = xb_new_datafile(name);
+	Datafile file;
+	file.set_name(name);
+	file.make_filepath(".", name, IBD);
 
-	if (file->open_read_only(true) != DB_SUCCESS) {
+	if (file.open_read_only(true) != DB_SUCCESS) {
 		ut_free(name);
 		exit(EXIT_FAILURE);
 	}
 
-	err = file->validate_first_page(SPACE_UNKNOWN, &flush_lsn, false);
+	err = file.validate_first_page(SPACE_UNKNOWN, &flush_lsn, false);
 
 	if (err == DB_SUCCESS) {
 
-		if (fil_space_get(file->space_id())) {
+		if (fil_space_get(file.space_id())) {
 			/* space already exists */
 			ut_free(name);
-			delete file;
 			return;
 		}
 
-		os_offset_t	node_size = os_file_get_size(file->handle());
-		bool		is_tmp = FSP_FLAGS_GET_TEMPORARY(file->flags());
+		os_offset_t	node_size = os_file_get_size(file.handle());
+		bool		is_tmp = FSP_FLAGS_GET_TEMPORARY(file.flags());
 		os_offset_t	n_pages;
 
 		ut_a(node_size != (os_offset_t) -1);
 
-		n_pages = node_size / page_size_t(file->flags()).physical();
+		n_pages = node_size / page_size_t(file.flags()).physical();
 
 		space = fil_space_create(
-			name, file->space_id(), file->flags(),
+			tablespace_name ? tablespace_name : name,
+			file.space_id(), file.flags(),
 			is_tmp ? FIL_TYPE_TEMPORARY : FIL_TYPE_TABLESPACE);
 
 		ut_a(space != NULL);
 
 		/* For encrypted tablespace, initialize encryption
 		information.*/
-		if (FSP_FLAGS_GET_ENCRYPTION(file->flags())) {
+		if (FSP_FLAGS_GET_ENCRYPTION(file.flags())) {
 			if (srv_backup_mode || !use_dumped_tablespace_keys) {
-				byte*	key = file->m_encryption_key;
-				byte*	iv = file->m_encryption_iv;
+				byte*	key = file.m_encryption_key;
+				byte*	iv = file.m_encryption_iv;
 				ut_ad(key && iv);
 
 				err = fil_set_encryption(space->id,
@@ -3628,7 +3621,7 @@ xb_load_single_table_tablespace(
 			ut_ad(err == DB_SUCCESS);
 		}
 
-		if (!fil_node_create(file->filepath(), n_pages, space,
+		if (!fil_node_create(file.filepath(), n_pages, space,
 				     false, false)) {
 			ut_error;
 		}
@@ -3652,8 +3645,6 @@ xb_load_single_table_tablespace(
 	}
 
 	ut_free(name);
-
-	delete file;
 }
 
 static
@@ -3684,7 +3675,7 @@ readdir_l2cbk(load_table_predicate_t pred, const char *dbname, const char *path,
 
 	if (S_ISREG(statinfo.st_mode) && is_tablespace_name(name) &&
 		!(pred && !pred(".", name))) {
-		xb_load_single_table_tablespace(dbname, name);
+		xb_load_single_table_tablespace(dbname, name, nullptr);
 	}
 }
 
@@ -3710,7 +3701,7 @@ readdir_l1cbk(load_table_predicate_t pred, const char *path, const char *name)
 
 	if (S_ISREG(statinfo.st_mode) && is_tablespace_name(name) &&
 		!(pred && !pred(".", name))) {
-		xb_load_single_table_tablespace(NULL, name);
+		xb_load_single_table_tablespace(nullptr, name, nullptr);
 	}
 }
 
@@ -3729,15 +3720,34 @@ xb_load_single_table_tablespaces(load_table_predicate_t pred)
 	bool ret = xb_process_datadir(MySQL_datadir_path, ".ibd",
 		[=] (const datadir_entry_t& entry,
 		     void *arg) mutable -> bool {
-		     	if (entry.is_empty_dir) {
-		     		return true;
-		     	}
-		     	xb_load_single_table_tablespace(
-		     		entry.db_name.empty() ?
-		     			nullptr : entry.db_name.c_str(),
-		     		entry.file_name.c_str());
+			if (entry.is_empty_dir) {
+				return true;
+			}
+			xb_load_single_table_tablespace(
+				entry.db_name.empty() ?
+					nullptr : entry.db_name.c_str(),
+				entry.file_name.c_str(),
+				nullptr);
 			return true;
 		}, nullptr);
+
+	if (!srv_backup_mode) {
+		return(ret ? DB_SUCCESS : DB_ERROR);
+	}
+
+	if (!ret) {
+		return (DB_ERROR);
+	}
+
+	const auto &map = Tablespace_map::instance();
+
+	for (auto file_path : map.external_files()) {
+		std::string name = map.backup_file_name(file_path);
+		name = name.substr(0, name.length() - 4);
+		xb_load_single_table_tablespace(nullptr, file_path.c_str(),
+			name.c_str());
+	}
+
 	return(ret ? DB_SUCCESS : DB_ERROR);
 }
 
@@ -4731,6 +4741,8 @@ reread_log_header:
 	log_copying_stop = os_event_create("log_copying_stop");
 	os_thread_create(PFS_NOT_INSTRUMENTED, log_copying_thread);
 
+	Tablespace_map::instance().scan(mysql_connection);
+
 	/* Populate fil_system with tablespaces to copy */
 	err = xb_load_tablespaces();
 	if (err != DB_SUCCESS) {
@@ -4897,6 +4909,8 @@ skip_last_cp:
 	if (opt_lock_ddl_per_table) {
 		mdl_unlock_all();
 	}
+
+	Tablespace_map::instance().serialize(ds_data);
 
 	if (opt_transition_key != NULL || opt_generate_transition_key) {
 		if (!xb_tablespace_keys_dump(ds_data, opt_transition_key,
@@ -7368,15 +7382,17 @@ skip_check:
 
 	xb_normalize_init_values();
 
+	Tablespace_map::instance().deserialize("./");
+
 	if (xtrabackup_incremental) {
+		Tablespace_map::instance().deserialize(
+			xtrabackup_incremental_dir);
 		err = xb_data_files_init();
 		if (err != DB_SUCCESS) {
 			msg("xtrabackup: error: xb_data_files_init() failed "
 			    "with error code %lu\n", err);
 			goto error_cleanup;
 		}
-	}
-	if (xtrabackup_incremental) {
 		inc_dir_tables_hash = hash_create(1000);
 
 		if(!xtrabackup_apply_deltas()) {
@@ -7778,6 +7794,8 @@ next_node:
 	if (!use_dumped_tablespace_keys) {
 		xb_keyring_shutdown();
 	}
+
+	Tablespace_map::instance().serialize();
 
 	cleanup_mysql_environment();
 

@@ -97,6 +97,7 @@ MYSQL_ADD_EXECUTABLE(xtrabackup
   backup_copy.cc
   keyring_plugins.cc
   kdf.cc
+  space_map.cc
   ${CMAKE_SOURCE_DIR}/sql-common/client_authentication.cc
   )
 

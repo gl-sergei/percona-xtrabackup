@@ -32,9 +32,9 @@ do
 EOF
 done
 
-checksum_a=`checksum_table test t`
-
 xtrabackup --backup --target-dir=$topdir/backup
+
+record_db_state test
 
 stop_server
 
@@ -66,16 +66,7 @@ for cmd in "--copy-back" "--move-back" ; do
 
     start_server
 
-    checksum_b=`checksum_table test t`
-
-    vlog "Old checksum: $checksum_a"
-    vlog "New checksum: $checksum_b"
-
-    if [ "$checksum_a" != "$checksum_b"  ]
-    then
-        vlog "Checksums do not match"
-        exit -1
-    fi
+    verify_db_state test
 
     stop_server
 

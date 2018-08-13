@@ -63,6 +63,7 @@ Place, Suite 330, Boston, MA 02111-1307 USA
 #include "backup_copy.h"
 #include "backup_mysql.h"
 #include "keyring_plugins.h"
+#include "space_map.h"
 #include "xb0xb.h"
 
 using std::min;
@@ -82,8 +83,6 @@ extern TYPELIB innodb_flush_method_typelib;
 
 /* list of files to sync for --rsync mode */
 static std::set<std::string> rsync_list;
-/* locations of tablespaces read from .isl files */
-static std::map<std::string, std::string> tablespace_locations;
 
 /* the purpose of file copied */
 enum file_purpose_t {
@@ -203,7 +202,7 @@ datafile_open(const char *file, datafile_cur_t *cursor, uint thread_n)
 	tablespaces may have absolute paths for remote tablespaces in MySQL
 	5.6+. We want to make "local" copies for the backup. */
 	strncpy(cursor->rel_path,
-		xb_get_relative_path(cursor->abs_path, FALSE),
+		xb_get_relative_path(0, cursor->abs_path, FALSE),
 		sizeof(cursor->rel_path));
 
 	cursor->fd = my_open(cursor->abs_path, O_RDONLY, MYF(MY_WME));
@@ -822,57 +821,6 @@ move_file(ds_ctxt_t *datasink,
 
 
 /************************************************************************
-Read link from .isl file if any and store it in the global map associated
-with given tablespace. */
-static
-void
-read_link_file(const char *ibd_filepath, const char *link_filepath)
-{
-	char *filepath= NULL;
-
-	FILE *file = fopen(link_filepath, "r+b");
-	if (file) {
-		filepath = static_cast<char*>(malloc(OS_FILE_MAX_PATH));
-
-		os_file_read_string(file, filepath, OS_FILE_MAX_PATH);
-		fclose(file);
-
-		if (strlen(filepath)) {
-			/* Trim whitespace from end of filepath */
-			ulint lastch = strlen(filepath) - 1;
-			while (lastch > 4 && filepath[lastch] <= 0x20) {
-				filepath[lastch--] = 0x00;
-			}
-			Fil_path::normalize(filepath);
-		}
-
-		tablespace_locations[ibd_filepath] = filepath;
-	}
-	free(filepath);
-}
-
-
-/************************************************************************
-Return the location of given .ibd if it was previously read
-from .isl file.
-@return NULL or destination .ibd file path. */
-static
-const char *
-tablespace_filepath(const char *ibd_filepath)
-{
-	std::map<std::string, std::string>::iterator it;
-
-	it = tablespace_locations.find(ibd_filepath);
-
-	if (it != tablespace_locations.end()) {
-		return it->second.c_str();
-	}
-
-	return NULL;
-}
-
-
-/************************************************************************
 Fix InnoDB page checksum after modifying it. */
 static
 void
@@ -988,49 +936,38 @@ copy_or_move_file(const char *src_file_path,
 		  file_purpose_t file_purpose)
 {
 	ds_ctxt_t *datasink = ds_data;		/* copy to datadir by default */
-	char filedir[FN_REFLEN];
-	size_t filedir_len;
+	std::string external_file_name;
+	char external_dir[FN_REFLEN];
 	bool ret;
 
-	/* read the link from .isl file */
-	if (ends_with(src_file_path, ".isl")) {
-		char *ibd_filepath;
-
-		ibd_filepath = strdup(src_file_path);
-		strcpy(ibd_filepath + strlen(ibd_filepath) - 3, "ibd");
-
-		read_link_file(ibd_filepath, src_file_path);
-
-		free(ibd_filepath);
-	}
-
-	/* check if there is .isl file */
 	if (ends_with(src_file_path, ".ibd")) {
-		char *link_filepath;
-		const char *filepath;
+		std::string tablespace_name = src_file_path;
+		/* Remove starting ./ and trailing .ibd from tablespace name */
+		tablespace_name = tablespace_name.substr(
+			2, tablespace_name.length() - 6);
+		external_file_name = Tablespace_map::instance()
+			.external_file_name(tablespace_name);
+		if (!external_file_name.empty()) {
+			/* This is external tablespace. Copy it to it's original
+			location */
+			dst_file_path = external_file_name.c_str();
 
-		link_filepath = strdup(src_file_path);
-		strcpy(link_filepath + strlen(link_filepath) - 3, "isl");
+			/* Make sure that destination directory exists */
+			size_t dirname_length;
 
-		read_link_file(src_file_path, link_filepath);
+			dirname_part(external_dir, dst_file_path,
+				     &dirname_length);
 
-		filepath = tablespace_filepath(src_file_path);
-
-		if (filepath != NULL) {
-			dirname_part(filedir, filepath, &filedir_len);
-
-			dst_file_path = filepath + filedir_len;
-			dst_dir = filedir;
-
-			if (!directory_exists(dst_dir, true)) {
-				ret = false;
-				goto cleanup;
+			if (!directory_exists(external_dir, true)) {
+				return(false);
 			}
 
-			datasink = ds_create(dst_dir, DS_TYPE_LOCAL);
-		}
+			datasink = ds_create(external_dir, DS_TYPE_LOCAL);
 
-		free(link_filepath);
+			dst_file_path = external_file_name.c_str() +
+							dirname_length;
+			dst_dir = external_dir;
+		}
 	}
 
 	ret = (xtrabackup_copy_back ?
@@ -1042,8 +979,6 @@ copy_or_move_file(const char *src_file_path,
 	    file_purpose == FILE_PURPOSE_DATAFILE) {
 		reencrypt_datafile_header(dst_dir, dst_file_path, thread_n);
 	}
-
-cleanup:
 
 	if (datasink != ds_data) {
 		ds_destroy(datasink);
@@ -1708,6 +1643,8 @@ copy_back(int argc, char **argv)
 		msg("xtrabackup: Error: failed to load backup-my.cnf\n");
 		return(false);
 	}
+
+	Tablespace_map::instance().deserialize("./");
 
 	if (opt_generate_new_master_key && !xb_tablespace_keys_exist()) {
 		msg("xtrabackup: Error: option --generate_new_master_key "
