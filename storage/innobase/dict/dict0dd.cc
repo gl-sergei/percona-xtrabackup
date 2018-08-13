@@ -843,7 +843,7 @@ dict_table_t *dd_table_create_on_dd_obj(const dd::Table *dd_table,
 
 table_id_t dd_table_id_and_part(space_id_t space_id, const dd::Table &dd_table,
                                 const dd::Partition *&dd_part) {
-  table_id_t table_id = dd_table.se_private_id();
+  uint64 table_id = dd_table.se_private_id();
 
   dd_part = nullptr;
 
@@ -853,7 +853,7 @@ table_id_t dd_table_id_and_part(space_id_t space_id, const dd::Table &dd_table,
 
     for (auto part : dd_table.leaf_partitions()) {
       for (auto index : *part->indexes()) {
-        uint64_t prop_space_id;
+        uint64 prop_space_id;
 
         dd::Properties &p = index->se_private_data();
         p.get_uint64(dd_index_key_strings[DD_INDEX_SPACE_ID], &prop_space_id);
@@ -1532,7 +1532,7 @@ dict_table_t *dd_table_open_on_name(THD *thd, MDL_ticket **mdl,
   /* Get pointer to a table object in InnoDB dictionary cache.
   For intrinsic table, get it from session private data */
   if (thd) {
-    table = thd_to_innodb_session(thd)->lookup_table_handler(name);
+    //table = thd_to_innodb_session(thd)->lookup_table_handler(name);
   }
 
   if (table != nullptr) {
