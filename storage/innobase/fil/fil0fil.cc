@@ -67,6 +67,7 @@ The tablespace memory cache */
 #include <cstring>
 #include "srv0srv.h"
 #endif /* !UNIV_HOTBACKUP */
+#include "xb0xb.h"
 
 #include "os0thread-create.h"
 
@@ -9194,6 +9195,28 @@ bool fil_check_missing_tablespaces() {
   return (fil_system->check_missing_tablespaces());
 }
 
+/** Parse a file name retrieved from a MLOG_FILE_* record,
+and return the absolute file path and tablespace name
+@param[in]  file_name path emitted by the redo log
+@param[in]  flags tablespace flags emitted by the redo log
+@param[in]  space_id tablesapce ID emitted by the redo log
+@param[out] absolute_path absolute path of tablespace
+@param[out] tablespace_name name in the form of database/table */
+static void fil_make_abs_file_path(const char *file_name,
+                                   ulint flags, space_id_t space_id,
+                                   std::string &absolute_path,
+                                   std::string &tablespace_name) {
+  Datafile df;
+
+  df.set_filepath(file_name);
+  df.set_flags(flags);
+  df.set_space_id(space_id);
+  df.set_name(nullptr);
+
+  absolute_path = df.filepath();
+  tablespace_name = df.name();
+}
+
 /** Redo a tablespace create.
 @param[in]	ptr		redo log record
 @param[in]	end		end of the redo log buffer
@@ -9270,23 +9293,17 @@ byte *fil_tablespace_redo_create(byte *ptr, const byte *end,
 
   const auto files = fil_system->get_scanned_files(page_id.space());
 
+  std::string abs_file_path;
+  std::string tablespace_name;
+
+  fil_make_abs_file_path(name, flags, page_id.space(), abs_file_path,
+                         tablespace_name);
+
   if (!srv_backup_mode &&
       (files.second == nullptr || files.second->size() == 0)) {
-      Datafile df;
 
-      df.set_filepath(name);
-      df.set_flags(flags);
-      df.set_space_id(page_id.space());
-      df.set_name(nullptr);
-
-      bool exists = (df.open_read_only(false) == DB_SUCCESS);
-
-      if (exists) {
-        df.close();
-      }
-
-      std::string abs_file_path = df.filepath();
-      std::string tablespace_name = df.name();
+      abs_file_path = xb_tablespace_backup_file_path(abs_file_path.c_str());
+      bool exists = Fil_path(abs_file_path).is_file_and_exists();
 
       if (!exists && !fil_space_get(page_id.space())) {
         ib::info() << "Creating the tablespace : " << abs_file_path
@@ -9302,7 +9319,7 @@ byte *fil_tablespace_redo_create(byte *ptr, const byte *end,
               << " with space Id : " << page_id.space();
         }
 
-        bool success = fil_system->insert(page_id.space(), name);
+        bool success = fil_system->insert(page_id.space(), abs_file_path);
 
         if (!success) {
           ib::fatal() << "Could not insert the tablespace : " << abs_file_path
@@ -9310,6 +9327,10 @@ byte *fil_tablespace_redo_create(byte *ptr, const byte *end,
                       << "the list of known tablespaces";
         }
       }
+  }
+
+  if (srv_backup_mode) {
+    xb_tablespace_map_add(abs_file_path.c_str(), tablespace_name.c_str());
   }
 
   const auto result = fil_system->get_scanned_files(page_id.space());
@@ -9321,19 +9342,17 @@ byte *fil_tablespace_redo_create(byte *ptr, const byte *end,
     return (ptr);
   }
 
-  auto abs_name = Fil_path::get_real_path(name);
-
   /* Duplicates should have been sorted out before we get here. */
   ut_a(result.second->size() == 1);
 
   /* It's possible that the tablespace file was renamed later. */
-  if (result.second->front().compare(abs_name) == 0) {
+  if (result.second->front().compare(abs_file_path) == 0) {
     bool success;
 
     success = fil_tablespace_open_for_recovery(page_id.space());
 
     if (!success) {
-      ib::info(ER_IB_MSG_356) << "Create '" << abs_name << "' failed!";
+      ib::info(ER_IB_MSG_356) << "Create '" << abs_file_path << "' failed!";
     }
   }
 #endif /* UNIV_HOTBACKUP */
@@ -9473,8 +9492,21 @@ byte *fil_tablespace_redo_rename(byte *ptr, const byte *end,
       return (ptr);
     }
 
+    fil_space_t *space = fil_space_get(page_id.space());
+
+    ut_a(space != nullptr);
+
+    xb_tablespace_map_delete(space->name);
+    std::string abs_file_path;
+    std::string tablespace_name;
+
+    fil_make_abs_file_path(to_name, space->flags, space->id,
+                           abs_file_path, tablespace_name);
+
     success = fil_op_replay_rename(page_id, from_name, to_name);
     ut_a(success);
+
+    xb_tablespace_map_add(abs_file_path.c_str(), tablespace_name.c_str());
 
     fil_space_free(page_id.space(), false);
 
@@ -9568,11 +9600,15 @@ byte *fil_tablespace_redo_delete(byte *ptr, const byte *end,
       return (ptr);
     }
 
-    if (fil_space_get(page_id.space())) {
+    fil_space_t *space = fil_space_get(page_id.space());
+
+    if (space != nullptr) {
       dberr_t err =
           fil_delete_tablespace(page_id.space(), BUF_REMOVE_FLUSH_NO_WRITE);
 
       ut_a(err == DB_SUCCESS);
+
+      xb_tablespace_map_delete(space->name);
     }
 
   }

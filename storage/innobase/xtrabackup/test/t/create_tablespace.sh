@@ -3,13 +3,15 @@
 
 require_server_version_higher_than 5.7.9
 
-start_server
 
-mkdir $topdir/dir
+ext_dir=${TEST_VAR_ROOT}/ext_dir
+mkdir $ext_dir
+
+start_server --innodb-directories="$ext_dir"
 
 run_cmd $MYSQL $MYSQL_ARGS <<EOF
 
-CREATE TABLESPACE ts1 ADD DATAFILE '$topdir/dir/data1.ibd' ENGINE=InnoDB;
+CREATE TABLESPACE ts1 ADD DATAFILE '$ext_dir/data1.ibd' ENGINE=InnoDB;
 CREATE TABLESPACE ts2 ADD DATAFILE 'data2.ibd' ENGINE=InnoDB;
 
 CREATE TABLE test.t1_1 (c1 INT PRIMARY KEY) TABLESPACE ts1 ROW_FORMAT=REDUNDANT;
@@ -28,10 +30,6 @@ INSERT INTO test.t2_1 VALUES (1), (2), (3);
 INSERT INTO test.t2_2 VALUES (10), (20), (30);
 INSERT INTO test.t2_3 VALUES (100), (200), (300);
 EOF
-
-count=`ls $mysql_datadir/*.isl | wc -l`
-vlog  "$count .isl files in datadir, expecting 1"
-test $count -eq 1
 
 xtrabackup --backup --target-dir=$topdir/full
 
@@ -106,11 +104,11 @@ record_db_state test
 stop_server
 
 rm -rf $mysql_datadir
-rm -rf $topdir/dir
+rm -rf $ext_dir
 
 xtrabackup --copy-back --target-dir=$topdir/full
 
-start_server
+start_server --innodb-directories="$ext_dir/"
 
 $MYSQL $MYSQL_ARGS -e "SELECT * FROM test.t1_1"
 $MYSQL $MYSQL_ARGS -e "SELECT * FROM test.t1_2"
@@ -125,7 +123,3 @@ $MYSQL $MYSQL_ARGS -e "SELECT * FROM test.t3_2"
 $MYSQL $MYSQL_ARGS -e "SELECT * FROM test.t3_3"
 
 verify_db_state test
-
-count=`ls $mysql_datadir/*.isl | wc -l`
-vlog  "$count .isl files in datadir after restore, expecting 1"
-test $count -eq 1

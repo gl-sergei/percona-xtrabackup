@@ -50,15 +50,18 @@ and "./ibdata1" yield "ibdata1" in the output. */
 const char *
 xb_get_relative_path(
 /*=================*/
+	ulint		flags,		/*!< in: tablespace flags */
 	const char*	path,		/*!< in: tablespace path (either
 			  		relative or absolute) */
-	ibool		is_system)	/*!< in: TRUE for system tablespaces,
+	bool		is_system)	/*!< in: TRUE for system tablespaces,
 					i.e. when only the filename must be
 					returned. */
 {
 	const char *next;
 	const char *cur;
 	const char *prev;
+
+	bool is_shared = FSP_FLAGS_GET_SHARED(flags);
 
 	prev = NULL;
 	cur = path;
@@ -74,7 +77,7 @@ xb_get_relative_path(
 		return(cur);
 	} else {
 
-		return((prev == NULL) ? cur : prev);
+		return((prev == NULL || is_shared) ? cur : prev);
 	}
 
 }
@@ -112,7 +115,8 @@ xb_fil_cur_open(
 	tablespaces may have absolute paths for remote tablespaces in MySQL
 	5.6+. We want to make "local" copies for the backup. */
 	strncpy(cursor->rel_path,
-		xb_get_relative_path(cursor->abs_path, cursor->is_system),
+		xb_get_relative_path(node->space->flags, cursor->abs_path,
+				     cursor->is_system),
 		sizeof(cursor->rel_path));
 
 	/* In the backup mode we should already have a tablespace handle created
