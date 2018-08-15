@@ -135,7 +135,7 @@ then
 fi
 
 echo "Unpacking $tarball into $destdir"
-tar zxf $tarball -C $destdir
+tar xf $tarball -C $destdir
 sourcedir="$destdir/`ls $destdir`"
 if test -n "$sourcedir"
 then
