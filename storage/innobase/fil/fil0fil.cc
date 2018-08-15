@@ -9700,14 +9700,22 @@ byte *fil_tablespace_redo_encryption(byte *ptr, const byte *end,
     return (nullptr);
   }
 
-  if (!Encryption::decode_encryption_info(key, iv, ptr)) {
-    recv_sys->found_corrupt_log = true;
+  if (srv_backup_mode || !use_dumped_tablespace_keys) {
+    if (!Encryption::decode_encryption_info(key, iv, ptr)) {
+      recv_sys->found_corrupt_log = true;
 
-    ib::warn(ER_IB_MSG_364)
-        << "Encryption information"
-        << " in the redo log of space " << space_id << " is invalid";
+      ib::warn(ER_IB_MSG_364)
+          << "Encryption information"
+          << " in the redo log of space " << space_id << " is invalid";
 
-    return (nullptr);
+      return (nullptr);
+    }
+  } else {
+    ulint master_key_id = mach_read_from_4(ptr + ENCRYPTION_MAGIC_SIZE);
+    if (Encryption::s_master_key_id < master_key_id) {
+      Encryption::s_master_key_id = master_key_id;
+    }
+    xb_fetch_tablespace_key(space_id, key, iv);
   }
 
   ut_ad(len == ENCRYPTION_INFO_SIZE);

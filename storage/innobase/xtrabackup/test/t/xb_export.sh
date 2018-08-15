@@ -120,10 +120,7 @@ run_cmd ${MYSQL} ${MYSQL_ARGS} -e "alter table test discard tablespace;" increme
 xtrabackup --datadir=$mysql_datadir --prepare --export \
     --target-dir=$backup_dir
 
-exp_count=`find $backup_dir/incremental_sample -name '*.exp' | wc -l`
 cfg_count=`find $backup_dir/incremental_sample -name '*.cfg' | wc -l`
-vlog "Verifying .exp files in backup, expecting $exp_files_count."
-test "$exp_count" -eq "$exp_files_count"
 vlog "Verifying .cfg files in backup, expecting 2."
 test "$cfg_count" -eq 2
 

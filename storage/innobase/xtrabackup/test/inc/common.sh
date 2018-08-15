@@ -298,6 +298,7 @@ basedir=${MYSQL_BASEDIR}
 datadir=${MYSQLD_DATADIR}
 tmpdir=${MYSQLD_TMPDIR}
 log-error=${MYSQLD_ERRFILE}
+log-error-verbosity=3
 log-bin=mysql-bin
 relay-log=mysql-relay-bin
 pid-file=${MYSQLD_PIDFILE}

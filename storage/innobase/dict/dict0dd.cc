@@ -431,8 +431,27 @@ dict_table_t *dd_table_create_on_dd_obj(const dd::Table *dd_table,
     DICT_TF2_FLAG_SET(table, DICT_TF2_DISCARDED);
   }
 
-  if (dd_table->row_format() != dd::Table::RF_REDUNDANT) {
+  bool is_redundant = false;
+  bool blob_prefix = false;
+
+  switch (dd_table->row_format()) {
+    case dd::Table::RF_REDUNDANT:
+      is_redundant = true;
+      blob_prefix = true;
+      break;
+    case dd::Table::RF_COMPACT:
+      blob_prefix = true;
+      break;
+    default:
+      break;
+  }
+
+  if (!is_redundant) {
     table->flags |= DICT_TF_COMPACT;
+  }
+
+  if (!blob_prefix) {
+    table->flags |= (1 << DICT_TF_POS_ATOMIC_BLOBS);
   }
 
   if (is_implicit) {
@@ -441,8 +460,9 @@ dict_table_t *dd_table_create_on_dd_obj(const dd::Table *dd_table,
     table->flags |= (1 << DICT_TF_POS_SHARED_SPACE);
   }
 
-  bool is_temp = !dd_table->is_persistent() /* &&
-                 !dict_sys_t::is_dd_table_id(dd_table->se_private_id())*/;
+  /* since DD object ID is always INVALID_OBJECT_ID, xtrabackup is assimung
+  that temporary table name starts with '#' */
+  bool is_temp = (table->name.m_name[0] == '#');
   if (is_temp) {
     table->flags2 |= DICT_TF2_TEMPORARY;
   }
@@ -778,6 +798,7 @@ dict_table_t *dd_table_create_on_dd_obj(const dd::Table *dd_table,
   }
 
   /* Now fill the space ID and Root page number for each index */
+  bool first_index = true;
   i = 0;
   dict_index_t *index = table->first_index();
   for (const auto dd_index : dd_table->indexes()) {
@@ -790,6 +811,7 @@ dict_table_t *dd_table_create_on_dd_obj(const dd::Table *dd_table,
     uint32 root = 0;
     uint32 sid = 0;
     uint64 trx_id = 0;
+    dd::Object_id index_space_id = dd_index->tablespace_id();
 
     if (dd_table->tablespace_id() == dict_sys_t::s_dd_space_id) {
       sid = dict_sys_t::s_space_id;
@@ -808,6 +830,13 @@ dict_table_t *dd_table_create_on_dd_obj(const dd::Table *dd_table,
         se_private_data.get_uint64(dd_index_key_strings[DD_INDEX_TRX_ID],
                                    &trx_id)) {
       return (nullptr);
+    }
+
+    if (first_index) {
+      ut_ad(table->space == 0);
+      table->space = sid;
+      table->dd_space_id = index_space_id;
+      first_index = false;
     }
 
     ut_ad(root > 1);
@@ -833,6 +862,7 @@ dict_table_t *dd_table_create_on_dd_obj(const dd::Table *dd_table,
   mutex_enter(&dict_sys->mutex);
 
   dict_table_add_to_cache(table, false, heap);
+  table->acquire();
 
   mutex_exit(&dict_sys->mutex);
 
@@ -877,7 +907,8 @@ int dd_table_open_on_dd_obj(dd::cache::Dictionary_client *client,
                             space_id_t space_id,
                             const dd::Table &dd_table,
                             dict_table_t *&table, THD *thd,
-                            const dd::String_type *schema_name) {
+                            const dd::String_type *schema_name,
+                            bool implicit) {
   const dd::Partition *dd_part = nullptr;
   const table_id_t table_id = dd_table_id_and_part(space_id, dd_table, dd_part);
   const ulint fold = ut_fold_ull(table_id);
@@ -899,7 +930,7 @@ int dd_table_open_on_dd_obj(dd::cache::Dictionary_client *client,
     return (0);
   }
 
-  table = dd_table_create_on_dd_obj(&dd_table, dd_part, schema_name, false);
+  table = dd_table_create_on_dd_obj(&dd_table, dd_part, schema_name, implicit);
 
   if (table != nullptr) {
     return (0);
