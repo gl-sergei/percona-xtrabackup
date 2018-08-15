@@ -333,7 +333,11 @@ dict_table_t *dd_table_create_on_dd_obj(const dd::Table *dd_table,
                         MAX_DATABASE_NAME_LEN + 1);
   tablename_to_filename(dd_table->name().c_str(), tmp_tablename,
                         MAX_TABLE_NAME_LEN + 1);
-  snprintf(table_name, sizeof table_name, "%s/%s", tmp_schema, tmp_tablename);
+  if(dd_part) {
+    snprintf(table_name, sizeof table_name, "%s/%s.%s", tmp_schema, tmp_tablename, dd_part->name().c_str());
+  } else {
+    snprintf(table_name, sizeof table_name, "%s/%s", tmp_schema, tmp_tablename);
+  }
 
   bool has_doc_id = false;
 
@@ -377,7 +381,11 @@ dict_table_t *dd_table_create_on_dd_obj(const dd::Table *dd_table,
   dict_table_t *table = dict_mem_table_create(
     table_name, 0, n_cols, n_v_cols, 0, 0);
 
-  table->id = dd_table->se_private_id();
+  if(dd_part) {
+    table->id = dd_part->se_private_id();
+  } else {
+    table->id = dd_table->se_private_id();
+  }
 
   if (dd_table->se_private_data().exists(
           dd_table_key_strings[DD_TABLE_DATA_DIRECTORY])) {
@@ -876,46 +884,12 @@ dict_table_t *dd_table_create_on_dd_obj(const dd::Table *dd_table,
   return (table);
 }
 
-table_id_t dd_table_id_and_part(space_id_t space_id, const dd::Table &dd_table,
-                                const dd::Partition *&dd_part) {
-  uint64 table_id = dd_table.se_private_id();
-
-  dd_part = nullptr;
-
-  if (table_id == dd::INVALID_OBJECT_ID) {
-    /* Partitioned table */
-    ut_ad(dd_table_is_partitioned(dd_table));
-
-    for (auto part : dd_table.leaf_partitions()) {
-      for (auto index : *part->indexes()) {
-        uint64 prop_space_id;
-
-        dd::Properties &p = index->se_private_data();
-        p.get_uint64(dd_index_key_strings[DD_INDEX_SPACE_ID], &prop_space_id);
-
-        if (prop_space_id == space_id) {
-          p.get_uint64(dd_index_key_strings[DD_TABLE_ID], &table_id);
-          dd_part = part;
-          goto done;
-        }
-      }
-    }
-  }
-
-done:
-  ut_ad(table_id != dd::INVALID_OBJECT_ID);
-
-  return (table_id);
-}
-
-int dd_table_open_on_dd_obj(dd::cache::Dictionary_client *client,
-                            space_id_t space_id,
+int dd_table_load_part(table_id_t table_id,
                             const dd::Table &dd_table,
+                            const dd::Partition *dd_part,
                             dict_table_t *&table, THD *thd,
                             const dd::String_type *schema_name,
                             bool implicit) {
-  const dd::Partition *dd_part = nullptr;
-  const table_id_t table_id = dd_table_id_and_part(space_id, dd_table, dd_part);
   const ulint fold = ut_fold_ull(table_id);
 
   ut_ad(table_id != dd::INVALID_OBJECT_ID);
@@ -943,6 +917,41 @@ int dd_table_open_on_dd_obj(dd::cache::Dictionary_client *client,
 
   return (1);
 }
+
+int dd_table_open_on_dd_obj(dd::cache::Dictionary_client *client,
+                            space_id_t space_id,
+                            const dd::Table &dd_table,
+                            dict_table_t *&table, THD *thd,
+                            const dd::String_type *schema_name,
+                            bool implicit) {
+
+  uint64 table_id = dd_table.se_private_id();
+
+  if (table_id == dd::INVALID_OBJECT_ID) {
+    /* Partitioned table */
+    ut_ad(dd_table_is_partitioned(dd_table));
+    
+    for (auto part : dd_table.leaf_partitions()) {
+      uint64 tid = part->se_private_id();
+      int ret = dd_table_load_part(tid, dd_table, part, table, thd, schema_name, implicit);
+      if(ret != 0) {
+        return ret;
+      }
+      dd_table_close(table, thd, nullptr, false);
+    }
+    return 0;
+  } else {
+    const dd::Partition *dd_part = nullptr;
+    int ret = dd_table_load_part(table_id, dd_table, dd_part, table, thd, schema_name, implicit);
+    if (ret != 0) {
+      return ret;
+    }
+    dd_table_close(table, thd, nullptr, false);
+    return ret;
+  }
+
+}
+
 
 /** Instantiate an InnoDB in-memory table metadata (dict_table_t)
 based on a Global DD object.
@@ -1278,7 +1287,7 @@ mdl=NULL if we are resurrecting table IX locks in recovery
 @retval NULL if the table does not exist or cannot be opened */
 dict_table_t *dd_table_open_on_id(table_id_t table_id, THD *thd,
                                   MDL_ticket **mdl, bool dict_locked,
-                                  bool check_corruption) {
+                                  bool check_corruption, bool skip_missing) {
   dict_table_t *ib_table;
   const ulint fold = ut_fold_ull(table_id);
   char db_buf[MAX_DATABASE_NAME_LEN + 1];
@@ -1294,6 +1303,9 @@ dict_table_t *dd_table_open_on_id(table_id_t table_id, THD *thd,
 
 reopen:
   if (ib_table == nullptr) {
+    if(skip_missing) {
+      return nullptr;
+    }
 #ifndef UNIV_HOTBACKUP
     if (dict_table_is_sdi(table_id)) {
       /* The table is SDI table */
@@ -4510,11 +4522,9 @@ const char *dd_process_dd_tables_rec_and_mtr_commit(
   ulint *offsets = rec_get_offsets(rec, dd_tables->first_index(), NULL,
                                    ULINT_UNDEFINED, &heap);
 
-  const dd::Object_table &dd_object_table = dd::get_dd_table<dd::Table>();
-
   field = rec_get_nth_field(
       rec, offsets,
-      dd_object_table.field_number("FIELD_ENGINE") + DD_FIELD_OFFSET, &len);
+      4 + DD_FIELD_OFFSET, &len);
 
   /* If "engine" field is not "innodb", return. */
   if (strncmp((const char *)field, "InnoDB", 6) != 0) {
@@ -4526,7 +4536,7 @@ const char *dd_process_dd_tables_rec_and_mtr_commit(
   /* Get the se_private_id field. */
   field = (const byte *)rec_get_nth_field(
       rec, offsets,
-      dd_object_table.field_number("FIELD_SE_PRIVATE_ID") + DD_FIELD_OFFSET,
+      12 + DD_FIELD_OFFSET,
       &len);
 
   if (len != 8) {
@@ -4549,7 +4559,7 @@ const char *dd_process_dd_tables_rec_and_mtr_commit(
   mtr_commit(mtr);
   THD *thd = current_thd;
 
-  *table = dd_table_open_on_id(table_id, thd, mdl, true, false);
+  *table = dd_table_open_on_id(table_id, thd, mdl, true, false, true);
 
   if (!(*table)) {
     err_msg = "Table not found";
@@ -4586,7 +4596,7 @@ const char *dd_process_dd_partitions_rec_and_mtr_commit(
   /* Get the engine field. */
   field = rec_get_nth_field(
       rec, offsets,
-      dd_object_table.field_number("FIELD_ENGINE") + DD_FIELD_OFFSET, &len);
+      6 + DD_FIELD_OFFSET, &len);
 
   /* If "engine" field is not "innodb", return. */
   if (strncmp((const char *)field, "InnoDB", 6) != 0) {
@@ -4598,7 +4608,7 @@ const char *dd_process_dd_partitions_rec_and_mtr_commit(
   /* Get the se_private_id field. */
   field = (const byte *)rec_get_nth_field(
       rec, offsets,
-      dd_object_table.field_number("FIELD_SE_PRIVATE_ID") + DD_FIELD_OFFSET,
+      10 + DD_FIELD_OFFSET,
       &len);
   /* When table is partitioned table, the se_private_id is null. */
   if (len != 8) {
@@ -4621,7 +4631,7 @@ const char *dd_process_dd_partitions_rec_and_mtr_commit(
   mtr_commit(mtr);
   THD *thd = current_thd;
 
-  *table = dd_table_open_on_id(table_id, thd, mdl, true, false);
+  *table = dd_table_open_on_id(table_id, thd, mdl, true, false, true);
 
   if (!(*table)) {
     err_msg = "Table not found";

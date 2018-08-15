@@ -62,6 +62,7 @@ Place, Suite 330, Boston, MA 02111-1307 USA
 #include <btr0sea.h>
 #include <lob0lob.h>
 #include <dict0priv.h>
+#include <dict0dd.h>
 #include <dict0stats.h>
 #include <lock0lock.h>
 #include <log0recv.h>
@@ -121,6 +122,9 @@ Place, Suite 330, Boston, MA 02111-1307 USA
 #define DICT_TF_ZSSIZE_SHIFT	1
 #define DICT_TF_FORMAT_ZIP	1
 #define DICT_TF_FORMAT_SHIFT		5
+
+static void
+init_mysql_environment();
 
 static MEM_ROOT argv_alloc{PSI_NOT_INSTRUMENTED, 512};
 
@@ -2089,8 +2093,6 @@ dberr_t dict_load_tables_from_space_id(space_id_t space_id, THD *thd,
 			err = DB_ERROR;
 			goto error;
 		}
-
-		dd_table_close(ib_table, thd, nullptr, false);
 	}
 
 	return (DB_SUCCESS);
@@ -5122,8 +5124,12 @@ loop:
 					page_no = mach_read_from_4(data + local_len + lob::BTR_EXTERN_PAGE_NO);
 					offset = mach_read_from_4(data + local_len + lob::BTR_EXTERN_OFFSET);
 
-					if (offset != FIL_PAGE_DATA)
-						msg("\nWarning: several record may share same external page.\n");
+					if (offset == 1) {
+						// see lob0impl.cc::insert
+						part_len = mach_read_from_4(data+local_len+lob::BTR_EXTERN_LEN+4);
+						sum_data_extern += part_len;
+						continue;
+					}
 
 					for (;;) {
 						mtr_start(&local_mtr);
@@ -5206,6 +5212,75 @@ loop:
 	return(TRUE);
 }
 
+static void stat_with_rec(dict_table_t* table, THD* thd, MDL_ticket* mdl_on_tab)
+{
+  mutex_exit(&(dict_sys->mutex));
+  if(table != nullptr)
+  {
+    if (!check_if_skip_table(table->name.m_name))
+    {
+      dict_index_t*	 index;
+      if (table->first_index()) {
+        dict_stats_update_transient(table);
+      }
+
+      index = UT_LIST_GET_FIRST(table->indexes);
+      while (index != NULL)
+      {
+        ib_uint64_t n_vals;
+        bool	       found;
+
+        if (index->n_user_defined_cols > 0) {
+          n_vals = index->stat_n_diff_key_vals[
+            index->n_user_defined_cols];
+        } else {
+          n_vals = index->stat_n_diff_key_vals[1];
+        }
+
+        fprintf(stdout,
+            "	table: %s, index: %s, space id: %lu, root page: %lu"
+            ", zip size: %lu"
+            "\n	estimated statistics in dictionary:\n"
+            "		key vals: %lu, leaf pages: %lu, size pages: %lu\n"
+            "	real statistics:\n",
+            table->name.m_name, index->name(),
+            (ulong) index->space,
+            (ulong) index->page,
+            (ulong) fil_space_get_page_size(index->space, &found).physical(),
+            (ulong) n_vals,
+            (ulong) index->stat_n_leaf_pages,
+            (ulong) index->stat_index_size);
+
+        {
+          mtr_t	 local_mtr;
+          page_t* root;
+          ulint	 page_level;
+
+          mtr_start(&local_mtr);
+
+          mtr_x_lock(&(index->lock), &local_mtr);
+
+          root = btr_root_get(index, &local_mtr);
+          page_level = btr_page_get_level(root, &local_mtr);
+
+          xtrabackup_stats_level(index, page_level);
+
+          mtr_commit(&local_mtr);
+        }
+
+        putc('\n', stdout);
+        index = UT_LIST_GET_NEXT(indexes, index);
+
+      }
+
+    }
+  }
+  mutex_enter(&(dict_sys->mutex));
+  if(table != nullptr) {
+    dd_table_close(table, thd, &mdl_on_tab, true);
+  }
+}
+
 static void
 xtrabackup_stats_func(int argc, char **argv)
 {
@@ -5227,12 +5302,22 @@ xtrabackup_stats_func(int argc, char **argv)
 	/* set read only */
 	srv_read_only_mode = TRUE;
 
+	init_mysql_environment();
+
 	if (!xb_keyring_init_for_stats(argc, argv)) {
 		msg("xtrabackup: error: failed to init keyring plugin.\n");
 		exit(EXIT_FAILURE);
 	}
 
 	srv_max_n_threads = 1000;
+
+	srv_page_size_shift = 14;
+	srv_page_size = (1 << srv_page_size_shift);
+
+	if (srv_n_file_io_threads < 10) {
+		srv_n_read_io_threads = 4;
+		srv_n_write_io_threads = 4;
+	}
 
 	/* initialize components */
 	if(innodb_init_param()) {
@@ -5270,7 +5355,7 @@ xtrabackup_stats_func(int argc, char **argv)
 	    "xtrabackup: Using %lld bytes for buffer pool (set by "
 	    "--use-memory parameter)\n", xtrabackup_use_memory);
 
-	if(innodb_init(false))
+	if(innodb_init(true))
 		exit(EXIT_FAILURE);
 
 	xb_filters_init();
@@ -5280,147 +5365,68 @@ xtrabackup_stats_func(int argc, char **argv)
 	/* gather stats */
 
 	{
-	dict_table_t*	sys_tables;
-	dict_index_t*	sys_index;
-	dict_table_t*	table;
-	btr_pcur_t	pcur;
-	rec_t*		rec;
-	byte*		field;
-	ulint		len;
-	mtr_t		mtr;
+		my_thread_init();
+		THD *thd = create_thd(false,false,true,0);
 
-	/* Enlarge the fatal semaphore wait timeout during the InnoDB table
-	monitor printout */
+		dict_table_t*	sys_tables = nullptr;
+		dict_table_t*	table = nullptr;
+		btr_pcur_t	pcur;
+		const rec_t*		rec = nullptr;
+		mtr_t		mtr;
+		MDL_ticket* mdl = nullptr;
+		mem_heap_t* heap = mem_heap_create(1000);
 
-	os_atomic_increment_ulint(
-		&srv_fatal_semaphore_wait_threshold,
-		72000);
+		mutex_enter(&(dict_sys->mutex));
 
-	mutex_enter(&(dict_sys->mutex));
+		mtr_start(&mtr);
 
-	mtr_start(&mtr);
+		rec = dd_startscan_system(thd, &mdl, &pcur, &mtr, "mysql/tables", &sys_tables);
 
-	sys_tables = dict_table_get_low("SYS_TABLES");
-	sys_index = UT_LIST_GET_FIRST(sys_tables->indexes);
+		while(rec) {
+			MDL_ticket* mdl_on_tab = nullptr;
+			dd_process_dd_tables_rec_and_mtr_commit(heap, rec, &table, sys_tables, &mdl_on_tab, &mtr);
 
-	btr_pcur_open_at_index_side(TRUE, sys_index, BTR_SEARCH_LEAF, &pcur,
-				    TRUE, 0, &mtr);
-loop:
-	btr_pcur_move_to_next_user_rec(&pcur, &mtr);
+      stat_with_rec(table, thd, mdl_on_tab);
 
-	rec = btr_pcur_get_rec(&pcur);
+      mem_heap_empty(heap);
 
-	if (!btr_pcur_is_on_user_rec(&pcur))
-	{
-		/* end of index */
+      mtr_start(&mtr);
 
-		btr_pcur_close(&pcur);
+			rec = (rec_t*)dd_getnext_system_rec(&pcur, &mtr);
+		}
+
 		mtr_commit(&mtr);
+		dd_table_close(sys_tables, thd, &mdl, true);
+		mem_heap_empty(heap);
+
+		mtr_start(&mtr);
+
+		rec = dd_startscan_system(thd, &mdl, &pcur, &mtr, "mysql/table_partitions", &sys_tables);
+
+		while(rec) {
+			MDL_ticket* mdl_on_tab = nullptr;
+			dd_process_dd_partitions_rec_and_mtr_commit(heap, rec, &table, sys_tables, &mdl_on_tab, &mtr);
+
+      stat_with_rec(table, thd, mdl_on_tab);
+
+      mem_heap_empty(heap);
+
+      mtr_start(&mtr);
+
+			rec = (rec_t*)dd_getnext_system_rec(&pcur, &mtr);
+		}
+
+		mtr_commit(&mtr);
+		dd_table_close(sys_tables, thd, &mdl, true);
+		mem_heap_empty(heap);
+
 
 		mutex_exit(&(dict_sys->mutex));
 
-		/* Restore the fatal semaphore wait timeout */
-		os_atomic_increment_ulint(
-			&srv_fatal_semaphore_wait_threshold,
-			-72000);
-
-		goto end;
+		destroy_thd(thd);
+		my_thread_end();
 	}
 
-	field = rec_get_nth_field_old(rec, 0, &len);
-
-	if (!rec_get_deleted_flag(rec, 0)) {
-
-		/* We found one */
-
-                char*	table_name = mem_strdupl((char*) field, len);
-
-		btr_pcur_store_position(&pcur, &mtr);
-
-		mtr_commit(&mtr);
-
-		table = dict_table_get_low(table_name);
-		ut_free(table_name);
-
-		if (table && check_if_skip_table(table->name.m_name))
-			goto skip;
-
-
-		if (table == NULL) {
-			fputs("InnoDB: Failed to load table ", stderr);
-			ut_print_name(stderr, NULL, (char*) field);
-			putc('\n', stderr);
-		} else {
-			dict_index_t*	index;
-
-			/* The table definition was corrupt if there
-			is no index */
-
-			if (table->first_index()) {
-				dict_stats_update_transient(table);
-			}
-
-			//dict_table_print_low(table);
-
-			index = UT_LIST_GET_FIRST(table->indexes);
-			while (index != NULL) {
-{
-	ib_uint64_t	n_vals;
-	bool		found;
-
-	if (index->n_user_defined_cols > 0) {
-		n_vals = index->stat_n_diff_key_vals[
-					index->n_user_defined_cols];
-	} else {
-		n_vals = index->stat_n_diff_key_vals[1];
-	}
-
-	fprintf(stdout,
-		"  table: %s, index: %s, space id: %lu, root page: %lu"
-		", zip size: %lu"
-		"\n  estimated statistics in dictionary:\n"
-		"    key vals: %lu, leaf pages: %lu, size pages: %lu\n"
-		"  real statistics:\n",
-		table->name.m_name, index->name(),
-		(ulong) index->space,
-		(ulong) index->page,
-		(ulong) fil_space_get_page_size(index->space, &found).physical(),
-		(ulong) n_vals,
-		(ulong) index->stat_n_leaf_pages,
-		(ulong) index->stat_index_size);
-
-	{
-		mtr_t	local_mtr;
-		page_t*	root;
-		ulint	page_level;
-
-		mtr_start(&local_mtr);
-
-		mtr_x_lock(&(index->lock), &local_mtr);
-		root = btr_root_get(index, &local_mtr);
-		page_level = btr_page_get_level(root, &local_mtr);
-
-		xtrabackup_stats_level(index, page_level);
-
-		mtr_commit(&local_mtr);
-	}
-
-	putc('\n', stdout);
-}
-				index = UT_LIST_GET_NEXT(indexes, index);
-			}
-		}
-
-skip:
-		mtr_start(&mtr);
-
-		btr_pcur_restore_position(BTR_SEARCH_LEAF, &pcur, &mtr);
-	}
-
-	goto loop;
-	}
-
-end:
 	putc('\n', stdout);
 
 	fflush(stdout);
