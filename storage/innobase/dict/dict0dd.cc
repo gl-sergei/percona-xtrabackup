@@ -491,6 +491,22 @@ dict_table_t *dd_table_create_on_dd_obj(const dd::Table *dd_table,
     enum_field_types field_type = dd_get_old_field_type(dd_col->type());
     ulint mtype = get_innobase_type_from_dd(dd_col, unsigned_type);
 
+    /* Following are MySQL internal types, never used in protocol. We have
+    field->real_type(), lets convert it to field->type() */
+    switch (field_type) {
+      case MYSQL_TYPE_TIME2:
+        field_type = MYSQL_TYPE_TIME;
+        break;
+      case MYSQL_TYPE_DATETIME2:
+        field_type = MYSQL_TYPE_DATETIME;
+        break;
+      case MYSQL_TYPE_TIMESTAMP2:
+        field_type = MYSQL_TYPE_TIMESTAMP;
+        break;
+      default:
+        break;
+    }
+
     long_true_varchar = 0;
     if (field_type == MYSQL_TYPE_VARCHAR) {
       col_len -= HA_VARCHAR_PACKLENGTH(field_length);
@@ -534,9 +550,9 @@ dict_table_t *dd_table_create_on_dd_obj(const dd::Table *dd_table,
     bool is_stored = !dd_col->is_generation_expression_null() &&
                      !dd_col->is_virtual();
 
-    prtype = dtype_form_prtype((ulint)(dd_get_old_field_type(dd_col->type())) |
-                               nulls_allowed | unsigned_type | binary_type |
-                               long_true_varchar | is_virtual, charset_no);
+    prtype = dtype_form_prtype((ulint)(field_type) | nulls_allowed |
+                               unsigned_type | binary_type | long_true_varchar |
+                               is_virtual, charset_no);
     if (!is_virtual) {
       dict_mem_table_add_col(table, heap, dd_col->name().c_str(), mtype,
                              prtype, col_len);
@@ -635,25 +651,25 @@ dict_table_t *dd_table_create_on_dd_obj(const dd::Table *dd_table,
         index->type |= DICT_VIRTUAL;
       }
 
+      uint col_pos = 0;
+      for (auto c : dd_index->table().columns()) {
+        if (c == dd_col) break;
+        if (c->is_virtual()) continue;
+        col_pos++;
+      }
+
       bool is_asc = (idx_elem->order() == dd::Index_element::ORDER_ASC);
-      uint prefix_len = 0;
+      ulint prefix_len = 0;
 
       if (dd_index->type() == dd::Index::IT_SPATIAL) {
         prefix_len = 0;
       } else if (dd_index->type() == dd::Index::IT_FULLTEXT) {
         prefix_len = 0;
       } else if (idx_elem->length() != (uint)(-1) &&
-                 idx_elem->length() != column_pack_length(*dd_col)) {
+                 idx_elem->length() != table->cols[col_pos].len) {
         prefix_len = idx_elem->length();
       } else {
         prefix_len = 0;
-      }
-
-      uint col_pos = 0;
-      for (auto c : dd_index->table().columns()) {
-        if (c == dd_col) break;
-        if (c->is_virtual()) continue;
-        col_pos++;
       }
 
       dict_index_add_col(index, table, &table->cols[col_pos], prefix_len, is_asc);
