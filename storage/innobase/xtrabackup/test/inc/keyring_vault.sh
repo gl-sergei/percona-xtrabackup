@@ -5,7 +5,7 @@
 . inc/common.sh
 
 plugin_load=keyring_vault.so
-plugin_dir=${XTRABACKUP_BASEDIR}/keyring_vault
+plugin_dir=$PWD/../../../../plugin_output_directory
 keyring_vault_config=${TEST_VAR_ROOT}/keyring_vault_config
 keyring_args="--keyring-vault-config=${keyring_vault_config}"
 

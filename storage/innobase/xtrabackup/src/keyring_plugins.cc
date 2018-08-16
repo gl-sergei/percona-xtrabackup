@@ -22,6 +22,11 @@ Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA 02111-1307 USA
 #include <my_default.h>
 #include <mysqld.h>
 #include <base64.h>
+#include <mysql/service_mysql_keyring.h>
+#include <sql/sql_list.h>
+#include <sql/sql_plugin.h>
+#include <mysql/components/services/log_builtins.h>
+#include <ut0crc32.h>
 #include "xtrabackup.h"
 #include "xb0xb.h"
 #include "keyring_plugins.h"
@@ -45,6 +50,12 @@ const char *XTRABACKUP_KEYS_FILE = "xtrabackup_keys";
 const char *XTRABACKUP_KEYS_MAGIC = "KEYSV01";
 const size_t XTRABACKUP_KEYS_MAGIC_SIZE = 7;
 
+static MEM_ROOT argv_alloc{PSI_NOT_INSTRUMENTED, 512};
+
+static SERVICE_TYPE(registry) *reg_srv = nullptr;
+SERVICE_TYPE(log_builtins) *log_bi = nullptr;
+SERVICE_TYPE(log_builtins_string) *log_bs = nullptr;
+
 /** Fetch tablespace key from "xtrabackup_keys".
 @param[in]	space_id	tablespace id
 @param[out]	key		fetched tablespace key
@@ -52,7 +63,6 @@ const size_t XTRABACKUP_KEYS_MAGIC_SIZE = 7;
 void
 xb_fetch_tablespace_key(ulint space_id, byte *key, byte *iv)
 {
-#if 0
 	std::map<ulint, tablespace_encryption_info>::iterator it;
 
 	it = encryption_info.find(space_id);
@@ -61,7 +71,6 @@ xb_fetch_tablespace_key(ulint space_id, byte *key, byte *iv)
 
 	memcpy(key, it->second.key, ENCRYPTION_KEY_LEN);
 	memcpy(iv, it->second.iv, ENCRYPTION_KEY_LEN);
-#endif
 }
 
 const char *TRANSITION_KEY_PRIFIX = "XBKey";
@@ -73,7 +82,6 @@ const size_t TRANSITION_KEY_NAME_MAX_LEN = ENCRYPTION_SERVER_UUID_LEN + 2 + 45;
 @return false if fetch has failed. */
 static bool
 xb_fetch_key(char *key_name, char *key) {
-#if 0
 	char*	key_type = NULL;
 	size_t	key_len;
 	char*	tmp_key = NULL;
@@ -101,7 +109,6 @@ xb_fetch_key(char *key_name, char *key) {
 	my_free(tmp_key);
 	my_free(key_type);
 
-#endif
 	return(true);
 }
 
@@ -112,7 +119,6 @@ xb_fetch_key(char *key_name, char *key) {
 static bool
 xb_create_transition_key(char *key_name, char* key)
 {
-#if 0
 	byte	rand32[32];
 	char	rand64[45];
 	int	ret;
@@ -128,7 +134,7 @@ xb_create_transition_key(char *key_name, char* key)
 	base64_encode(rand32, 32, rand64);
 
 	/* Trasnsition key name is composed of server uuid and random suffix. */
-	ut_snprintf(key_name, TRANSITION_KEY_NAME_MAX_LEN,
+	snprintf(key_name, TRANSITION_KEY_NAME_MAX_LEN,
 		    "%s-%s-%s", TRANSITION_KEY_PRIFIX, server_uuid, rand64);
 
 	/* Let keyring generate key for us. */
@@ -141,8 +147,6 @@ xb_create_transition_key(char *key_name, char* key)
 
 	/* Fetch the key and return. */
 	return xb_fetch_key(key_name, key);
-#endif
-	return true;
 }
 
 /** Initialize keyring plugin for backup. Config is read from live mysql server.
@@ -151,7 +155,6 @@ xb_create_transition_key(char *key_name, char* key)
 bool
 xb_keyring_init_for_backup(MYSQL *connection)
 {
-#if 0
 	std::vector<std::string> keyring_plugin_args;
 	std::string keyring_plugin_name;
 	std::string keyring_plugin_lib;
@@ -219,11 +222,13 @@ xb_keyring_init_for_backup(MYSQL *connection)
 		strcpy(opt_plugin_dir, PLUGINDIR);
 	}
 
-	plugin_init(&t_argc, t_argv, PLUGIN_INIT_SKIP_PLUGIN_TABLE);
+	plugin_register_early_plugins(&t_argc, t_argv, 0);
+	plugin_register_builtin_and_init_core_se(&t_argc, t_argv);
+	plugin_register_dynamic_and_init_all(&t_argc, t_argv,
+		PLUGIN_INIT_SKIP_PLUGIN_TABLE);
 
 	delete [] t_argv;
 
-#endif
 	return(true);
 }
 
@@ -244,7 +249,6 @@ argc and argv.
 bool
 xb_keyring_init_for_stats(int argc, char **argv)
 {
-#if 0
 	mysql_optional_plugins[0] = 0;
 	mysql_mandatory_plugins[0] = 0;
 
@@ -279,11 +283,13 @@ xb_keyring_init_for_stats(int argc, char **argv)
 	memset(t_argv, 0, sizeof(char *) * (t_argc + 1));
 	memcpy(t_argv, argv, sizeof(char *) * t_argc);
 
-	plugin_init(&t_argc, t_argv, PLUGIN_INIT_SKIP_PLUGIN_TABLE);
+	plugin_register_early_plugins(&t_argc, t_argv, 0);
+	plugin_register_builtin_and_init_core_se(&t_argc, t_argv);
+	plugin_register_dynamic_and_init_all(&t_argc, t_argv,
+		PLUGIN_INIT_SKIP_PLUGIN_TABLE);
 
 	delete [] t_argv;
 
-#endif
 	return(true);
 }
 
@@ -295,7 +301,6 @@ argc and argv, server uuid and plugin name is read from backup-my.cnf.
 bool
 xb_keyring_init_for_prepare(int argc, char **argv)
 {
-#if 0
 	mysql_optional_plugins[0] = 0;
 	mysql_mandatory_plugins[0] = 0;
 
@@ -329,11 +334,10 @@ xb_keyring_init_for_prepare(int argc, char **argv)
 	}
 
 	if (my_load_defaults(fname, groups, &backup_my_argc,
-			     &backup_my_argv, NULL)) {
+			     &backup_my_argv, &argv_alloc, NULL)) {
 		return(false);
 	}
 
-	char **old_argv = backup_my_argv;
 	if (handle_options(&backup_my_argc, &backup_my_argv, keyring_options,
 			   get_one_option)) {
 		return(false);
@@ -357,12 +361,13 @@ xb_keyring_init_for_prepare(int argc, char **argv)
 	memset(t_argv, 0, sizeof(char *) * (t_argc + 1));
 	memcpy(t_argv, argv, sizeof(char *) * t_argc);
 
-	plugin_init(&t_argc, t_argv, PLUGIN_INIT_SKIP_PLUGIN_TABLE);
+	plugin_register_early_plugins(&t_argc, t_argv, 0);
+	plugin_register_builtin_and_init_core_se(&t_argc, t_argv);
+	plugin_register_dynamic_and_init_all(&t_argc, t_argv,
+		PLUGIN_INIT_SKIP_PLUGIN_TABLE);
 
-	free_defaults(old_argv);
 	delete [] t_argv;
 
-#endif
 	return(true);
 }
 
@@ -385,7 +390,6 @@ bool
 xb_tablespace_keys_load_one(const char *dir, const char *transition_key,
 			    size_t transition_key_len)
 {
-#if 0
 	byte derived_key[ENCRYPTION_KEY_LEN];
 	byte salt[XB_KDF_SALT_SIZE];
 	byte read_buf[ENCRYPTION_KEY_LEN * 2 + 8];
@@ -515,7 +519,6 @@ xb_tablespace_keys_load_one(const char *dir, const char *transition_key,
 
 error:
 	fclose(f);
-#endif
 	return(false);
 }
 
@@ -530,7 +533,6 @@ bool
 xb_tablespace_keys_load(const char *dir,
 			const char *transition_key, size_t transition_key_len)
 {
-#if 0
 	if (!xb_tablespace_keys_load_one(
 		"./", transition_key, transition_key_len)) {
 		return(false);
@@ -539,7 +541,6 @@ xb_tablespace_keys_load(const char *dir,
 		return xb_tablespace_keys_load_one(
 			dir, transition_key, transition_key_len);
 	}
-#endif
 	return(true);
 }
 
@@ -547,7 +548,6 @@ static bool
 xb_tablespace_keys_write_single(ds_file_t *stream, const byte *derived_key,
 				ulint space_id, const byte *key, const byte *iv)
 {
-#if 0
 	byte write_buf[ENCRYPTION_KEY_LEN * 2 + 8];
 	byte tmp[ENCRYPTION_KEY_LEN * 2];
 	int elen;
@@ -597,7 +597,6 @@ xb_tablespace_keys_write_single(ds_file_t *stream, const byte *derived_key,
 		return(false);
 	}
 
-#endif
 	return(true);
 }
 
@@ -611,7 +610,6 @@ bool
 xb_tablespace_keys_dump(ds_ctxt_t *ds_ctxt, const char *transition_key,
 			size_t transition_key_len)
 {
-#if 0
 	byte derived_key[ENCRYPTION_KEY_LEN];
 	byte salt[XB_KDF_SALT_SIZE];
 	char transition_key_name[TRANSITION_KEY_NAME_MAX_LEN];
@@ -643,7 +641,7 @@ xb_tablespace_keys_dump(ds_ctxt_t *ds_ctxt, const char *transition_key,
 		return(false);
 	}
 
-	fil_space_t *space;
+	dberr_t err;
 	MY_STAT stat_info;
 	memset(&stat_info, 0, sizeof(MY_STAT));
 
@@ -675,35 +673,33 @@ xb_tablespace_keys_dump(ds_ctxt_t *ds_ctxt, const char *transition_key,
 		goto error;
 	}
 
-	space = UT_LIST_GET_FIRST(fil_system->space_list);
+	err = Fil_space_iterator::for_each_space(
+		false,
+		[&](fil_space_t* space) {
+			if (space->encryption_type == Encryption::NONE) {
+				return (DB_SUCCESS);
+			}
+			if (!xb_tablespace_keys_write_single(stream,
+				derived_key,
+				space->id, space->encryption_key,
+				space->encryption_iv)) {
+				msg_ts("Error writing %s: failed to save "
+					"tablespace key.\n",
+					XTRABACKUP_KEYS_FILE);
+				return (DB_ERROR);
+			}
+			return (DB_SUCCESS);
+		});
 
-	while (space != NULL) {
-
-		if (space->encryption_type == Encryption::NONE) {
-			space = UT_LIST_GET_NEXT(space_list, space);
-			continue;
-		}
-
-		if (!xb_tablespace_keys_write_single(stream, derived_key,
-			space->id, space->encryption_key,
-			space->encryption_iv)) {
-			msg_ts("Error writing %s: failed to save "
-				"tablespace key.\n",
-				XTRABACKUP_KEYS_FILE);
-			goto error;
-		}
-
-		space = UT_LIST_GET_NEXT(space_list, space);
+	if (err != DB_SUCCESS) {
+		goto error;
 	}
 
-	if (recv_sys->encryption_list != NULL) {
-		for (encryption_list_t::iterator i =
-			recv_sys->encryption_list->begin();
-		     i != recv_sys->encryption_list->end(); i++) {
-
+	if (recv_sys->keys != nullptr) {
+		for (auto &key : *recv_sys->keys) {
 			if (!xb_tablespace_keys_write_single(
-				stream, derived_key, i->space_id,
-				i->key, i->iv)) {
+				stream, derived_key, key.space_id,
+				key.ptr, key.iv)) {
 				msg_ts("Error writing %s: failed to save "
 					"tablespace key.\n",
 					XTRABACKUP_KEYS_FILE);
@@ -717,7 +713,6 @@ xb_tablespace_keys_dump(ds_ctxt_t *ds_ctxt, const char *transition_key,
 
 error:
 	ds_close(stream);
-#endif
 	return(false);
 }
 
@@ -726,7 +721,6 @@ error:
 void
 xb_keyring_shutdown()
 {
-#if 0
 	plugin_shutdown();
 
 	I_List_iterator<i_string> iter(*opt_plugin_load_list_ptr);
@@ -736,5 +730,4 @@ xb_keyring_shutdown()
 	}
 
 	free_list(opt_plugin_load_list_ptr);
-#endif
 }

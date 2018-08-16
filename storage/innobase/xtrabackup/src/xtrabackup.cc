@@ -80,6 +80,8 @@ Place, Suite 330, Boston, MA 02111-1307 USA
 #include <clone0api.h>
 #include <mysqld_thd_manager.h>
 #include <table_cache.h>
+#include <components/mysql_server/server_component.h>
+#include <sql/srv_session.h>
 
 #include <api0api.h>
 #include <api0misc.h>
@@ -1651,33 +1653,6 @@ xb_get_one_option(int optid,
   return 0;
 }
 
-/***********************************************************************
-Initializes log_block_size */
-static
-ibool
-xb_init_log_block_size(void)
-{
-	// srv_log_block_size = 0;
-	// if (innobase_log_block_size != 512) {
-	// 	uint	n_shift = get_bit_shift(innobase_log_block_size);;
-
-	// 	if (n_shift > 0) {
-	// 		srv_log_block_size = (1 << n_shift);
-	// 		msg("InnoDB: The log block size is set to %lu.\n",
-	// 		    srv_log_block_size);
-	// 	}
-	// } else {
-	// 	srv_log_block_size = 512;
-	// }
-	// if (!srv_log_block_size) {
-	// 	msg("InnoDB: Error: %lu is not valid value for "
-	// 	    "innodb_log_block_size.\n", innobase_log_block_size);
-	// 	return FALSE;
-	// }
-
-	return TRUE;
-}
-
 /** Check that a page_size is correct for InnoDB.
 If correct, set the associated page_size_shift which is the power of 2
 for this page size.
@@ -1727,12 +1702,6 @@ innodb_init_param(void)
 		goto error;
 	}
 	srv_page_size = innobase_page_size;
-
-	if (!xb_init_log_block_size()) {
-		goto error;
-	}
-
-	// srv_fast_checksum = (ibool) innobase_fast_checksum;
 
 	/* Check that values don't overflow on 32-bit systems. */
 	if (sizeof(ulint) == 4) {
@@ -2110,12 +2079,18 @@ dberr_t dict_load_tables_from_space_id(space_id_t space_id, THD *thd,
 
 		dict_table_t *ib_table = nullptr;
 
+		fil_space_t *space = fil_space_get(space_id);
+		ut_a(space != nullptr);
+
+		bool implicit = fsp_is_file_per_table(space_id, space->flags);
 		if (dd_table_open_on_dd_obj(dc, space_id, *dd_table.get(),
-					    ib_table, thd,
-					    &schema_name) != 0) {
+					    ib_table, thd, &schema_name,
+					    implicit) != 0) {
 			err = DB_ERROR;
 			goto error;
 		}
+
+		dd_table_close(ib_table, thd, nullptr, false);
 	}
 
 	return (DB_SUCCESS);
@@ -4448,6 +4423,58 @@ xb_tables_compatibility_check()
 	mysql_free_result(result);
 }
 
+static void
+init_mysql_environment() {
+	ulong server_start_time = my_time(0);
+
+	randominit(&sql_rand, server_start_time, server_start_time / 2);
+
+	mysql_mutex_init(PSI_NOT_INSTRUMENTED, &LOCK_status,
+			 MY_MUTEX_INIT_FAST);
+	mysql_mutex_init(PSI_NOT_INSTRUMENTED, &LOCK_global_system_variables,
+			 MY_MUTEX_INIT_FAST);
+	mysql_mutex_init(PSI_NOT_INSTRUMENTED, &LOCK_sql_rand,
+			MY_MUTEX_INIT_FAST);
+	mysql_mutex_init(PSI_NOT_INSTRUMENTED, &LOCK_keyring_operations,
+			MY_MUTEX_INIT_FAST);
+
+	Srv_session::module_init();
+
+	Global_THD_manager::create_instance();
+
+	my_thread_stack_size = DEFAULT_THREAD_STACK;
+	my_default_lc_messages = &my_locale_en_US;
+	global_system_variables.collation_connection = default_charset_info;
+	global_system_variables.character_set_results = default_charset_info;
+	global_system_variables.character_set_client = default_charset_info;
+	global_system_variables.lc_messages = my_default_lc_messages;
+
+	table_cache_instances = Table_cache_manager::DEFAULT_MAX_TABLE_CACHES;
+
+	table_def_init();
+	transaction_cache_init();
+
+	mdl_init();
+
+	mysql_services_bootstrap(nullptr);
+}
+
+static void
+cleanup_mysql_environment() {
+	Global_THD_manager::destroy_instance();
+
+	transaction_cache_free();
+	table_def_free();
+	mdl_destroy();
+	Srv_session::module_deinit();
+	mysql_services_shutdown();
+
+	mysql_mutex_destroy(&LOCK_status);
+	mysql_mutex_destroy(&LOCK_global_system_variables);
+	mysql_mutex_destroy(&LOCK_sql_rand);
+	mysql_mutex_destroy(&LOCK_keyring_operations);
+}
+
 void
 xtrabackup_backup_func(void)
 {
@@ -4459,6 +4486,8 @@ xtrabackup_backup_func(void)
 	data_thread_ctxt_t 	*data_threads;
 
 	recv_is_making_a_backup = true;
+
+	init_mysql_environment();
 
 #ifdef USE_POSIX_FADVISE
 	msg("xtrabackup: uses posix_fadvise().\n");
@@ -4958,6 +4987,8 @@ skip_last_cp:
 	sync_check_close();
 
 	xb_keyring_shutdown();
+
+	cleanup_mysql_environment();
 
 	/* Make sure that the latest checkpoint made it to xtrabackup_logfile */
 	if (latest_cp > log_copy_scanned_lsn) {
@@ -5461,10 +5492,6 @@ xtrabackup_init_temp_log(void)
 
 	log_buf = static_cast<byte*>(ut_malloc_nokey(UNIV_PAGE_SIZE_MAX * 128));
 	if (log_buf == NULL) {
-		goto error;
-	}
-
-	if (!xb_init_log_block_size()) {
 		goto error;
 	}
 
@@ -6667,88 +6694,114 @@ Write the meta data config file index information.
 @return true in case of success otherwise false. */
 static	__attribute__((nonnull, warn_unused_result))
 bool
+xb_export_cfg_write_one_index(
+/*======================*/
+	const dict_index_t*	index,	/*!< in: write metadata for this
+					index */
+	FILE*			file)	/*!< in: file to write to */
+{
+	bool ret;
+	byte *ptr;
+	byte row[sizeof(space_index_t) + sizeof(uint32_t) * 8];
+
+	ptr = row;
+
+	ut_ad(sizeof(space_index_t) == 8);
+	mach_write_to_8(ptr, index->id);
+	ptr += sizeof(space_index_t);
+
+	mach_write_to_4(ptr, index->space);
+	ptr += sizeof(uint32_t);
+
+	mach_write_to_4(ptr, index->page);
+	ptr += sizeof(uint32_t);
+
+	mach_write_to_4(ptr, index->type);
+	ptr += sizeof(uint32_t);
+
+	mach_write_to_4(ptr, index->trx_id_offset);
+	ptr += sizeof(uint32_t);
+
+	mach_write_to_4(ptr, index->n_user_defined_cols);
+	ptr += sizeof(uint32_t);
+
+	mach_write_to_4(ptr, index->n_uniq);
+	ptr += sizeof(uint32_t);
+
+	mach_write_to_4(ptr, index->n_nullable);
+	ptr += sizeof(uint32_t);
+
+	mach_write_to_4(ptr, index->n_fields);
+
+	if (fwrite(row, 1, sizeof(row), file) != sizeof(row)) {
+		msg("xtrabackup: Error: writing index meta-data.");
+		return (false);
+	}
+
+	/* Write the length of the index name.
+	NUL byte is included in the length. */
+	uint32_t len = static_cast<uint32_t>(strlen(index->name) + 1);
+	ut_a(len > 1);
+
+	mach_write_to_4(row, len);
+
+	if (fwrite(row, 1, sizeof(len), file) != sizeof(len) ||
+		fwrite(index->name, 1, len, file) != len) {
+		msg("xtrabackup: Error:  writing index name.");
+		return (false);
+	}
+
+	ret = xb_export_cfg_write_index_fields(index, file);
+	return (ret);
+}
+
+/*********************************************************************//**
+Write the meta data config file index information.
+@return true in case of success otherwise false. */
+static	__attribute__((nonnull, warn_unused_result))
+bool
 xb_export_cfg_write_indexes(
 /*======================*/
 	const dict_table_t*	table,	/*!< in: write the meta data for
 					this table */
 	FILE*			file)	/*!< in: file to write to */
 {
-	{
-		byte		row[sizeof(ib_uint32_t)];
+	byte row[sizeof(uint32_t)];
 
-		/* Write the number of indexes in the table. */
-		mach_write_to_4(row, UT_LIST_GET_LEN(table->indexes));
+	/* Write the number of indexes in the table. */
+	uint32_t num_indexes = 0;
+	ulint flags = fil_space_get_flags(table->space);
+	bool has_sdi = FSP_FLAGS_HAS_SDI(flags);
 
-		if (fwrite(row, 1, sizeof(row), file) != sizeof(row)) {
-			msg("xtrabackup: Error: writing index count.");
+	if (has_sdi) {
+		num_indexes += 1;
+	}
 
-			return(false);
-		}
+	num_indexes += static_cast<uint32_t>(UT_LIST_GET_LEN(table->indexes));
+	ut_ad(num_indexes != 0);
+
+	mach_write_to_4(row, num_indexes);
+
+	if (fwrite(row, 1, sizeof(row), file) != sizeof(row)) {
+		msg("xtrabackup: Error: writing index count.");
+		return (false);
 	}
 
 	bool			ret = true;
+
+	/* Write SDI Index */
+	if (has_sdi) {
+		dict_index_t *index = dict_sdi_get_index(table->space);
+
+		ut_ad(index != NULL);
+		ret = xb_export_cfg_write_one_index(index, file);
+	}
 
 	/* Write the index meta data. */
 	for (const dict_index_t* index = UT_LIST_GET_FIRST(table->indexes);
 	     index != 0 && ret;
 	     index = UT_LIST_GET_NEXT(indexes, index)) {
-
-		byte*		ptr;
-		byte		row[sizeof(ib_uint64_t)
-				    + sizeof(ib_uint32_t) * 8];
-
-		ptr = row;
-
-		ut_ad(sizeof(ib_uint64_t) == 8);
-		mach_write_to_8(ptr, index->id);
-		ptr += sizeof(ib_uint64_t);
-
-		mach_write_to_4(ptr, index->space);
-		ptr += sizeof(ib_uint32_t);
-
-		mach_write_to_4(ptr, index->page);
-		ptr += sizeof(ib_uint32_t);
-
-		mach_write_to_4(ptr, index->type);
-		ptr += sizeof(ib_uint32_t);
-
-		mach_write_to_4(ptr, index->trx_id_offset);
-		ptr += sizeof(ib_uint32_t);
-
-		mach_write_to_4(ptr, index->n_user_defined_cols);
-		ptr += sizeof(ib_uint32_t);
-
-		mach_write_to_4(ptr, index->n_uniq);
-		ptr += sizeof(ib_uint32_t);
-
-		mach_write_to_4(ptr, index->n_nullable);
-		ptr += sizeof(ib_uint32_t);
-
-		mach_write_to_4(ptr, index->n_fields);
-
-		if (fwrite(row, 1, sizeof(row), file) != sizeof(row)) {
-
-			msg("xtrabackup: Error: writing index meta-data.");
-
-			return(false);
-		}
-
-		/* Write the length of the index name.
-		NUL byte is included in the length. */
-		ib_uint32_t	len = strlen(index->name) + 1;
-		ut_a(len > 1);
-
-		mach_write_to_4(row, len);
-
-		if (fwrite(row, 1, sizeof(len), file) != sizeof(len)
-		    || fwrite(index->name, 1, len, file) != len) {
-
-			msg("xtrabackup: Error: writing index name.");
-
-			return(false);
-		}
-
-		ret = xb_export_cfg_write_index_fields(index, file);
+		ret = xb_export_cfg_write_one_index(index, file);
 	}
 
 	return(ret);
@@ -6840,7 +6893,7 @@ xb_export_cfg_write_header(
 	byte			value[sizeof(ib_uint32_t)];
 
 	/* Write the meta-data version number. */
-	mach_write_to_4(value, IB_EXPORT_CFG_VERSION_V1);
+	mach_write_to_4(value, IB_EXPORT_CFG_VERSION_V2);
 
 	if (fwrite(&value, 1, sizeof(value), file) != sizeof(value)) {
 		msg("xtrabackup: Error: writing meta-data version number.");
@@ -6907,6 +6960,16 @@ xb_export_cfg_write_header(
 		msg("xtrabackup: Error: writing table meta-data.");
 
 		return(false);
+	}
+
+	/* Write the space flags */
+	ulint space_flags = fil_space_get_flags(table->space);
+	ut_ad(space_flags != ULINT_UNDEFINED);
+	mach_write_to_4(value, space_flags);
+
+	if (fwrite(&value, 1, sizeof(value), file) != sizeof(value)) {
+		msg("xtrabackup: Error: writing writing space_flags.");
+		return (false);
 	}
 
 	return(true);
@@ -7210,52 +7273,6 @@ store_master_key_id(
 }
 
 static void
-init_mysql_environment() {
-	ulong server_start_time = my_time(0);
-
-	randominit(&sql_rand, server_start_time, server_start_time / 2);
-
-	mysql_mutex_init(PSI_NOT_INSTRUMENTED, &LOCK_status,
-			 MY_MUTEX_INIT_FAST);
-	mysql_mutex_init(PSI_NOT_INSTRUMENTED, &LOCK_plugin,
-			 MY_MUTEX_INIT_FAST);
-	mysql_mutex_init(PSI_NOT_INSTRUMENTED, &LOCK_global_system_variables,
-			 MY_MUTEX_INIT_FAST);
-	mysql_mutex_init(PSI_NOT_INSTRUMENTED, &LOCK_sql_rand,
-			MY_MUTEX_INIT_FAST);
-
-	Global_THD_manager::create_instance();
-
-	my_thread_stack_size = DEFAULT_THREAD_STACK;
-	my_default_lc_messages = &my_locale_en_US;
-	global_system_variables.collation_connection = default_charset_info;
-	global_system_variables.character_set_results = default_charset_info;
-	global_system_variables.character_set_client = default_charset_info;
-	global_system_variables.lc_messages = my_default_lc_messages;
-
-	table_cache_instances = Table_cache_manager::DEFAULT_MAX_TABLE_CACHES;
-
-	table_def_init();
-	transaction_cache_init();
-
-	mdl_init();
-}
-
-static void
-cleanup_mysql_environment() {
-	mysql_mutex_destroy(&LOCK_status);
-	mysql_mutex_destroy(&LOCK_plugin);
-	mysql_mutex_destroy(&LOCK_global_system_variables);
-	mysql_mutex_destroy(&LOCK_sql_rand);
-
-	Global_THD_manager::destroy_instance();
-
-	transaction_cache_free();
-	table_def_free();
-	mdl_destroy();
-}
-
-static void
 xtrabackup_prepare_func(int argc, char **argv)
 {
 	ulint	err;
@@ -7487,16 +7504,6 @@ skip_check:
 
 	if (xtrabackup_export) {
 		msg("xtrabackup: export option is specified.\n");
-		pfs_os_file_t	info_file = XB_FILE_UNDEFINED;
-		char		info_file_path[FN_REFLEN];
-		bool		success;
-		char		table_name[FN_REFLEN];
-
-		byte*		page;
-		byte*		buf = NULL;
-
-		buf = static_cast<byte *>(ut_malloc_nokey(UNIV_PAGE_SIZE * 2));
-		page = static_cast<byte *>(ut_align(buf, UNIV_PAGE_SIZE));
 
 		/* flush insert buffer at shutdwon */
 		innobase_fast_shutdown = 0;
@@ -7513,63 +7520,23 @@ skip_check:
 		THD* thd = create_thd(false, true, true, 0);
 
 		while ((node = datafiles_iter_next(it)) != NULL) {
-			int		 len;
-			char		*next, *prev, *p;
 			dict_table_t*	 table;
-			dict_index_t*	 index;
-			ulint		 n_index;
 
 			space = node->space;
 
 			/* treat file_per_table only */
-			if (!fsp_is_ibd_tablespace(space->id)) {
+			if (!fsp_is_file_per_table(space->id, space->flags)) {
 				continue;
 			}
 
-			/* node exist == file exist, here */
-			strcpy(info_file_path, node->name);
-			strcpy(info_file_path +
-			       strlen(info_file_path) -
-			       4, ".exp");
-
-			len = strlen(info_file_path);
-
-			p = info_file_path;
-			prev = NULL;
-			while ((next = strchr(p, OS_PATH_SEPARATOR)) != NULL)
-			{
-				prev = p;
-				p = next + 1;
-			}
-			info_file_path[len - 4] = 0;
-			strncpy(table_name, prev, FN_REFLEN);
-
-			info_file_path[len - 4] = '.';
-
-			table = dd_table_open_on_name(thd, NULL, table_name, false, true);
+			table = dd_table_open_on_name(thd, NULL, space->name, false, true);
 
 			mutex_enter(&(dict_sys->mutex));
 			if (!table) {
 				msg("xtrabackup: error: "
 				    "cannot find dictionary "
 				    "record of table %s\n",
-				    table_name);
-				goto next_node;
-			}
-
-			/* Write MySQL 5.6 .cfg file */
-			if (!xb_export_cfg_write(node, table)) {
-				goto next_node;
-			}
-
-			index = table->first_index();
-			n_index = UT_LIST_GET_LEN(table->indexes);
-			if (n_index > 31) {
-				msg("xtrabackup: warning: table '%s' has more "
-				    "than 31 indexes, .exp file was not "
-				    "generated. Table will fail to import "
-				    "on server version prior to 5.6.\n",
-				    table_name);
+				    space->name);
 				goto next_node;
 			}
 
@@ -7578,74 +7545,17 @@ skip_check:
 				goto next_node;
 			}
 
-			/* init exp file */
-			memset(page, 0, UNIV_PAGE_SIZE);
-			mach_write_to_4(page    , 0x78706f72UL);
-			mach_write_to_4(page + 4, 0x74696e66UL);/*"xportinf"*/
-			mach_write_to_4(page + 8, n_index);
-			strncpy((char *) page + 12,
-				table_name, 500);
-
-			msg("xtrabackup: export metadata of "
-			    "table '%s' to file `%s` "
-			    "(%lu indexes)\n",
-			    table_name, info_file_path,
-			    n_index);
-
-			n_index = 1;
-			while (index) {
-				mach_write_to_8(page + n_index * 512, index->id);
-				mach_write_to_4(page + n_index * 512 + 8,
-						index->page);
-				strncpy((char *) page + n_index * 512 +
-					12, index->name, 500);
-
-				msg("xtrabackup:     name=%s, "
-				    "id.low=%lu, page=%lu\n",
-				    index->name(),
-				    (ulint)(index->id &
-					    0xFFFFFFFFUL),
-				    (ulint) index->page);
-				index = index->next();
-				n_index++;
-			}
-
-			Fil_path::normalize(info_file_path);
-			info_file = os_file_create(
-				0,
-				info_file_path,
-				OS_FILE_CREATE,
-				OS_FILE_NORMAL, OS_DATA_FILE,
-				false,
-				&success);
-			if (!success) {
-				os_file_get_last_error(TRUE);
+			/* Write MySQL 8.0 .cfg file */
+			if (!xb_export_cfg_write(node, table)) {
 				goto next_node;
 			}
-			success = os_file_write(write_request, info_file_path,
-						info_file, page,
-						0, UNIV_PAGE_SIZE);
-			if (!success) {
-				os_file_get_last_error(TRUE);
-				goto next_node;
-			}
-			success = os_file_flush(info_file);
-			if (!success) {
-				os_file_get_last_error(TRUE);
-				goto next_node;
-			}
+
 next_node:
 			if(table != nullptr) {
 				dd_table_close(table, thd, nullptr, true);
 			}
-			if (info_file != XB_FILE_UNDEFINED) {
-				os_file_close(info_file);
-				info_file = XB_FILE_UNDEFINED;
-			}
 			mutex_exit(&(dict_sys->mutex));
 		}
-
-		ut_free(buf);
 
 		datafiles_iter_free(it);
 
@@ -8593,9 +8503,11 @@ int main(int argc, char **argv)
 			msg("Error: datadir must be specified.\n");
 			exit(EXIT_FAILURE);
 		}
+		init_mysql_environment();
 		if (!copy_back(server_argc, server_defaults)) {
 			exit(EXIT_FAILURE);
 		}
+		cleanup_mysql_environment();
 	}
 
 	if (xtrabackup_decrypt_decompress && !decrypt_decompress()) {
