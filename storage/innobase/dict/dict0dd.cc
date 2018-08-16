@@ -567,18 +567,15 @@ dict_table_t *dd_table_create_on_dd_obj(const dd::Table *dd_table,
 
   /* It appears that index list for InnoDB table always starts with
   primary key */
+  ut_ad(dd_table->indexes().size() > 0);
   const dd::Index *primary_key = dd_table->indexes()[0];
 
-  uint n_pk_fields = 0;
-  if (primary_key != nullptr) {
-    n_pk_fields = std::count_if(primary_key->elements().begin(),
+  uint n_pk_fields = std::count_if(primary_key->elements().begin(),
       primary_key->elements().end(),
       [](const dd::Index_element *el){ return el->length() != (uint) (-1); });
-  }
 
   if (n_pk_fields == 0) {
-    /* primary key is not defined or contains only SE hidden columns like
-    DB_ROW_ID */
+    /* primary key contains only SE hidden columns like DB_ROW_ID */
     dict_index_t *index = dict_mem_index_create(
         table->name.m_name, "GEN_CLUST_INDEX", 0, DICT_CLUSTERED, 0);
     index->n_uniq = 0;
