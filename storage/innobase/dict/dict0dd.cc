@@ -565,17 +565,9 @@ dict_table_t *dd_table_create_on_dd_obj(const dd::Table *dd_table,
 
   dict_table_add_system_columns(table, heap);
 
-  const dd::Index *primary_key = nullptr;
-
-  for (const auto dd_index : dd_table->indexes()) {
-    if (my_strcasecmp(system_charset_info,
-                      dd_index->name().c_str(), primary_key_name) == 0) {
-      primary_key = dd_index;
-      break;
-    }
-  }
-
-  ut_ad(primary_key == nullptr || primary_key == dd_table->indexes()[0]);
+  /* It appears that index list for InnoDB table always starts with
+  primary key */
+  const dd::Index *primary_key = dd_table->indexes()[0];
 
   uint n_pk_fields = 0;
   if (primary_key != nullptr) {
