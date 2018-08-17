@@ -2,7 +2,7 @@
 # Bug #711166: Partitioned tables are not correctly handled by the
 #              --databases and --tables-file options of innobackupex,
 #              and by the --tables option of xtrabackup.
-#              Testcase covers using --databases option with MyISAM
+#              Testcase covers using --databases option with InnoDB
 #              database
 ########################################################################
 
@@ -13,9 +13,9 @@ start_server
 
 require_partitioning
 
-# Create MyISAM partitioned table with some partitions in
+# Create InnoDB partitioned table with some partitions in
 # different location
-ib_part_init $topdir MyISAM
+ib_part_init $topdir InnoDB
 
 # Saving the checksum of original table
 checksum_a=`checksum_table test test`

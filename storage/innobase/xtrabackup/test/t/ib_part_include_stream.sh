@@ -13,8 +13,8 @@ start_server --innodb_file_per_table
 
 require_partitioning
 
-# Create MyISAM partitioned table
-ib_part_init $topdir MyISAM
+# Create InnoDB partitioned table
+ib_part_init $topdir InnoDB
 
 # Saving the checksum of original table
 checksum_a=`checksum_table test test`
