@@ -624,7 +624,7 @@ table_id was found); mdl=NULL if we are resurrecting table IX locks in recovery
 @retval NULL if the table does not exist or cannot be opened */
 dict_table_t *dd_table_open_on_id(table_id_t table_id, THD *thd,
                                   MDL_ticket **mdl, bool dict_locked,
-                                  bool check_corruption);
+                                  bool check_corruption, bool skip_missing = false);
 
 /** Close an internal InnoDB table handle.
 @param[in,out]	table	InnoDB table handle
