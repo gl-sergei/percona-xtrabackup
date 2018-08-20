@@ -52,10 +52,6 @@ const size_t XTRABACKUP_KEYS_MAGIC_SIZE = 7;
 
 static MEM_ROOT argv_alloc{PSI_NOT_INSTRUMENTED, 512};
 
-static SERVICE_TYPE(registry) *reg_srv = nullptr;
-SERVICE_TYPE(log_builtins) *log_bi = nullptr;
-SERVICE_TYPE(log_builtins_string) *log_bs = nullptr;
-
 /** Fetch tablespace key from "xtrabackup_keys".
 @param[in]	space_id	tablespace id
 @param[out]	key		fetched tablespace key

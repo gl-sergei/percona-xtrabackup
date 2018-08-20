@@ -1322,6 +1322,10 @@ cleanup:
 }
 
 static
+size_t format_append(std::string& dest, const char *format, ...)
+	MY_ATTRIBUTE((format(printf, 2, 3)));
+
+static
 size_t format_append(std::string& dest, const char *format, ...) {
 	char* buffer;
 	int len = 0;
@@ -1701,7 +1705,7 @@ char* get_xtrabackup_info(MYSQL *connection)
 	ut_a(uuid);
 	ut_a(server_version);
 	char* result = NULL;
-	asprintf(&result,
+	int ret = asprintf(&result,
 		"uuid = %s\n"
 		"name = %s\n"
 		"tool_name = %s\n"
@@ -1744,6 +1748,8 @@ char* get_xtrabackup_info(MYSQL *connection)
 		xb_stream_format_name[xtrabackup_stream_fmt], /* format */
 		xtrabackup_compress ? "compressed" : "N", /* compressed */
 		xtrabackup_encrypt ? "Y" : "N"); /* encrypted */
+
+	ut_a(ret != 0);
 
 	free(server_version);
 	return result;

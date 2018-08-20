@@ -4288,7 +4288,7 @@ open_or_create_log_file(
 			"InnoDB: Error: log file %s is"
 			" of different size " UINT64PF " bytes\n"
 			"InnoDB: than specified in the .cnf"
-			" file " UINT64PF " bytes!\n",
+			" file %llu bytes!\n",
 			name, size, srv_log_file_size * UNIV_PAGE_SIZE);
 
 		return(DB_ERROR);
@@ -4308,7 +4308,7 @@ open_or_create_log_file(
 	}
 
 	ut_a(*log_space != NULL);
-	ut_a(fil_validate());
+	ut_ad(fil_validate());
 
 	ut_a(fil_node_create(name, srv_log_file_size / univ_page_size.physical(),
 			     *log_space, false, false) != NULL);

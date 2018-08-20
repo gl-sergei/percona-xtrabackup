@@ -408,8 +408,8 @@ directory_exists(const char *dir, bool create)
 
 	if (directory == nullptr) {
 
-		strerror_r(errno, errbuf, sizeof(errbuf));
-		msg("Can not open directory %s: %s\n", dir, errbuf);
+		msg("Can not open directory %s: %s\n", dir,
+			my_strerror(errbuf, sizeof(errbuf), my_errno()));
 
 		return(false);
 	}
@@ -1497,10 +1497,10 @@ copy_back_thread_func(datadir_thread_ctxt_t* ctx) {
 			if (mkdirp(entry.path.c_str(), 0777, MYF(0)) < 0) {
 				char errbuf[MYSYS_STRERROR_SIZE];
 
-				strerror_r(errno, errbuf, sizeof(errbuf));
-
 				msg("Can not create directory %s: %s\n",
-					entry.path.c_str(), errbuf);
+					entry.path.c_str(),
+					my_strerror(errbuf, sizeof(errbuf),
+							my_errno()));
 				ret = false;
 
 				goto cleanup;
@@ -1658,7 +1658,8 @@ copy_back(int argc, char **argv)
 			msg("xtrabackup: Error: can't read master_key_id\n");
 			return(false);
 		}
-		fscanf(f, "%lu", &Encryption::s_master_key_id);
+		int ret = fscanf(f, "%lu", &Encryption::s_master_key_id);
+		ut_a(ret == 1);
 		fclose(f);
 
 		if (!xb_keyring_init_for_prepare(argc, argv)) {
