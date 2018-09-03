@@ -76,6 +76,8 @@ Place, Suite 330, Boston, MA 02111-1307 USA
 #include <set>
 #include <mysql.h>
 
+#include <ctime>
+
 #define G_PTR uchar*
 
 #include "common.h"
@@ -2914,6 +2916,11 @@ xtrabackup_choose_lsn_offset(lsn_t start_lsn)
 	}
 }
 
+static double total_write_time = 0;
+static double total_read_time = 0;
+static double total_scan_time = 0;
+static double total_parse_time = 0;
+
 /*******************************************************//**
 Scans log from a buffer and writes new log data to the outpud datasinc.
 @return true if success */
@@ -2934,11 +2941,13 @@ xtrabackup_scan_log_recs(
 	bool*		finished)	/*!< out: false if is not able to scan
 					any more in this log group */
 {
+	static ulint total_bytes_written, last_bytes_written_reported = 0;
 	lsn_t		scanned_lsn;
 	ulint		data_len;
 	ulint		write_size;
 	const byte*	log_block;
 	bool		more_data	= false;
+	clock_t clock_begin;
 
 	ulint		scanned_checkpoint_no = 0;
 
@@ -2946,6 +2955,7 @@ xtrabackup_scan_log_recs(
 	scanned_lsn = start_lsn;
 	log_block = log_sys->buf;
 
+	clock_begin = clock();
 	while (log_block < log_sys->buf + RECV_SCAN_SIZE && !*finished) {
 		ulint	no = log_block_get_hdr_no(log_block);
 		ulint	scanned_no = log_block_convert_lsn_to_no(scanned_lsn);
@@ -3092,16 +3102,20 @@ xtrabackup_scan_log_recs(
 			write_size -= OS_FILE_LOG_BLOCK_SIZE;
 		}
 	}
+	total_scan_time += double(clock() - clock_begin) / CLOCKS_PER_SEC;
 
+	clock_begin = clock();
 	if (ds_write(dst_log_file, log_sys->buf, write_size)) {
 		msg("xtrabackup: Error: "
 		    "write to logfile failed\n");
 		return(false);
 	}
+	total_write_time += double(clock() - clock_begin) / CLOCKS_PER_SEC;
 
 	if (more_data && !recv_sys->found_corrupt_log) {
 		/* Try to parse more log records */
 
+		clock_begin = clock();
 		if (recv_parse_log_recs(checkpoint_lsn,	/*!< in: latest checkpoint LSN */
 					STORE_NO)) {
 			ut_ad(recv_sys->found_corrupt_log
@@ -3116,6 +3130,20 @@ xtrabackup_scan_log_recs(
 
 			recv_sys_justify_left_parsing_buf();
 		}
+		total_parse_time += double(clock() - clock_begin) / CLOCKS_PER_SEC;
+	}
+
+	total_bytes_written += write_size;
+	if (total_bytes_written - last_bytes_written_reported >= 10 * 1024 * 1024) {
+		msg_ts("Total %lu bytes written to xtrabackup_logfile, "
+			"total read time is %.3f sec, "
+			"total scan time is %.3f sec, "
+			"total parse time is %.3f sec, "
+			"total write time is %.3f sec.\n",
+			total_bytes_written,
+			total_read_time, total_scan_time, total_parse_time,
+			total_write_time);
+		last_bytes_written_reported = total_bytes_written;
 	}
 
 	return(true);
@@ -3142,15 +3170,19 @@ xtrabackup_copy_logfile(lsn_t from_lsn, my_bool is_last)
 		bool	finished;
 		lsn_t	start_lsn;
 		lsn_t	end_lsn;
+		lsn_t	last_reported_lsn = 0;
 
 		/* reference recv_group_scan_log_recs() */
 		finished = false;
 
 		start_lsn = contiguous_lsn;
+		last_reported_lsn = start_lsn;
 
 		while (!finished) {
 
 			end_lsn = start_lsn + RECV_SCAN_SIZE;
+
+			clock_t clock_begin = clock();
 
 			xtrabackup_io_throttling();
 
@@ -3167,8 +3199,25 @@ xtrabackup_copy_logfile(lsn_t from_lsn, my_bool is_last)
 
 			mutex_exit(&log_sys->mutex);
 
+			total_read_time += double(clock() - clock_begin) / CLOCKS_PER_SEC;
+
 			start_lsn = end_lsn;
 
+			if (end_lsn - last_reported_lsn >= 10 * 1024 * 1024) {
+				mutex_enter(&log_sys->mutex);
+				lsn_t offset = log_group_calc_lsn_offset(end_lsn, group);
+				ulint file_no = offset / group->file_size + 1;
+				ulint offset_within_file = offset % group->file_size;
+
+				/* print out current LSN each 10MiB */
+				msg_ts(">> log scanned up to " LSN_PF
+					", current log file is ib_logfile%lu, "
+					"offset within log file is %lu\n",
+					end_lsn, file_no,
+					offset_within_file);
+				mutex_exit(&log_sys->mutex);
+				last_reported_lsn = end_lsn;
+			}
 		}
 
 		group->scanned_lsn = group_scanned_lsn;
@@ -3232,6 +3281,7 @@ log_copying_thread(
 	}
 
 	/* last copying */
+	msg_ts("Performing the last log file copy.\n");
 	if(xtrabackup_copy_logfile(log_copy_scanned_lsn, TRUE)) {
 
 		exit(EXIT_FAILURE);
@@ -4852,8 +4902,12 @@ reread_log_header:
 	mutex_exit(&log_sys->mutex);
 
 	/* copy log file by current position */
+	msg_ts("Starting to copy logfile from the LSN " LSN_PF ".\n",
+		checkpoint_lsn_start);
 	if(xtrabackup_copy_logfile(checkpoint_lsn_start, FALSE))
 		exit(EXIT_FAILURE);
+	msg_ts("Logfile copied up to LSN " LSN_PF ".\n",
+		UT_LIST_GET_FIRST(log_sys->log_groups)->scanned_lsn);
 
 
 	log_copying_stop = os_event_create("log_copying_stop");
