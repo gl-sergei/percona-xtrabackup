@@ -1128,7 +1128,8 @@ using auto_position.
 bool
 lock_tables_maybe(MYSQL *connection)
 {
-	bool force_ftwrl = opt_slave_info && !slave_auto_position;
+	bool force_ftwrl = opt_slave_info && !slave_auto_position &&
+		!(server_flavor == FLAVOR_PERCONA_SERVER);
 
 	if (tables_locked || (opt_lock_ddl_per_table && !force_ftwrl)) {
 		return(true);
@@ -1326,6 +1327,8 @@ typedef struct {
 	std::string channel_name;
 	std::string relay_log_file;
 	uint64_t relay_log_position;
+	std::string relay_master_log_file;
+	uint64_t exec_master_log_position;
 } replication_channel_status_t;
 
 typedef struct {
@@ -1430,8 +1433,14 @@ write_slave_info(MYSQL *connection)
 
 			mysql_slave_position_s
 				<< "master host '" << ch->second.master
-				<< "', filename '" << ch->second.filename
-				<< "', position '" << ch->second.position
+				<< "', filename '"
+				<< (channel.relay_master_log_file.empty() ?
+				    ch->second.filename :
+				    channel.relay_master_log_file)
+				<< "', position '"
+				<< (channel.relay_master_log_file.empty() ?
+				    ch->second.position :
+				    channel.exec_master_log_position)
 				<< "', channel name: '" << channel.channel_name
 				<< "'\n";
 		}
@@ -1600,6 +1609,12 @@ log_status_replication_parse(const char *s, log_status_t &log_status)
 		cs.channel_name = ch["channel_name"].GetString();
 		cs.relay_log_file = ch["relay_log_file"].GetString();
 		cs.relay_log_position = ch["relay_log_position"].GetUint64();
+		if (server_flavor == FLAVOR_PERCONA_SERVER) {
+			cs.relay_master_log_file =
+				ch["relay_master_log_file"].GetString();
+			cs.exec_master_log_position =
+				ch["exec_master_log_position"].GetUint64();
+		}
 		log_status.channels.push_back(cs);
 	}
 }

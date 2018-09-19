@@ -16,6 +16,12 @@ setup_slave $slave_id $master_id
 switch_server $master_id
 load_dbase_schema incremental_sample
 
+if has_backup_locks ; then
+    backup_locks="yes"
+else
+    backup_locks="no"
+fi
+
 # Adding initial rows
 multi_row_insert incremental_sample.test \({1..100},100\)
 
@@ -31,6 +37,16 @@ $MYSQL $MYSQL_ARGS -Ns -e \
        SHOW GLOBAL STATUS LIKE 'Com_flush%'" \
        > $topdir/status1
 
+if [ $backup_locks = "yes" ] ; then
+	diff -u - $topdir/status1 <<EOF
+Com_lock_instance	0
+Com_lock_tables	0
+Com_lock_tables_for_backup	0
+Com_unlock_instance	0
+Com_unlock_tables	0
+Com_flush	1
+EOF
+else
 diff -u $topdir/status1 - <<EOF
 Com_lock_instance	0
 Com_lock_tables	0
@@ -38,6 +54,7 @@ Com_unlock_instance	0
 Com_unlock_tables	0
 Com_flush	1
 EOF
+fi
 
 vlog "Full backup of the slave server"
 xtrabackup --backup --target-dir=$topdir/backup \
@@ -50,6 +67,16 @@ $MYSQL $MYSQL_ARGS -Ns -e \
        SHOW GLOBAL STATUS LIKE 'Com_flush%'" \
        > $topdir/status1
 
+if [ $backup_locks = "yes" ] ; then
+	diff -u - $topdir/status1 <<EOF
+Com_lock_instance	0
+Com_lock_tables	0
+Com_lock_tables_for_backup	0
+Com_unlock_instance	0
+Com_unlock_tables	1
+Com_flush	2
+EOF
+else
 diff -u $topdir/status1 - <<EOF
 Com_lock_instance	0
 Com_lock_tables	0
@@ -57,6 +84,7 @@ Com_unlock_instance	0
 Com_unlock_tables	1
 Com_flush	4
 EOF
+fi
 
 run_cmd egrep -q '^mysql-bin.[0-9]+[[:space:]]+[0-9]+$' \
     $topdir/backup/xtrabackup_binlog_info
@@ -99,13 +127,24 @@ $MYSQL $MYSQL_ARGS -Ns -e \
        SHOW GLOBAL STATUS LIKE 'Com_flush%'" \
        > $topdir/status1
 
-diff -u $topdir/status1 - <<EOF
+if [ $backup_locks = "yes" ] ; then
+	diff -u - $topdir/status1 <<EOF
+Com_lock_instance	0
+Com_lock_tables	0
+Com_lock_tables_for_backup	0
+Com_unlock_instance	0
+Com_unlock_tables	1
+Com_flush	2
+EOF
+else
+	diff -u - $topdir/status1 <<EOF
 Com_lock_instance	0
 Com_lock_tables	0
 Com_unlock_instance	0
 Com_unlock_tables	1
 Com_flush	2
 EOF
+fi
 
 run_cmd egrep -q '^SET GLOBAL gtid_purged=.*;$' \
     $topdir/backup/xtrabackup_slave_info
