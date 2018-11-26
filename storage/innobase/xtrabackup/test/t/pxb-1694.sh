@@ -2,6 +2,10 @@
 # PXB-1694: ALTER TABLE ... ALGORITHM=COPY causing prepare to fail
 #
 
+MYSQLD_EXTRA_MY_CNF_OPTS="
+innodb_page_size=64k
+"
+
 start_server
 
 for i in {1..10} ; do
@@ -17,7 +21,7 @@ CREATE TABLE sbtest$i (
 EOF
 done
 
-( for i in {1..1000} ; do
+( for i in {1..10000} ; do
   echo "INSERT INTO sbtest1 (k, c, pad) VALUES (FLOOR(RAND() * 1000000), UUID(), UUID());"
 done ) | mysql test
 
@@ -28,15 +32,19 @@ done
 mysql -e "SELECT SUM(k) FROM sbtest5" test > $topdir/sum
 
 ( while true ; do
+  ${MYSQL} ${MYSQL_ARGS} test -e 'CREATE INDEX t10_c ON sbtest5 (c);' 1>/dev/null 2>/dev/null
+  # sleep 1
+  ${MYSQL} ${MYSQL_ARGS} test -e 'DROP INDEX t10_c ON sbtest5;' 1>/dev/null 2>/dev/null
+  # sleep 1
   ${MYSQL} ${MYSQL_ARGS} test -e 'CREATE INDEX t10_c ON sbtest5 (c) ALGORITHM=COPY;' 1>/dev/null 2>/dev/null
-  sleep 2
+  # sleep 1
   ${MYSQL} ${MYSQL_ARGS} test -e 'DROP INDEX t10_c ON sbtest5 ALGORITHM=COPY;' 1>/dev/null 2>/dev/null
-  sleep 2
+  # sleep 1
 done ) &
 
-for i in {1..3} ; do
+for i in {1..30} ; do
   rm -rf $topdir/backup
-  xtrabackup --backup --target-dir=$topdir/backup
+  xtrabackup --lock-ddl --backup --target-dir=$topdir/backup
   xtrabackup --prepare --target-dir=$topdir/backup
 done
 
