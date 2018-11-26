@@ -3,7 +3,7 @@
 #
 
 MYSQLD_EXTRA_MY_CNF_OPTS="
-innodb_page_size=64k
+innodb_page_size=16k
 "
 
 start_server
@@ -21,7 +21,7 @@ CREATE TABLE sbtest$i (
 EOF
 done
 
-( for i in {1..10000} ; do
+( for i in {1..1000} ; do
   echo "INSERT INTO sbtest1 (k, c, pad) VALUES (FLOOR(RAND() * 1000000), UUID(), UUID());"
 done ) | mysql test
 
@@ -45,7 +45,7 @@ done ) &
 for i in {1..30} ; do
   rm -rf $topdir/backup
   xtrabackup --lock-ddl --backup --target-dir=$topdir/backup
-  xtrabackup --prepare --target-dir=$topdir/backup
+  xtrabackup --prepare --use-memory=1G --target-dir=$topdir/backup
 done
 
 stop_server
