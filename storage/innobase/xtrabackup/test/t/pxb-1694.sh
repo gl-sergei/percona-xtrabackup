@@ -57,8 +57,8 @@ sleep 2
 
 xtrabackup --lock-ddl --backup --target-dir=$topdir/backup
 
-rm -rf ~/.tmp/bak
-cp -av $topdir/backup ~/.tmp/bak
+# rm -rf ~/.tmp/bak
+# cp -av $topdir/backup ~/.tmp/bak
 
 stop_server
 

@@ -4471,6 +4471,10 @@ void xtrabackup_backup_func(void) {
       goto reread_log_header;
     }
 
+    if (checkpoint_lsn_start < backup_redo_log_flushed_lsn) {
+      goto reread_log_header;
+    }
+
     xtrabackup_init_datasinks();
 
     if (!select_history()) {
