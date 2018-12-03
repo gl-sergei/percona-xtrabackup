@@ -14,11 +14,17 @@ function compare_files() {
 dir1=$1
 dir2=$2
 
-# files that present in the backup directory, but not present in the datadir
-diff -u <( ( ( cd $dir1; find . | grep -v innodb_temp )
-             ( cd $dir2; find . | grep -v innodb_temp )
-             ( cd $dir2; find . | grep -v innodb_temp ) ) | sort | uniq -u ) - <<EOF
-./backup-my.cnf
+if ! is_xtradb ; then
+LIST="./backup-my.cnf
+./xtrabackup_binlog_info
+./xtrabackup_binlog_pos_innodb
+./xtrabackup_checkpoints
+./xtrabackup_info
+./xtrabackup_logfile
+./xtrabackup_master_key_id
+./xtrabackup_tablespaces"
+else
+LIST="./backup-my.cnf
 ./xtrabackup_binlog_info
 ./xtrabackup_binlog_pos_innodb
 ./xtrabackup_checkpoints
@@ -26,13 +32,33 @@ diff -u <( ( ( cd $dir1; find . | grep -v innodb_temp )
 ./xtrabackup_logfile
 ./xtrabackup_master_key_id
 ./xtrabackup_tablespaces
+./xb_doublewrite"
+fi
+
+# files that present in the backup directory, but not present in the datadir
+diff -u <( ( ( cd $dir1; find . | grep -v innodb_temp )
+             ( cd $dir2; find . | grep -v innodb_temp )
+             ( cd $dir2; find . | grep -v innodb_temp ) ) | sort | uniq -u ) - <<EOF
+${LIST}
 EOF
 
-# files that present in the datadir, but not present in the backup
-diff -u <( ( ( cd $dir1; find . | grep -v innodb_temp )
-             ( cd $dir1; find . | grep -v innodb_temp )
-             ( cd $dir2; find . | grep -v innodb_temp ) ) | sort | uniq -u ) - <<EOF
-./auto.cnf
+
+if ! is_xtradb ; then
+LIST="./auto.cnf
+./ca-key.pem
+./ca.pem
+./client-cert.pem
+./client-key.pem
+./mysql-bin.000001
+./mysql-bin.000002
+./mysql-bin.index
+./mysqld1.err
+./private_key.pem
+./public_key.pem
+./server-cert.pem
+./server-key.pem"
+else
+LIST="./auto.cnf
 ./ca-key.pem
 ./ca.pem
 ./client-cert.pem
@@ -45,6 +71,14 @@ diff -u <( ( ( cd $dir1; find . | grep -v innodb_temp )
 ./public_key.pem
 ./server-cert.pem
 ./server-key.pem
+./xb_doublewrite"
+fi
+
+# files that present in the datadir, but not present in the backup
+diff -u <( ( ( cd $dir1; find . | grep -v innodb_temp )
+             ( cd $dir1; find . | grep -v innodb_temp )
+             ( cd $dir2; find . | grep -v innodb_temp ) ) | sort | uniq -u ) - <<EOF
+${LIST}
 EOF
 
 }

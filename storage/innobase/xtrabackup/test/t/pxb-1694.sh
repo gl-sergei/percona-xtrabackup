@@ -1,10 +1,3 @@
-#
-# PXB-1694: ALTER TABLE ... ALGORITHM=COPY causing prepare to fail
-#
-
-MYSQLD_EXTRA_MY_CNF_OPTS="
-innodb_page_size=16k
-"
 
 start_server
 
@@ -29,31 +22,53 @@ for i in {2..10} ; do
   mysql -e "INSERT INTO sbtest$i SELECT * FROM sbtest1" test
 done
 
-mysql -e "SELECT SUM(k) FROM sbtest5" test > $topdir/sum
+mysql test <<EOF
+CREATE TABLE t10 (a INT AUTO_INCREMENT PRIMARY KEY, b INT);
+INSERT INTO t10 (b) VALUES (FLOOR(RAND() * 10000)), (FLOOR(RAND() * 10000)), (FLOOR(RAND() * 10000));
+INSERT INTO t10 (b) VALUES (FLOOR(RAND() * 10000)), (FLOOR(RAND() * 10000)), (FLOOR(RAND() * 10000));
+INSERT INTO t10 (b) VALUES (FLOOR(RAND() * 10000)), (FLOOR(RAND() * 10000)), (FLOOR(RAND() * 10000));
+INSERT INTO t10 (b) VALUES (FLOOR(RAND() * 10000)), (FLOOR(RAND() * 10000)), (FLOOR(RAND() * 10000));
+INSERT INTO t10 (b) VALUES (FLOOR(RAND() * 10000)), (FLOOR(RAND() * 10000)), (FLOOR(RAND() * 10000));
+INSERT INTO t10 (b) VALUES (FLOOR(RAND() * 10000)), (FLOOR(RAND() * 10000)), (FLOOR(RAND() * 10000));
+INSERT INTO t10 (b) VALUES (FLOOR(RAND() * 10000)), (FLOOR(RAND() * 10000)), (FLOOR(RAND() * 10000));
+INSERT INTO t10 (b) VALUES (FLOOR(RAND() * 10000)), (FLOOR(RAND() * 10000)), (FLOOR(RAND() * 10000));
+INSERT INTO t10 (b) VALUES (FLOOR(RAND() * 10000)), (FLOOR(RAND() * 10000)), (FLOOR(RAND() * 10000));
+INSERT INTO t10 (b) VALUES (FLOOR(RAND() * 10000)), (FLOOR(RAND() * 10000)), (FLOOR(RAND() * 10000));
+INSERT INTO t10 (b) SELECT b FROM t10;
+INSERT INTO t10 (b) SELECT b FROM t10;
+INSERT INTO t10 (b) SELECT b FROM t10;
+INSERT INTO t10 (b) SELECT b FROM t10;
+INSERT INTO t10 (b) SELECT b FROM t10;
+EOF
 
 ( while true ; do
-  ${MYSQL} ${MYSQL_ARGS} test -e 'CREATE INDEX t10_c ON sbtest5 (c);' 1>/dev/null 2>/dev/null
+  ${MYSQL} ${MYSQL_ARGS} test -e 'CREATE INDEX t10_b ON t10 (b);' 1>/dev/null 2>/dev/null
   # sleep 1
-  ${MYSQL} ${MYSQL_ARGS} test -e 'DROP INDEX t10_c ON sbtest5;' 1>/dev/null 2>/dev/null
+  ${MYSQL} ${MYSQL_ARGS} test -e 'DROP INDEX t10_b ON t10;' 1>/dev/null 2>/dev/null
   # sleep 1
-  ${MYSQL} ${MYSQL_ARGS} test -e 'CREATE INDEX t10_c ON sbtest5 (c) ALGORITHM=COPY;' 1>/dev/null 2>/dev/null
+  ${MYSQL} ${MYSQL_ARGS} test -e 'CREATE INDEX t10_b ON t10 (b) ALGORITHM=COPY;' 1>/dev/null 2>/dev/null
   # sleep 1
-  ${MYSQL} ${MYSQL_ARGS} test -e 'DROP INDEX t10_c ON sbtest5 ALGORITHM=COPY;' 1>/dev/null 2>/dev/null
+  ${MYSQL} ${MYSQL_ARGS} test -e 'DROP INDEX t10_b ON t10 ALGORITHM=COPY;' 1>/dev/null 2>/dev/null
   # sleep 1
 done ) &
+jid2=$!
 
-for i in {1..30} ; do
-  rm -rf $topdir/backup
-  xtrabackup --lock-ddl --backup --target-dir=$topdir/backup
-  xtrabackup --prepare --use-memory=1G --target-dir=$topdir/backup
-done
+sleep 2
+
+xtrabackup --lock-ddl --backup --target-dir=$topdir/backup
+
+rm -rf ~/.tmp/bak
+cp -av $topdir/backup ~/.tmp/bak
 
 stop_server
 
-rm -rf $mysql_datadir
+xtrabackup --prepare --target-dir=$topdir/backup
 
+rm -rf $mysql_datadir
 xtrabackup --copy-back --target-dir=$topdir/backup
 
 start_server
 
-diff -u $topdir/sum <(mysql -e "SELECT SUM(k) FROM sbtest5" test)
+if mysql -e 'CHECK TABLE t10' test | grep -i 'Corrupt' ; then
+  die "t10 is corrupt"
+fi

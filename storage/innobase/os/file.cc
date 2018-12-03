@@ -134,7 +134,7 @@ dberr_t Compression::deserialize(bool dblwr_recover, byte *src, byte *dst,
 
   byte *ptr = src + FIL_PAGE_DATA;
 
-  ut_ad(header.m_version == 1);
+  // ut_ad(header.m_version == 1);
 
   if (header.m_version != 1 ||
       header.m_original_size < UNIV_PAGE_SIZE_MIN - (FIL_PAGE_DATA + 8) ||
