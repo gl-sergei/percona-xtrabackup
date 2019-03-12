@@ -52,6 +52,7 @@ Place, Suite 330, Boston, MA 02111-1307 USA
 #include <ut0mem.h>
 #include <ut0new.h>
 #include <algorithm>
+#include <chrono>
 #include <fstream>
 #include <functional>
 #include <queue>
@@ -67,8 +68,8 @@ Place, Suite 330, Boston, MA 02111-1307 USA
 #include "backup_mysql.h"
 #include "keyring_plugins.h"
 #include "xtrabackup.h"
-#include "xtrabackup_version.h"
 #include "xtrabackup_config.h"
+#include "xtrabackup_version.h"
 #ifdef HAVE_VERSION_CHECK
 #include <version_check_pl.h>
 #endif
@@ -90,9 +91,12 @@ extern TYPELIB innodb_flush_method_typelib;
 
 /* list of files to sync for --rsync mode */
 static std::set<std::string> rsync_list;
+static std::mutex rsync_mutex;
 
 /* skip these files on copy-back */
 static std::set<std::string> skip_copy_back_list;
+
+#define ROCKSDB_SUBDIR ".rocksdb"
 
 /* the purpose of file copied */
 enum file_purpose_t {
@@ -149,8 +153,6 @@ class datadir_queue {
 };
 
 struct datadir_thread_ctxt_t;
-
-typedef void (*data_thread_func_t)(datadir_thread_ctxt_t *);
 
 /************************************************************************
 Represents the context of the thread processing MySQL data directory. */
@@ -487,6 +489,7 @@ static bool datafile_rsync_backup(const char *filepath, bool save_to_list,
   }
 
   if (filename_matches(filepath, ext_list)) {
+    std::lock_guard<std::mutex> guard(rsync_mutex);
     fprintf(f, "%s\n", filepath);
     if (save_to_list) {
       rsync_list.insert(filepath);
@@ -567,7 +570,8 @@ bool backup_file_printf(const char *filename, const char *fmt, ...) {
   return (result);
 }
 
-static bool run_data_threads(const char *dir, data_thread_func_t func, uint n,
+template <typename F>
+static bool run_data_threads(const char *dir, F func, uint n,
                              const char *thread_description) {
   datadir_thread_ctxt_t *data_threads;
   uint i, count;
@@ -889,6 +893,63 @@ static bool copy_or_move_file(const char *src_file_path,
   return (ret);
 }
 
+static void backup_thread_func(datadir_thread_ctxt_t *ctx, bool prep_mode,
+                               FILE *rsync_tmpfile) {
+  bool ret = true;
+  datadir_entry_t entry;
+
+  if (my_thread_init()) {
+    ret = false;
+    goto cleanup;
+  }
+
+  while (ctx->queue->pop(entry)) {
+    char name[FN_REFLEN];
+    char path[FN_REFLEN];
+
+    if (!entry.db_name.empty()) {
+      snprintf(name, FN_REFLEN, "%s/%s", entry.db_name.c_str(),
+               entry.file_name.c_str());
+    } else {
+      snprintf(name, FN_REFLEN, "%s", entry.file_name.c_str());
+    }
+
+    fn_format(path, name, entry.datadir.c_str(), "",
+              MY_UNPACK_FILENAME | MY_SAFE_PATH);
+
+    if (!entry.is_empty_dir) {
+      if (opt_rsync) {
+        ret = datafile_rsync_backup(path, !prep_mode, rsync_tmpfile);
+      } else {
+        ret = datafile_copy_backup(path, ctx->n_thread);
+      }
+      if (!ret) {
+        msg("Failed to copy file %s\n", path);
+        ret = false;
+        goto cleanup;
+      }
+    } else if (!prep_mode) {
+      /* backup fake file into empty directory */
+      char opath[FN_REFLEN + 10];
+      snprintf(opath, sizeof(opath), "%s/db.opt", path);
+      if (!(ret = backup_file_printf(trim_dotslash(opath), "%s", ""))) {
+        msg("Failed to create file %s\n", opath);
+        ret = false;
+        goto cleanup;
+      }
+    }
+  }
+
+cleanup:
+  my_thread_end();
+
+  mutex_enter(ctx->count_mutex);
+  --(*ctx->count);
+  mutex_exit(ctx->count_mutex);
+
+  ctx->ret = ret;
+}
+
 bool backup_files(const char *from, bool prep_mode) {
   char rsync_tmpfile_name[FN_REFLEN];
   FILE *rsync_tmpfile = NULL;
@@ -911,46 +972,10 @@ bool backup_files(const char *from, bool prep_mode) {
   msg_ts("Starting %s non-InnoDB tables and files\n",
          prep_mode ? "prep copy of" : "to backup");
 
-  if (!xb_process_datadir(
-          from, "",
-          [=](const datadir_entry_t &entry, void *arg) mutable -> bool {
-            char name[FN_REFLEN];
-            char path[FN_REFLEN];
-
-            if (!entry.db_name.empty()) {
-              snprintf(name, FN_REFLEN, "%s/%s", entry.db_name.c_str(),
-                       entry.file_name.c_str());
-            } else {
-              snprintf(name, FN_REFLEN, "%s", entry.file_name.c_str());
-            }
-
-            fn_format(path, name, entry.datadir.c_str(), "",
-                      MY_UNPACK_FILENAME | MY_SAFE_PATH);
-
-            if (!entry.is_empty_dir) {
-              if (opt_rsync) {
-                ret = datafile_rsync_backup(path, !prep_mode, rsync_tmpfile);
-              } else {
-                ret = datafile_copy_backup(path, 1);
-              }
-              if (!ret) {
-                msg("Failed to copy file %s\n", path);
-                return false;
-              }
-            } else if (!prep_mode) {
-              /* backup fake file into empty directory */
-              char opath[FN_REFLEN + 10];
-              snprintf(opath, sizeof(opath), "%s/db.opt", path);
-              if (!(ret = backup_file_printf(trim_dotslash(opath), "%s", ""))) {
-                msg("Failed to create file %s\n", opath);
-                return false;
-              }
-            }
-            return true;
-          },
-          nullptr)) {
-    goto out;
-  }
+  run_data_threads(from,
+                   std::bind(backup_thread_func, std::placeholders::_1,
+                             prep_mode, rsync_tmpfile),
+                   xtrabackup_parallel, "backup");
 
   if (opt_rsync) {
     std::stringstream cmd;
@@ -1031,6 +1056,287 @@ out:
   return (ret);
 }
 
+class Myrocks_datadir {
+ private:
+  std::string rocksdb_datadir;
+  std::string rocksdb_wal_dir;
+
+  enum scan_type_t { SCAN_ALL, SCAN_WAL, SCAN_DATA };
+
+  void scan_dir(const std::string &dir, const char *dest_data_dir,
+                const char *dest_wal_dir, scan_type_t scan_type,
+                std::vector<datadir_entry_t> &result) const;
+
+ public:
+  Myrocks_datadir(const std::string &datadir,
+                  const std::string &wal_dir = std::string()) {
+    rocksdb_datadir = datadir;
+    rocksdb_wal_dir = wal_dir;
+  }
+  std::vector<datadir_entry_t> files(
+      const char *dest_data_dir = ROCKSDB_SUBDIR,
+      const char *dest_wal_dir = ROCKSDB_SUBDIR) const;
+  std::vector<datadir_entry_t> data_files(
+      const char *dest_datadir = ROCKSDB_SUBDIR) const;
+  std::vector<datadir_entry_t> wal_files(
+      const char *dest_wal_dir = ROCKSDB_SUBDIR) const;
+};
+
+void Myrocks_datadir::scan_dir(const std::string &dir,
+                               const char *dest_data_dir,
+                               const char *dest_wal_dir, scan_type_t scan_type,
+                               std::vector<datadir_entry_t> &result) const {
+  os_file_scan_directory(
+      dir.c_str(),
+      [&](const char *path, const char *name) mutable -> void {
+        if (strcmp(name, ".") == 0 || strcmp(name, "..") == 0) {
+          return;
+        }
+        char buf[FN_REFLEN];
+        fn_format(buf, name, path, "", MY_UNPACK_FILENAME | MY_SAFE_PATH);
+        if (!ends_with(name, ".log")) {
+          if (scan_type != SCAN_WAL) {
+            result.push_back(
+                datadir_entry_t("", buf, dest_data_dir, name, false));
+          }
+        } else {
+          if (scan_type != SCAN_DATA) {
+            result.push_back(
+                datadir_entry_t("", buf, dest_wal_dir, name, false));
+          }
+        }
+      },
+      false);
+}
+
+std::vector<datadir_entry_t> Myrocks_datadir::files(
+    const char *dest_data_dir, const char *dest_wal_dir) const {
+  std::vector<datadir_entry_t> result;
+
+  scan_dir(rocksdb_datadir, dest_data_dir, dest_wal_dir, SCAN_ALL, result);
+  if (!rocksdb_wal_dir.empty()) {
+    scan_dir(rocksdb_wal_dir, NULL, dest_wal_dir, SCAN_WAL, result);
+  }
+
+  return result;
+}
+
+std::vector<datadir_entry_t> Myrocks_datadir::data_files(
+    const char *dest_datadir) const {
+  std::vector<datadir_entry_t> result;
+
+  scan_dir(rocksdb_datadir, dest_datadir, NULL, SCAN_DATA, result);
+
+  return result;
+}
+
+std::vector<datadir_entry_t> Myrocks_datadir::wal_files(
+    const char *dest_wal_dir) const {
+  std::vector<datadir_entry_t> result;
+
+  scan_dir(rocksdb_datadir, NULL, dest_wal_dir, SCAN_WAL, result);
+  if (!rocksdb_wal_dir.empty()) {
+    scan_dir(rocksdb_wal_dir, NULL, dest_wal_dir, SCAN_WAL, result);
+  }
+
+  return result;
+}
+
+class Myrocks_checkpoint {
+ private:
+  std::string checkpoint_dir;
+  std::string rocksdb_datadir;
+  std::string rocksdb_wal_dir;
+
+  MYSQL *con;
+
+ public:
+
+  using files_t = std::vector<datadir_entry_t>;
+
+  Myrocks_checkpoint(MYSQL *con) : con(con) {}
+
+  /* disable file deletions and create checkpoint */
+  void create();
+
+  /* remove checkpoint */
+  void remove() const;
+
+  /* enable file deletions */
+  void enable_file_deletions() const;
+
+  /* get the list of live WAL and checkpoint files */
+  files_t files(const log_status_t &log_status, files_t &live_files) const;
+};
+
+void Myrocks_checkpoint::create() {
+  msg_ts("xtrabackup: Creating RocksDB checkpoint\n");
+
+  xb_mysql_query(con, "SET SESSION rocksdb_disable_file_deletions = TRUE",
+                 false);
+
+  constexpr auto checkpoint_basename = ".xtrabackup_rocksdb_checkpoint";
+  using namespace std::chrono;
+  std::stringstream dirname_s;
+  dirname_s << checkpoint_basename << "_"
+            << duration_cast<milliseconds>(
+                   system_clock::now().time_since_epoch())
+                   .count();
+  std::stringstream query;
+  query << "SET SESSION rocksdb_create_temporary_checkpoint = '"
+        << dirname_s.str() << "'";
+
+  xb_mysql_query(con, query.str().c_str(), false);
+
+  checkpoint_dir = dirname_s.str();
+  rocksdb_datadir = opt_rocksdb_datadir;
+  rocksdb_wal_dir = opt_rocksdb_wal_dir != nullptr ? opt_rocksdb_wal_dir : "";
+}
+
+void Myrocks_checkpoint::enable_file_deletions() const {
+  xb_mysql_query(con, "SET SESSION rocksdb_disable_file_deletions = FALSE",
+                 false);
+}
+
+void Myrocks_checkpoint::remove() const {
+  msg_ts("xtrabackup: Removing RocksDB checkpoint\n");
+
+  xb_mysql_query(con, "SET SESSION rocksdb_create_temporary_checkpoint = NULL",
+                 false);
+}
+
+Myrocks_checkpoint::files_t Myrocks_checkpoint::files(
+    const log_status_t &log_status, files_t &live_files) const {
+  std::string last_wal_file_name;
+  if (log_status.rocksdb_wal_files.size() > 0) {
+    last_wal_file_name =
+        log_status.rocksdb_wal_files.back().path_name.substr(1);
+  }
+
+  /* assign index to each live wal file */
+  std::map<std::string, int> missing_wal;
+  size_t idx = 0;
+  for (const auto &f : log_status.rocksdb_wal_files) {
+    missing_wal[f.path_name.substr(1)] = idx++;
+  }
+
+  files_t checkpoint_files = Myrocks_datadir(checkpoint_dir).files();
+
+  /* remove the last wal file from the checkpoint_files, we must copy live
+     version of it no matter what */
+  if (!last_wal_file_name.empty()) {
+    checkpoint_files.erase(
+        std::remove_if(checkpoint_files.begin(), checkpoint_files.end(),
+                       [last_wal_file_name](const datadir_entry_t &x) {
+                         return x.file_name == last_wal_file_name;
+                       }),
+        checkpoint_files.end());
+  }
+
+  /* remove wal files found in checkpoint from the list of live wal files */
+  for (auto &file : checkpoint_files) {
+    if (missing_wal.count(file.file_name) > 0) {
+      missing_wal.erase(file.file_name);
+    }
+  }
+
+  live_files.clear();
+
+  for (const auto &f : missing_wal) {
+    size_t idx = f.second;
+    ssize_t file_size = -1;
+    if (idx == log_status.rocksdb_wal_files.size() - 1) {
+      /* last file should be copied up to specific size */
+      file_size = log_status.rocksdb_wal_files[idx].file_size_bytes;
+    }
+    char path[FN_REFLEN];
+    fn_format(path, log_status.rocksdb_wal_files[idx].path_name.c_str() + 1,
+              rocksdb_wal_dir.empty() ? rocksdb_datadir.c_str()
+                                      : rocksdb_wal_dir.c_str(),
+              "", MY_UNPACK_FILENAME | MY_SAFE_PATH);
+    live_files.push_back(
+        datadir_entry_t("", path, ".rocksdb",
+                        log_status.rocksdb_wal_files[idx].path_name.c_str() + 1,
+                        false, file_size));
+  }
+
+  return checkpoint_files;
+}
+
+using const_datadir_iter_t = const std::vector<datadir_entry_t>::const_iterator;
+
+static void par_copy_rocksdb_files(const const_datadir_iter_t &start,
+                                   const const_datadir_iter_t &end,
+                                   size_t thread_n, ds_ctxt_t *ds,
+                                   bool *result) {
+  for (auto it = start; it != end; it++) {
+    if (ends_with(it->path.c_str(), ".qp") ||
+        ends_with(it->path.c_str(), ".xbcrypt")) {
+      continue;
+    }
+    if (!copy_file(ds, it->path.c_str(), it->rel_path.c_str(), thread_n,
+                   it->file_size)) {
+      *result = false;
+    }
+    if (!*result) {
+      break;
+    }
+  }
+}
+
+static void backup_rocksdb_files(const const_datadir_iter_t &start,
+                                 const const_datadir_iter_t &end,
+                                 size_t thread_n, bool *result) {
+  for (auto it = start; it != end; it++) {
+    if (!copy_file(ds_uncompressed_data, it->path.c_str(), it->rel_path.c_str(),
+                   thread_n, it->file_size)) {
+      *result = false;
+    }
+    if (!*result) {
+      break;
+    }
+  }
+}
+
+static bool backup_rocksdb(const Myrocks_checkpoint &checkpoint,
+                           const log_status_t &log_status) {
+  bool result = true;
+
+  using std::placeholders::_1;
+  using std::placeholders::_2;
+  using std::placeholders::_3;
+
+  std::function<void(const const_datadir_iter_t &, const const_datadir_iter_t &,
+                     size_t)>
+      copy = std::bind(&backup_rocksdb_files, _1, _2, _3, &result);
+
+  Myrocks_checkpoint::files_t live_wal_files;
+  Myrocks_checkpoint::files_t checkpoint_files =
+      checkpoint.files(log_status, live_wal_files);
+
+  /* copy live wal files first */
+
+  par_for(PFS_NOT_INSTRUMENTED, live_wal_files, xtrabackup_parallel, copy);
+
+  if (!result) {
+    msg("xtrabackup: error: failed to backup rocksdb datadir.\n");
+  }
+
+  /* enable file deletions */
+
+  checkpoint.enable_file_deletions();
+
+  /* then copy the rest of checkpoint */
+
+  par_for(PFS_NOT_INSTRUMENTED, checkpoint_files, xtrabackup_parallel, copy);
+
+  if (!result) {
+    msg("xtrabackup: error: failed to backup rocksdb datadir.\n");
+  }
+
+  return result;
+}
+
 /* Backup non-InnoDB data.
 @param  backup_lsn   backup LSN
 @return true if success. */
@@ -1066,14 +1372,27 @@ bool backup_start(lsn_t &backup_lsn) {
     }
   }
 
+  Myrocks_checkpoint checkpoint(mysql_connection);
+
+  if (have_rocksdb) {
+    checkpoint.create();
+  }
+
   msg_ts("Executing FLUSH NO_WRITE_TO_BINLOG BINARY LOGS\n");
   xb_mysql_query(mysql_connection, "FLUSH NO_WRITE_TO_BINLOG BINARY LOGS",
                  false);
 
-  log_status_get(mysql_connection);
+  const log_status_t &log_status = log_status_get(mysql_connection);
 
   if (!write_current_binlog_file(mysql_connection)) {
     return (false);
+  }
+
+  if (have_rocksdb) {
+    if (!backup_rocksdb(checkpoint, log_status)) {
+      return (false);
+    }
+    checkpoint.remove();
   }
 
   if (opt_slave_info) {
@@ -1146,24 +1465,16 @@ bool backup_finish() {
 
 bool copy_if_ext_matches(const char **ext_list, const datadir_entry_t &entry,
                          void *arg) {
-  char name[FN_REFLEN];
-
-  if (!entry.db_name.empty()) {
-    snprintf(name, FN_REFLEN, "%s/%s", entry.db_name.c_str(),
-             entry.file_name.c_str());
-  } else {
-    snprintf(name, FN_REFLEN, "%s", entry.file_name.c_str());
-  }
-
-  if (entry.is_empty_dir || !filename_matches(name, ext_list)) {
+  if (entry.is_empty_dir ||
+      !filename_matches(entry.rel_path.c_str(), ext_list)) {
     return true;
   }
 
-  if (file_exists(name)) {
-    unlink(name);
+  if (file_exists(entry.rel_path.c_str())) {
+    unlink(entry.rel_path.c_str());
   }
 
-  if (!copy_file(ds_data, entry.path.c_str(), name, 1)) {
+  if (!copy_file(ds_data, entry.path.c_str(), entry.rel_path.c_str(), 1)) {
     msg("Failed to copy file %s\n", entry.path.c_str());
     return false;
   }
@@ -1270,7 +1581,7 @@ bool binlog_file_location::find_binlog(const std::string &dir,
 
 bool copy_incremental_over_full() {
   const char *ext_list[] = {"MYD", "MYI", "MAD", "MAI", "MRG", "ARM",
-                            "ARZ", "CSM", "CSV", "opt", "sdi", NULL};
+                            "ARZ", "CSM", "CSV", "opt", "sdi", nullptr};
   const char *sup_files[] = {"xtrabackup_binlog_info",
                              "xtrabackup_galera_info",
                              "xtrabackup_slave_info",
@@ -1278,7 +1589,7 @@ bool copy_incremental_over_full() {
                              "xtrabackup_keys",
                              "xtrabackup_tablespaces",
                              "ib_lru_dump",
-                             NULL};
+                             nullptr};
   bool ret = true;
   char path[FN_REFLEN];
   int i;
@@ -1333,6 +1644,8 @@ bool copy_incremental_over_full() {
       }
     }
 
+    /* copy binary log */
+
     binlog_file_location binlog;
     char fullpath[FN_REFLEN];
     bool err;
@@ -1366,6 +1679,43 @@ bool copy_incremental_over_full() {
     }
   }
 
+  /* copy rocksdb datadir */
+  snprintf(path, sizeof(path), "%s/%s", xtrabackup_incremental_dir,
+           ROCKSDB_SUBDIR);
+  if (directory_exists(path, false)) {
+    Myrocks_datadir rocksdb(path);
+
+    if (directory_exists(ROCKSDB_SUBDIR, false)) {
+      Myrocks_datadir old_rocksdb(ROCKSDB_SUBDIR);
+
+      /* remove .rocksdb from the full backup first */
+      for (const auto &file : old_rocksdb.files()) {
+        if (unlink(file.path.c_str())) {
+          msg("xtrabackup: error: unable to unlink file '%s'\n",
+              file.path.c_str());
+          ret = false;
+          goto cleanup;
+        }
+      }
+      if (rmdir(ROCKSDB_SUBDIR)) {
+        msg("xtrabackup: error: unable to unlink directory '" ROCKSDB_SUBDIR
+            "'\n");
+        ret = false;
+        goto cleanup;
+      }
+    }
+
+    using std::placeholders::_1;
+    using std::placeholders::_2;
+    using std::placeholders::_3;
+    bool result = true;
+    std::function<void(const const_datadir_iter_t &,
+                       const const_datadir_iter_t &, size_t)>
+        copy = std::bind(&par_copy_rocksdb_files, _1, _2, _3, ds_data, &result);
+
+    par_for(PFS_NOT_INSTRUMENTED, rocksdb.files(), xtrabackup_parallel, copy);
+  }
+
 cleanup:
   if (ds_data != NULL) {
     ds_destroy(ds_data);
@@ -1382,17 +1732,13 @@ match given list of file extensions.
 @return true if success */
 bool rm_for_cleanup_full_backup(const char **ext_list,
                                 const datadir_entry_t &entry, void *arg) {
-  char name[FN_REFLEN];
   char path[FN_REFLEN];
 
-  if (!entry.db_name.empty()) {
-    snprintf(name, FN_REFLEN, "%s/%s", entry.db_name.c_str(),
-             entry.file_name.c_str());
-  } else {
+  if (entry.db_name.empty()) {
     return (true);
   }
 
-  fn_format(path, name, entry.datadir.c_str(), "",
+  fn_format(path, entry.rel_path.c_str(), entry.datadir.c_str(), "",
             MY_UNPACK_FILENAME | MY_SAFE_PATH);
 
   if (entry.is_empty_dir) {
@@ -1478,14 +1824,19 @@ bool should_skip_file_on_copy_back(const char *filepath) {
     }
   }
 
-  if (skip_copy_back_list.count(filepath) > 0) {
+  /* skip rocksdb files (we'll copy them to later to the rocksdb_datadir) */
+  if (strstr(filepath, FN_DIRSEP ROCKSDB_SUBDIR FN_DIRSEP) != nullptr) {
+    return true;
+  }
+
+  if (skip_copy_back_list.count(filename) > 0) {
     return true;
   }
 
   return false;
 }
 
-void copy_back_thread_func(datadir_thread_ctxt_t *ctx) {
+static void copy_back_thread_func(datadir_thread_ctxt_t *ctx) {
   bool ret = true;
   datadir_entry_t entry;
 
@@ -1510,11 +1861,11 @@ void copy_back_thread_func(datadir_thread_ctxt_t *ctx) {
         goto cleanup;
       }
 
-      msg_ts("[%02u] ...done.\n", 1);
+      msg_ts("[%02u] ...done.\n", ctx->n_thread);
       continue;
     }
 
-    if (should_skip_file_on_copy_back(entry.file_name.c_str())) {
+    if (should_skip_file_on_copy_back(entry.path.c_str())) {
       continue;
     }
 
@@ -1526,16 +1877,7 @@ void copy_back_thread_func(datadir_thread_ctxt_t *ctx) {
       file_purpose = FILE_PURPOSE_OTHER;
     }
 
-    char rel_path[FN_REFLEN];
-
-    if (entry.db_name.empty()) {
-      snprintf(rel_path, FN_REFLEN, "%s", entry.file_name.c_str());
-    } else {
-      snprintf(rel_path, FN_REFLEN, "%s/%s", entry.db_name.c_str(),
-               entry.file_name.c_str());
-    }
-
-    std::string dst_path = rel_path;
+    std::string dst_path = entry.rel_path;
 
     if (file_purpose == FILE_PURPOSE_DATAFILE) {
       std::string tablespace_name = entry.path;
@@ -1610,7 +1952,6 @@ static bool load_backup_my_cnf() {
 
 bool copy_back(int argc, char **argv) {
   char *innobase_data_file_path_copy;
-  ulint i;
   bool ret = true, err;
   char *dst_dir;
   binlog_file_location binlog;
@@ -1731,7 +2072,7 @@ bool copy_back(int argc, char **argv) {
 
     ds_data = ds_create(dst_dir, DS_TYPE_LOCAL);
 
-    for (i = 1; i <= srv_undo_tablespaces; i++) {
+    for (ulong i = 1; i <= srv_undo_tablespaces; i++) {
       char filename[20];
       sprintf(filename, "undo_%03lu", i);
       if (Fil_path::get_file_type(filename) != OS_FILE_TYPE_FILE) continue;
@@ -1753,9 +2094,9 @@ bool copy_back(int argc, char **argv) {
 
   ds_data = ds_create(dst_dir, DS_TYPE_LOCAL);
 
-  for (i = 0; i < (ulong)innobase_log_files_in_group; i++) {
-    char filename[20];
-    sprintf(filename, "ib_logfile%lu", i);
+  for (long i = 0; i < innobase_log_files_in_group; i++) {
+    char filename[30];
+    sprintf(filename, "ib_logfile%ld", i);
 
     if (!file_exists(filename)) {
       continue;
@@ -1816,9 +2157,7 @@ bool copy_back(int argc, char **argv) {
     }
   }
 
-  if (err) {
-    goto cleanup;
-  }
+  if (err || !ret) goto cleanup;
 
   ut_a(xtrabackup_parallel >= 0);
   if (xtrabackup_parallel > 1) {
@@ -1826,12 +2165,9 @@ bool copy_back(int argc, char **argv) {
         xtrabackup_parallel);
   }
 
-  ret = run_data_threads(".", copy_back_thread_func,
-                         xtrabackup_parallel ? xtrabackup_parallel : 1,
+  ret = run_data_threads(".", copy_back_thread_func, xtrabackup_parallel,
                          "copy-back");
-  if (!ret) {
-    goto cleanup;
-  }
+  if (!ret) goto cleanup;
 
   /* copy buufer pool dump */
   if (innobase_buffer_pool_filename) {
@@ -1844,8 +2180,78 @@ bool copy_back(int argc, char **argv) {
 
     /* could be already copied with other files from data directory */
     if (file_exists(src_name) && !file_exists(innobase_buffer_pool_filename)) {
-      copy_or_move_file(src_name, innobase_buffer_pool_filename,
-                        mysql_data_home, 0, FILE_PURPOSE_OTHER);
+      ret = copy_or_move_file(src_name, innobase_buffer_pool_filename,
+                              mysql_data_home, 0, FILE_PURPOSE_OTHER);
+      if (!ret) goto cleanup;
+    }
+  }
+
+  /* copy rocksdb datadir */
+  if (directory_exists(ROCKSDB_SUBDIR, false)) {
+    Myrocks_datadir rocksdb(ROCKSDB_SUBDIR);
+
+    std::string rocksdb_datadir =
+        (opt_rocksdb_datadir != nullptr && *opt_rocksdb_datadir != 0)
+            ? opt_rocksdb_datadir
+            : std::string(mysql_data_home) + FN_DIRSEP ROCKSDB_SUBDIR;
+
+    std::string rocksdb_wal_dir =
+        (opt_rocksdb_wal_dir != nullptr && *opt_rocksdb_wal_dir != 0)
+            ? opt_rocksdb_wal_dir
+            : "";
+
+    if (!directory_exists(rocksdb_datadir.c_str(), true)) {
+      return (false);
+    }
+
+    ds_data = ds_create(rocksdb_datadir.c_str(), DS_TYPE_LOCAL);
+
+    using std::placeholders::_1;
+    using std::placeholders::_2;
+    using std::placeholders::_3;
+    std::function<void(const const_datadir_iter_t &,
+                       const const_datadir_iter_t &, size_t)>
+        copy = std::bind(&par_copy_rocksdb_files, _1, _2, _3, ds_data, &ret);
+
+    if (rocksdb_wal_dir.empty()) {
+      par_for(PFS_NOT_INSTRUMENTED, rocksdb.files(""), xtrabackup_parallel,
+              copy);
+    } else {
+      par_for(PFS_NOT_INSTRUMENTED, rocksdb.data_files(""), xtrabackup_parallel,
+              copy);
+    }
+
+    if (!ret) goto cleanup;
+
+    ds_destroy(ds_data);
+    ds_data = nullptr;
+
+    if (!rocksdb_wal_dir.empty()) {
+      if (!Fil_path::is_absolute_path(rocksdb_wal_dir)) {
+        rocksdb_wal_dir =
+            std::string(mysql_data_home) + FN_DIRSEP + rocksdb_wal_dir;
+      }
+
+      if (!directory_exists(rocksdb_wal_dir.c_str(), true)) {
+        return (false);
+      }
+
+      ds_data = ds_create(rocksdb_wal_dir.c_str(), DS_TYPE_LOCAL);
+
+      using std::placeholders::_1;
+      using std::placeholders::_2;
+      using std::placeholders::_3;
+      std::function<void(const const_datadir_iter_t &,
+                         const const_datadir_iter_t &, size_t)>
+          copy = std::bind(&par_copy_rocksdb_files, _1, _2, _3, ds_data, &ret);
+
+      par_for(PFS_NOT_INSTRUMENTED, rocksdb.wal_files(""), xtrabackup_parallel,
+              copy);
+
+      if (!ret) goto cleanup;
+
+      ds_destroy(ds_data);
+      ds_data = nullptr;
     }
   }
 
@@ -1966,8 +2372,7 @@ bool decrypt_decompress() {
   ut_a(xtrabackup_parallel >= 0);
 
   ret = run_data_threads(".", decrypt_decompress_thread_func,
-                         xtrabackup_parallel ? xtrabackup_parallel : 1,
-                         "decrypt and decompress");
+                         xtrabackup_parallel, "decrypt and decompress");
 
   if (ds_data != NULL) {
     ds_destroy(ds_data);

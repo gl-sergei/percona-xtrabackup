@@ -3,6 +3,7 @@
 
 #include <mysql.h>
 #include <string>
+#include <vector>
 
 #include "xtrabackup.h"
 
@@ -16,6 +17,30 @@ enum mysql_flavor_t {
 extern mysql_flavor_t server_flavor;
 extern unsigned long mysql_server_version;
 
+struct replication_channel_status_t {
+  std::string channel_name;
+  std::string relay_log_file;
+  uint64_t relay_log_position;
+  std::string relay_master_log_file;
+  uint64_t exec_master_log_position;
+};
+
+struct rocksdb_wal_t {
+  size_t log_number;
+  std::string path_name;
+  size_t file_size_bytes;
+};
+
+struct log_status_t {
+  std::string filename;
+  uint64_t position;
+  std::string gtid_executed;
+  lsn_t lsn;
+  lsn_t lsn_checkpoint;
+  std::vector<replication_channel_status_t> channels;
+  std::vector<rocksdb_wal_t> rocksdb_wal_files;
+};
+
 /* server capabilities */
 extern bool have_changed_page_bitmaps;
 extern bool have_backup_locks;
@@ -24,6 +49,7 @@ extern bool have_galera_enabled;
 extern bool have_flush_engine_logs;
 extern bool have_multi_threaded_slave;
 extern bool have_gtid_slave;
+extern bool have_rocksdb;
 
 /* History on server */
 extern time_t history_start_time;
@@ -66,7 +92,7 @@ bool write_current_binlog_file(MYSQL *connection);
 
 /** Read binaty log position and InnoDB LSN from p_s.log_status.
 @param[in]   conn         mysql connection handle */
-void log_status_get(MYSQL *conn);
+const log_status_t &log_status_get(MYSQL *conn);
 
 /*********************************************************************/ /**
  Retrieves MySQL binlog position and
