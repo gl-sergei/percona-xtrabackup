@@ -118,11 +118,11 @@ size_t Http_response::header_appender(char *ptr, size_t size, size_t nmemb,
 }
 
 void Event_handler::mcode_or_die(CURLMcode code) {
-  if (code == CURLM_OK) {
+  if (code == CURLM_OK || code == CURLM_CALL_MULTI_PERFORM) {
     return;
   }
   if (code != CURLM_BAD_SOCKET) {
-    exit(1);
+    assert(0);
   }
 }
 
@@ -208,19 +208,22 @@ int Event_handler::multi_socket_callback(CURL *curl_easy, curl_socket_t sockfd,
 }
 
 void Event_handler::check_multi_info() {
-  int msgs_left;
+  int msgs_left{0};
   CURLMsg *msg;
 
   TRACE("REMAINING: %d\n", running_handles);
   while ((msg = curl_multi_info_read(curl_multi, &msgs_left)) != nullptr) {
     Http_connection *conn;
-    char *url;
     if (msg->msg == CURLMSG_DONE) {
-      curl_easy_getinfo(msg->easy_handle, CURLINFO_PRIVATE, &conn);
-      curl_easy_getinfo(msg->easy_handle, CURLINFO_EFFECTIVE_URL, &url);
-      TRACE("DONE: %s => (%d) %s\n", url, msg->data.result, conn->error());
-      curl_multi_remove_handle(curl_multi, msg->easy_handle);
+      char *url = nullptr;
+      auto rc = curl_easy_getinfo(msg->easy_handle, CURLINFO_PRIVATE, &conn);
+      assert(rc == CURLE_OK);
+      rc = curl_easy_getinfo(msg->easy_handle, CURLINFO_EFFECTIVE_URL, &url);
+      if (rc == CURLE_OK) {
+        TRACE("DONE: %s => (%d) %s\n", url, msg->data.result, conn->error());
+      }
       conn->finalize(msg->data.result);
+      curl_multi_remove_handle(curl_multi, msg->easy_handle);
       delete conn;
       n_queued--;
     }
@@ -269,8 +272,18 @@ void Event_handler::ev_timer_callback(EV_P_ struct ev_timer *timer,
   h->check_multi_info();
 }
 
+void Event_handler::ev_kickoff_callback(EV_P_ struct ev_timer *timer,
+                                        int events) {
+  Event_handler *h = reinterpret_cast<Event_handler *>(timer->data);
+
+  TRACE("%s kickoff %p events %d\n", __PRETTY_FUNCTION__, timer, events);
+
+  h->loop_running = true;
+}
+
 void Event_handler::ev_queue_callback(EV_P_ ev_async *ev, int revents) {
   Event_handler *h = reinterpret_cast<Event_handler *>(ev->data);
+  TRACE("%s async queue callback events %d\n", __PRETTY_FUNCTION__, revents);
   h->process_queue();
 }
 
@@ -300,6 +313,11 @@ bool Event_handler::init() {
 
   ev_timer_init(&timer_event, Event_handler::ev_timer_callback, 0., 0.);
   timer_event.data = this;
+  ev_timer_start(loop, &timer_event);
+
+  ev_timer_init(&kickoff_event, Event_handler::ev_kickoff_callback, 0.1, 0.);
+  kickoff_event.data = this;
+  ev_timer_start(loop, &kickoff_event);
 
   ev_async_init(&queue_event, ev_queue_callback);
   queue_event.data = this;
@@ -324,7 +342,11 @@ Event_handler::~Event_handler() {
 void Event_handler::main_loop() { ev_loop(loop, 0); }
 
 std::thread Event_handler::run() {
-  return std::thread([this]() { main_loop(); });
+  auto t = std::thread([this]() { main_loop(); });
+  while (!loop_running) {
+    std::this_thread::sleep_for(std::chrono::milliseconds(50));
+  }
+  return t;
 }
 
 void Event_handler::add_connection(Http_connection *conn, bool nowait) {
@@ -338,7 +360,7 @@ void Event_handler::add_connection(Http_connection *conn, bool nowait) {
     } else {
       queue_mutex.unlock();
       ev_async_send(loop, &queue_event);
-      std::this_thread::sleep_for(std::chrono::milliseconds(10));
+      std::this_thread::sleep_for(std::chrono::milliseconds(50));
     }
   }
 }
@@ -355,7 +377,7 @@ void Event_handler::stop() {
       queue_mutex.unlock();
       ev_async_send(loop, &queue_event);
     }
-    std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    std::this_thread::sleep_for(std::chrono::milliseconds(50));
   }
 }
 

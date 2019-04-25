@@ -267,12 +267,14 @@ class Event_handler {
   struct ev_loop *loop{nullptr};
   struct ev_timer timer_event;
   struct ev_async queue_event;
+  struct ev_timer kickoff_event;
   CURLM *curl_multi{nullptr};
   int running_handles{0};
   std::mutex queue_mutex;
   size_t n_queued{0};
   size_t max_requests;
   bool final{false};
+  bool loop_running{false};
 
   struct Curl_socket_info {
     curl_socket_t sockfd;
@@ -305,6 +307,8 @@ class Event_handler {
 
   static void ev_timer_callback(EV_P_ struct ev_timer *timer, int events);
 
+  static void ev_kickoff_callback(EV_P_ struct ev_timer *timer, int events);
+
   static void ev_queue_callback(EV_P_ ev_async *ev, int revents);
 
   void main_loop();
@@ -323,8 +327,6 @@ class Event_handler {
   void add_connection(Http_connection *conn, bool nowait = false);
 
   void stop();
-
-  bool running() const { return running_handles > 0; };
 };
 
 bool retriable_curl_error(CURLcode rc);
