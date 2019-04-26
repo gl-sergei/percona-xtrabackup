@@ -818,6 +818,10 @@ recognized for compatibility";;
         esac
 done
 
+if [ -f /usr/bin/apt-get ]; then
+    sudo apt-get -y upgrade
+fi
+
 set_vars
 
 if [ -n "$tname" ]
