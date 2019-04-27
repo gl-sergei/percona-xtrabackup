@@ -1660,6 +1660,9 @@ const log_status_t &log_status_get(MYSQL *conn) {
     const char *replication = row[2];
     const char *storage_engines = row[3];
 
+    fprintf(stderr, "local = %s\n", local);
+    fprintf(stderr, "replication = %s\n", replication);
+    fprintf(stderr, "storage_engines = %s\n", storage_engines);
     log_status_local_parse(local, log_status);
     log_status_storage_engines_parse(storage_engines, log_status);
     log_status_replication_parse(replication, log_status);

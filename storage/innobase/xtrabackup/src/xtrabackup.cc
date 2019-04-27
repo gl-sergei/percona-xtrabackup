@@ -2268,7 +2268,8 @@ static bool innodb_init(bool init_dd, bool for_apply_log) {
   directories.append(MySQL_datadir_path.path());
 
   lsn_t to_lsn = ULLONG_MAX;
-  if (for_apply_log && metadata_type == METADATA_FULL_BACKUP) {
+  if (for_apply_log && (metadata_type == METADATA_FULL_BACKUP ||
+                        xtrabackup_incremental_dir != nullptr)) {
     to_lsn = (xtrabackup_incremental_dir == nullptr) ? metadata_last_lsn
                                                      : incremental_last_lsn;
   }

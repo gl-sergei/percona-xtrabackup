@@ -15,11 +15,15 @@ mysql -e "CREATE TABLE rocks_t (a INT PRIMARY KEY AUTO_INCREMENT, b INT, KEY(b),
 for i in {1..4} ; do
     while true ; do
         echo "START TRANSACTION;"
+        echo "SELECT * FROM inno_t LIMIT 1;"
+        echo "SELECT * FROM rocks_t LIMIT 1;"
         echo "SET @a = FLOOR(RAND() * 1000000), @b = FLOOR(RAND() * 1000000), @c = UUID();"
         echo "REPLACE INTO inno_t (a, b, c) VALUES (@a, @b, @c);"
         echo "REPLACE INTO rocks_t (a, b, c) VALUES (@a, @b, @c);"
         echo "COMMIT;"
         echo "START TRANSACTION;"
+        echo "SELECT * FROM inno_t LIMIT 1;"
+        echo "SELECT * FROM rocks_t LIMIT 1;"
         echo "SET @a = FLOOR(RAND() * 1000000), @b = FLOOR(RAND() * 1000000), @c = UUID();"
         echo "REPLACE INTO rocks_t (a, b, c) VALUES (@a, @b, @c);"
         echo "REPLACE INTO inno_t (a, b, c) VALUES (@a, @b, @c);"
@@ -28,19 +32,23 @@ for i in {1..4} ; do
 done
 
 while true ; do
-    echo "START TRANSACTION WITH CONSISTENT SNAPSHOT;"
+    echo "START TRANSACTION;"
+    echo "SELECT * FROM inno_t LIMIT 1;"
+    echo "SELECT * FROM rocks_t LIMIT 1;"
     echo "SELECT a INTO @a FROM inno_t LIMIT 100,1;"
     echo "DELETE FROM inno_t WHERE a = @a;"
     echo "DELETE FROM rocks_t WHERE a = @a;"
     echo "COMMIT;"
-    echo "START TRANSACTION WITH CONSISTENT SNAPSHOT;"
+    echo "START TRANSACTION;"
+    echo "SELECT * FROM inno_t LIMIT 1;"
+    echo "SELECT * FROM rocks_t LIMIT 1;"
     echo "SELECT a INTO @a FROM rocks_t LIMIT 100,1;"
     echo "DELETE FROM rocks_t WHERE a = @a;"
     echo "DELETE FROM inno_t WHERE a = @a;"
     echo "COMMIT;"
 done | mysql test &
 
-# make some backups
+# backup
 xtrabackup --parallel=4 --backup --target-dir=$topdir/backup
 xtrabackup --parallel=4 --backup --target-dir=$topdir/inc1 \
            --incremental-basedir=$topdir/backup
@@ -49,7 +57,11 @@ xtrabackup --parallel=4 --backup --target-dir=$topdir/inc2 \
 xtrabackup --parallel=4 --backup --target-dir=$topdir/inc3 \
            --incremental-basedir=$topdir/inc2
 
-# prepare the backups
+xtrabackup --parallel=4 --backup --target-dir=$topdir/backup22
+
+stop_server
+
+# prepare
 xtrabackup --parallel=4 --prepare --apply-log-only --target-dir=$topdir/backup
 xtrabackup --parallel=4 --prepare --apply-log-only --target-dir=$topdir/backup \
            --incremental-dir=$topdir/inc1
@@ -59,16 +71,18 @@ xtrabackup --parallel=4 --prepare --apply-log-only --target-dir=$topdir/backup \
            --incremental-dir=$topdir/inc3
 xtrabackup --prepare --target-dir=$topdir/backup
 
-# clenup and restore
-stop_server
+# # clenup and restore
 
 rm -rf $mysql_datadir
 
-xtrabackup --move-back --parallel=4 --target-dir=$topdir/backup
+xtrabackup --copy-back --parallel=4 --target-dir=$topdir/backup
 
 start_server
 
 # do integrity checks
+
+mysql -e 'SELECT * FROM inno_t WHERE a NOT IN (SELECT a FROM rocks_t)' test
+mysql -e 'SELECT * FROM rocks_t WHERE a NOT IN (SELECT a FROM inno_t)' test
 
 checksum_inno_t=$(checksum_table_columns test inno_t a b)
 vlog "inno_t checksum: $checksum_inno_t"

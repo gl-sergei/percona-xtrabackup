@@ -665,8 +665,13 @@ bool copy_file(ds_ctxt_t *datasink, const char *src_file_path,
   }
 
   action = xb_get_copy_action();
-  msg_ts("[%02u] %s %s to %s\n", thread_n, action, src_file_path,
-         dstfile->path);
+  if (pos >= 0) {
+    msg_ts("[%02u] %s %s to %s up to position %zd\n", thread_n, action,
+           src_file_path, dstfile->path, pos);
+  } else {
+    msg_ts("[%02u] %s %s to %s\n", thread_n, action, src_file_path,
+           dstfile->path);
+  }
 
   /* The main copy loop */
   while ((res = datafile_read(&cursor)) == XB_FIL_CUR_SUCCESS) {
@@ -1057,6 +1062,24 @@ out:
 }
 
 class Myrocks_datadir {
+ public:
+  using file_list = std::vector<datadir_entry_t>;
+
+  using const_iterator = file_list::const_iterator;
+
+  Myrocks_datadir(const std::string &datadir,
+                  const std::string &wal_dir = std::string()) {
+    rocksdb_datadir = datadir;
+    rocksdb_wal_dir = wal_dir;
+  }
+
+  file_list files(const char *dest_data_dir = ROCKSDB_SUBDIR,
+                  const char *dest_wal_dir = ROCKSDB_SUBDIR) const;
+
+  file_list data_files(const char *dest_datadir = ROCKSDB_SUBDIR) const;
+
+  file_list wal_files(const char *dest_wal_dir = ROCKSDB_SUBDIR) const;
+
  private:
   std::string rocksdb_datadir;
   std::string rocksdb_wal_dir;
@@ -1065,27 +1088,13 @@ class Myrocks_datadir {
 
   void scan_dir(const std::string &dir, const char *dest_data_dir,
                 const char *dest_wal_dir, scan_type_t scan_type,
-                std::vector<datadir_entry_t> &result) const;
-
- public:
-  Myrocks_datadir(const std::string &datadir,
-                  const std::string &wal_dir = std::string()) {
-    rocksdb_datadir = datadir;
-    rocksdb_wal_dir = wal_dir;
-  }
-  std::vector<datadir_entry_t> files(
-      const char *dest_data_dir = ROCKSDB_SUBDIR,
-      const char *dest_wal_dir = ROCKSDB_SUBDIR) const;
-  std::vector<datadir_entry_t> data_files(
-      const char *dest_datadir = ROCKSDB_SUBDIR) const;
-  std::vector<datadir_entry_t> wal_files(
-      const char *dest_wal_dir = ROCKSDB_SUBDIR) const;
+                file_list &result) const;
 };
 
 void Myrocks_datadir::scan_dir(const std::string &dir,
                                const char *dest_data_dir,
                                const char *dest_wal_dir, scan_type_t scan_type,
-                               std::vector<datadir_entry_t> &result) const {
+                               file_list &result) const {
   os_file_scan_directory(
       dir.c_str(),
       [&](const char *path, const char *name) mutable -> void {
@@ -1109,9 +1118,9 @@ void Myrocks_datadir::scan_dir(const std::string &dir,
       false);
 }
 
-std::vector<datadir_entry_t> Myrocks_datadir::files(
+Myrocks_datadir::file_list Myrocks_datadir::files(
     const char *dest_data_dir, const char *dest_wal_dir) const {
-  std::vector<datadir_entry_t> result;
+  file_list result;
 
   scan_dir(rocksdb_datadir, dest_data_dir, dest_wal_dir, SCAN_ALL, result);
   if (!rocksdb_wal_dir.empty()) {
@@ -1121,18 +1130,18 @@ std::vector<datadir_entry_t> Myrocks_datadir::files(
   return result;
 }
 
-std::vector<datadir_entry_t> Myrocks_datadir::data_files(
+Myrocks_datadir::file_list Myrocks_datadir::data_files(
     const char *dest_datadir) const {
-  std::vector<datadir_entry_t> result;
+  file_list result;
 
   scan_dir(rocksdb_datadir, dest_datadir, NULL, SCAN_DATA, result);
 
   return result;
 }
 
-std::vector<datadir_entry_t> Myrocks_datadir::wal_files(
+Myrocks_datadir::file_list Myrocks_datadir::wal_files(
     const char *dest_wal_dir) const {
-  std::vector<datadir_entry_t> result;
+  file_list result;
 
   scan_dir(rocksdb_datadir, NULL, dest_wal_dir, SCAN_WAL, result);
   if (!rocksdb_wal_dir.empty()) {
@@ -1151,8 +1160,7 @@ class Myrocks_checkpoint {
   MYSQL *con;
 
  public:
-
-  using files_t = std::vector<datadir_entry_t>;
+  using file_list = Myrocks_datadir::file_list;
 
   Myrocks_checkpoint(MYSQL *con) : con(con) {}
 
@@ -1166,7 +1174,7 @@ class Myrocks_checkpoint {
   void enable_file_deletions() const;
 
   /* get the list of live WAL and checkpoint files */
-  files_t files(const log_status_t &log_status, files_t &live_files) const;
+  file_list files(const log_status_t &log_status, file_list &live_files) const;
 };
 
 void Myrocks_checkpoint::create() {
@@ -1205,68 +1213,43 @@ void Myrocks_checkpoint::remove() const {
                  false);
 }
 
-Myrocks_checkpoint::files_t Myrocks_checkpoint::files(
-    const log_status_t &log_status, files_t &live_files) const {
+Myrocks_checkpoint::file_list Myrocks_checkpoint::files(
+    const log_status_t &log_status, file_list &live_files) const {
   std::string last_wal_file_name;
   if (log_status.rocksdb_wal_files.size() > 0) {
     last_wal_file_name =
         log_status.rocksdb_wal_files.back().path_name.substr(1);
   }
 
-  /* assign index to each live wal file */
-  std::map<std::string, int> missing_wal;
-  size_t idx = 0;
-  for (const auto &f : log_status.rocksdb_wal_files) {
-    missing_wal[f.path_name.substr(1)] = idx++;
-  }
-
-  files_t checkpoint_files = Myrocks_datadir(checkpoint_dir).files();
-
-  /* remove the last wal file from the checkpoint_files, we must copy live
-     version of it no matter what */
-  if (!last_wal_file_name.empty()) {
-    checkpoint_files.erase(
-        std::remove_if(checkpoint_files.begin(), checkpoint_files.end(),
-                       [last_wal_file_name](const datadir_entry_t &x) {
-                         return x.file_name == last_wal_file_name;
-                       }),
-        checkpoint_files.end());
-  }
-
-  /* remove wal files found in checkpoint from the list of live wal files */
-  for (auto &file : checkpoint_files) {
-    if (missing_wal.count(file.file_name) > 0) {
-      missing_wal.erase(file.file_name);
-    }
-  }
-
   live_files.clear();
 
-  for (const auto &f : missing_wal) {
-    size_t idx = f.second;
-    ssize_t file_size = -1;
-    if (idx == log_status.rocksdb_wal_files.size() - 1) {
-      /* last file should be copied up to specific size */
-      file_size = log_status.rocksdb_wal_files[idx].file_size_bytes;
-    }
+  std::set<std::string> live_wal_set;
+  for (const auto &f : log_status.rocksdb_wal_files) {
+    live_wal_set.insert(f.path_name.substr(1));
     char path[FN_REFLEN];
-    fn_format(path, log_status.rocksdb_wal_files[idx].path_name.c_str() + 1,
+    fn_format(path, f.path_name.c_str() + 1,
               rocksdb_wal_dir.empty() ? rocksdb_datadir.c_str()
                                       : rocksdb_wal_dir.c_str(),
               "", MY_UNPACK_FILENAME | MY_SAFE_PATH);
-    live_files.push_back(
-        datadir_entry_t("", path, ".rocksdb",
-                        log_status.rocksdb_wal_files[idx].path_name.c_str() + 1,
-                        false, file_size));
+    live_files.push_back(datadir_entry_t("", path, ".rocksdb",
+                                         f.path_name.c_str() + 1, false,
+                                         f.file_size_bytes));
   }
+
+  file_list checkpoint_files = Myrocks_datadir(checkpoint_dir).files();
+
+  checkpoint_files.erase(
+      std::remove_if(checkpoint_files.begin(), checkpoint_files.end(),
+                     [&live_wal_set](const datadir_entry_t &x) {
+                       return (live_wal_set.count(x.file_name) > 0);
+                     }),
+      checkpoint_files.end());
 
   return checkpoint_files;
 }
 
-using const_datadir_iter_t = const std::vector<datadir_entry_t>::const_iterator;
-
-static void par_copy_rocksdb_files(const const_datadir_iter_t &start,
-                                   const const_datadir_iter_t &end,
+static void par_copy_rocksdb_files(const Myrocks_datadir::const_iterator &start,
+                                   const Myrocks_datadir::const_iterator &end,
                                    size_t thread_n, ds_ctxt_t *ds,
                                    bool *result) {
   for (auto it = start; it != end; it++) {
@@ -1284,8 +1267,8 @@ static void par_copy_rocksdb_files(const const_datadir_iter_t &start,
   }
 }
 
-static void backup_rocksdb_files(const const_datadir_iter_t &start,
-                                 const const_datadir_iter_t &end,
+static void backup_rocksdb_files(const Myrocks_datadir::const_iterator &start,
+                                 const Myrocks_datadir::const_iterator &end,
                                  size_t thread_n, bool *result) {
   for (auto it = start; it != end; it++) {
     if (!copy_file(ds_uncompressed_data, it->path.c_str(), it->rel_path.c_str(),
@@ -1306,12 +1289,12 @@ static bool backup_rocksdb(const Myrocks_checkpoint &checkpoint,
   using std::placeholders::_2;
   using std::placeholders::_3;
 
-  std::function<void(const const_datadir_iter_t &, const const_datadir_iter_t &,
-                     size_t)>
+  std::function<void(const Myrocks_datadir::const_iterator &,
+                     const Myrocks_datadir::const_iterator &, size_t)>
       copy = std::bind(&backup_rocksdb_files, _1, _2, _3, &result);
 
-  Myrocks_checkpoint::files_t live_wal_files;
-  Myrocks_checkpoint::files_t checkpoint_files =
+  Myrocks_checkpoint::file_list live_wal_files;
+  Myrocks_checkpoint::file_list checkpoint_files =
       checkpoint.files(log_status, live_wal_files);
 
   /* copy live wal files first */
@@ -1698,7 +1681,7 @@ bool copy_incremental_over_full() {
         }
       }
       if (rmdir(ROCKSDB_SUBDIR)) {
-        msg("xtrabackup: error: unable to unlink directory '" ROCKSDB_SUBDIR
+        msg("xtrabackup: error: unable to remove directory '" ROCKSDB_SUBDIR
             "'\n");
         ret = false;
         goto cleanup;
@@ -1709,8 +1692,8 @@ bool copy_incremental_over_full() {
     using std::placeholders::_2;
     using std::placeholders::_3;
     bool result = true;
-    std::function<void(const const_datadir_iter_t &,
-                       const const_datadir_iter_t &, size_t)>
+    std::function<void(const Myrocks_datadir::const_iterator &,
+                       const Myrocks_datadir::const_iterator &, size_t)>
         copy = std::bind(&par_copy_rocksdb_files, _1, _2, _3, ds_data, &result);
 
     par_for(PFS_NOT_INSTRUMENTED, rocksdb.files(), xtrabackup_parallel, copy);
@@ -2186,6 +2169,9 @@ bool copy_back(int argc, char **argv) {
     }
   }
 
+  ds_destroy(ds_data);
+  ds_data = NULL;
+
   /* copy rocksdb datadir */
   if (directory_exists(ROCKSDB_SUBDIR, false)) {
     Myrocks_datadir rocksdb(ROCKSDB_SUBDIR);
@@ -2209,12 +2195,12 @@ bool copy_back(int argc, char **argv) {
     using std::placeholders::_1;
     using std::placeholders::_2;
     using std::placeholders::_3;
-    std::function<void(const const_datadir_iter_t &,
-                       const const_datadir_iter_t &, size_t)>
+    std::function<void(const Myrocks_datadir::const_iterator &,
+                       const Myrocks_datadir::const_iterator &, size_t)>
         copy = std::bind(&par_copy_rocksdb_files, _1, _2, _3, ds_data, &ret);
 
     if (rocksdb_wal_dir.empty()) {
-      par_for(PFS_NOT_INSTRUMENTED, rocksdb.files(""), xtrabackup_parallel,
+      par_for(PFS_NOT_INSTRUMENTED, rocksdb.files("", ""), xtrabackup_parallel,
               copy);
     } else {
       par_for(PFS_NOT_INSTRUMENTED, rocksdb.data_files(""), xtrabackup_parallel,
@@ -2241,8 +2227,8 @@ bool copy_back(int argc, char **argv) {
       using std::placeholders::_1;
       using std::placeholders::_2;
       using std::placeholders::_3;
-      std::function<void(const const_datadir_iter_t &,
-                         const const_datadir_iter_t &, size_t)>
+      std::function<void(const Myrocks_datadir::const_iterator &,
+                         const Myrocks_datadir::const_iterator &, size_t)>
           copy = std::bind(&par_copy_rocksdb_files, _1, _2, _3, ds_data, &ret);
 
       par_for(PFS_NOT_INSTRUMENTED, rocksdb.wal_files(""), xtrabackup_parallel,
