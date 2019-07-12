@@ -1842,9 +1842,7 @@ recv_parse_or_apply_log_rec_body(
 	        Otherwise, redo will not find the key to decrypt
 		the data pages. */
 		if (page_no == 0 && !is_system_tablespace(space_id)) {
-			return(fil_write_encryption_parse(ptr,
-							  end_ptr,
-							  space_id));
+			fil_write_encryption_parse(ptr, end_ptr, space_id);
 		}
 		break;
 
