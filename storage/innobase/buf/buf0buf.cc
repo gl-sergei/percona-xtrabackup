@@ -5762,13 +5762,6 @@ buf_page_io_complete(
 			frame = ((buf_block_t*) bpage)->frame;
 		}
 
-		/* Do not validate, recover and apply change buffer entries to
-		bogus pages which replace skipped pages in compact backups. */
-		if (srv_compact_backup && buf_page_is_compacted(frame)) {
-
-			bpage->is_compacted = TRUE;
-		}
-
 		/* If this page is not uninitialized and not in the
 		doublewrite buffer, then the page number and space id
 		should be the same as in block. */

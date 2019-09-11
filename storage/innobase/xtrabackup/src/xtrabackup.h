@@ -70,8 +70,6 @@ extern lsn_t checkpoint_lsn_start;
 
 extern xb_page_bitmap *changed_page_bitmap;
 
-extern ulint	xtrabackup_rebuild_threads;
-
 extern char		*xtrabackup_incremental;
 extern my_bool		xtrabackup_incremental_force_scan;
 
@@ -89,7 +87,6 @@ extern char		*xtrabackup_databases_file;
 extern char		*xtrabackup_tables_exclude;
 extern char		*xtrabackup_databases_exclude;
 
-extern my_bool		xtrabackup_compact;
 extern ibool		xtrabackup_compress;
 extern ibool		xtrabackup_encrypt;
 
@@ -125,7 +122,6 @@ extern char		*xtrabackup_incremental_basedir;
 extern char		*xtrabackup_extra_lsndir;
 extern char		*xtrabackup_incremental_dir;
 extern ulint		xtrabackup_log_copy_interval;
-extern my_bool		xtrabackup_rebuild_indexes;
 extern char		*xtrabackup_stream_str;
 extern long		xtrabackup_throttle;
 extern longlong		xtrabackup_use_memory;

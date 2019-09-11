@@ -1760,7 +1760,7 @@ char* get_xtrabackup_info(MYSQL *connection)
 		 || xtrabackup_databases_file) ? "Y" : "N",
 		xtrabackup_incremental ? "Y" : "N", /* incremental */
 		xb_stream_format_name[xtrabackup_stream_fmt], /* format */
-		xtrabackup_compact ? "Y" : "N", /* compact */
+		"N", /* compact */
 		xtrabackup_compress ? "compressed" : "N", /* compressed */
 		xtrabackup_encrypt ? "Y" : "N"); /* encrypted */
 
@@ -1954,7 +1954,7 @@ write_xtrabackup_info(MYSQL *connection)
 
 	/* compact (Y | N) */
 	bind[idx].buffer_type = MYSQL_TYPE_STRING;
-	bind[idx].buffer = (char*)(xtrabackup_compact ? "Y" : "N");
+	bind[idx].buffer = (char*)("N");
 	bind[idx].buffer_length = 1;
 	++idx;
 

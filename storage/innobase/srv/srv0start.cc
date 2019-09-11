@@ -2689,10 +2689,6 @@ files_checked:
 #endif
 	}
 
-	if (srv_rebuild_indexes) {
-		xb_compact_rebuild_indexes();
-	}
-
 	if (srv_print_verbose_log) {
 		ib::info() << INNODB_VERSION_STR
 			<< " started; log sequence number "

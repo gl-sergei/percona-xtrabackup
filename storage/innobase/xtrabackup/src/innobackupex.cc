@@ -127,7 +127,6 @@ char *ibx_backup_directory = NULL;
 
 /* copy of proxied xtrabackup options */
 my_bool ibx_xb_close_files;
-my_bool	ibx_xtrabackup_compact;
 const char *ibx_xtrabackup_compress_alg;
 uint ibx_xtrabackup_compress_threads;
 ulonglong ibx_xtrabackup_compress_chunk_size;
@@ -144,8 +143,6 @@ my_bool	ibx_xtrabackup_incremental_force_scan;
 ulint ibx_xtrabackup_log_copy_interval;
 char *ibx_xtrabackup_incremental;
 int ibx_xtrabackup_parallel;
-my_bool ibx_xtrabackup_rebuild_indexes;
-ulint ibx_xtrabackup_rebuild_threads;
 char *ibx_xtrabackup_stream_str;
 char *ibx_xtrabackup_tables_file;
 long ibx_xtrabackup_throttle;
@@ -230,8 +227,6 @@ enum innobackupex_options
 	OPT_INCREMENTAL_FORCE_SCAN,
 	OPT_LOG_COPY_INTERVAL,
 	OPT_PARALLEL,
-	OPT_REBUILD_INDEXES,
-	OPT_REBUILD_THREADS,
 	OPT_STREAM,
 	OPT_TABLES_FILE,
 	OPT_THROTTLE,
@@ -543,12 +538,6 @@ static struct my_option ibx_long_options[] =
 	 (uchar*) &ibx_xb_close_files, (uchar*) &ibx_xb_close_files, 0,
 	 GET_BOOL, NO_ARG, 0, 0, 0, 0, 0, 0},
 
-	{"compact", OPT_COMPACT, "Create a compact backup with all secondary "
-	 "index pages omitted. This option is passed directly to xtrabackup. "
-	 "See xtrabackup documentation for details.",
-	 (uchar*) &ibx_xtrabackup_compact, (uchar*) &ibx_xtrabackup_compact,
-	 0, GET_BOOL, NO_ARG, 0, 0, 0, 0, 0, 0},
-
 	{"compress", OPT_COMPRESS, "This option instructs xtrabackup to "
 	 "compress backup copies of InnoDB data files. It is passed directly "
 	 "to the xtrabackup child process. Try 'xtrabackup --help' for more "
@@ -674,23 +663,6 @@ static struct my_option ibx_long_options[] =
 	 "xtrabackup documentation for details.",
 	 (uchar*) &ibx_xtrabackup_parallel, (uchar*) &ibx_xtrabackup_parallel,
 	 0, GET_INT, REQUIRED_ARG, 1, 1, INT_MAX, 0, 0, 0},
-
-	{"rebuild-indexes", OPT_REBUILD_INDEXES,
-	 "This option only has effect when used together with the --apply-log "
-	 "option and is passed directly to xtrabackup. When used, makes "
-	 "xtrabackup rebuild all secondary indexes after applying the log. "
-	 "This option is normally used to prepare compact backups. See the "
-	 "XtraBackup manual for more information.",
-	 (uchar*) &ibx_xtrabackup_rebuild_indexes,
-	 (uchar*) &ibx_xtrabackup_rebuild_indexes,
-	 0, GET_BOOL, NO_ARG, 0, 0, 0, 0, 0, 0},
-
-	{"rebuild-threads", OPT_REBUILD_THREADS,
-	 "Use this number of threads to rebuild indexes in a compact backup. "
-	 "Only has effect with --prepare and --rebuild-indexes.",
-	 (uchar*) &ibx_xtrabackup_rebuild_threads,
-	 (uchar*) &ibx_xtrabackup_rebuild_threads,
-	 0, GET_UINT, REQUIRED_ARG, 1, 1, UINT_MAX, 0, 0, 0},
 
 	{"stream", OPT_STREAM, "This option specifies the format in which to "
 	 "do the streamed backup.  The option accepts a string argument. The "
@@ -1052,7 +1024,6 @@ ibx_init()
 
 	/* setup xtrabackup options */
 	xb_close_files = ibx_xb_close_files;
-	xtrabackup_compact = ibx_xtrabackup_compact;
 	xtrabackup_compress_alg = ibx_xtrabackup_compress_alg;
 	xtrabackup_compress_threads = ibx_xtrabackup_compress_threads;
 	xtrabackup_compress_chunk_size = ibx_xtrabackup_compress_chunk_size;
@@ -1070,8 +1041,6 @@ ibx_init()
 	xtrabackup_log_copy_interval = ibx_xtrabackup_log_copy_interval;
 	xtrabackup_incremental = ibx_xtrabackup_incremental;
 	xtrabackup_parallel = ibx_xtrabackup_parallel;
-	xtrabackup_rebuild_indexes = ibx_xtrabackup_rebuild_indexes;
-	xtrabackup_rebuild_threads = ibx_xtrabackup_rebuild_threads;
 	xtrabackup_stream_str = ibx_xtrabackup_stream_str;
 	xtrabackup_tables_file = ibx_xtrabackup_tables_file;
 	xtrabackup_throttle = ibx_xtrabackup_throttle;

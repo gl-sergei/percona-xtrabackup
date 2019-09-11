@@ -25,9 +25,6 @@ Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA
 extern "C" {
 #endif
 
-extern ibool srv_compact_backup;
-extern ibool srv_rebuild_indexes;
-
 typedef enum {REDO_LOG_V0, REDO_LOG_V1} redo_log_version_t;
 extern ulint redo_log_version;
 

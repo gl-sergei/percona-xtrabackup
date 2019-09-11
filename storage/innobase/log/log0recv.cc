@@ -2546,14 +2546,6 @@ recv_recover_page_func(
 			if (page_zip) {
 				memset(FIL_PAGE_LSN + page_zip->data, 0, 8);
 			}
-
-			if (!block->page.is_compacted
-			    && block->page.is_compacted) {
-
-				ut_ad(srv_compact_backup);
-
-				block->page.is_compacted = FALSE;
-			}
 		}
 
 		/* If per-table tablespace was truncated and there exist REDO

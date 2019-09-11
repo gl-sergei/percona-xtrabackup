@@ -225,8 +225,6 @@ char *xtrabackup_encrypt_key_file = NULL;
 uint xtrabackup_encrypt_threads;
 ulonglong xtrabackup_encrypt_chunk_size = 0;
 
-ulint xtrabackup_rebuild_threads = 1;
-
 /* sleep interval beetween log copy iterations in log copying thread
 in milliseconds (default is 1 second) */
 ulint xtrabackup_log_copy_interval = 1000;
@@ -285,7 +283,6 @@ char*	innobase_ignored_opt			= NULL;
 char*	innobase_data_home_dir			= NULL;
 char*   innobase_data_file_path                 = NULL;
 char*   innobase_temp_data_file_path            = NULL;
-char*	innobase_log_arch_dir			= NULL;/* unused */
 /* The following has a misleading name: starting from 4.0.5, this also
 affects Windows: */
 char*	innobase_unix_file_flush_method		= NULL;
@@ -294,7 +291,6 @@ char*	innobase_unix_file_flush_method		= NULL;
 values */
 
 ulong	innobase_fast_shutdown			= 1;
-my_bool innobase_log_archive			= FALSE;/* unused */
 my_bool innobase_use_doublewrite    = TRUE;
 my_bool innobase_use_checksums      = TRUE;
 my_bool innobase_use_large_pages    = FALSE;
@@ -322,13 +318,8 @@ it every INNOBASE_WAKE_INTERVAL'th step. */
 #define INNOBASE_WAKE_INTERVAL	32
 ulong	innobase_active_counter	= 0;
 
-ibool srv_compact_backup = FALSE;
-ibool srv_rebuild_indexes = FALSE;
-
 static char *xtrabackup_debug_sync = NULL;
 
-my_bool xtrabackup_compact = FALSE;
-my_bool xtrabackup_rebuild_indexes = FALSE;
 
 my_bool xtrabackup_incremental_force_scan = FALSE;
 
@@ -608,8 +599,6 @@ enum options_xtrabackup
   OPT_INNODB_FLUSH_LOG_AT_TRX_COMMIT,
   OPT_INNODB_FLUSH_METHOD,
   OPT_INNODB_LOCKS_UNSAFE_FOR_BINLOG,
-  OPT_INNODB_LOG_ARCH_DIR,
-  OPT_INNODB_LOG_ARCHIVE,
   OPT_INNODB_LOG_GROUP_HOME_DIR,
   OPT_INNODB_MAX_DIRTY_PAGES_PCT,
   OPT_INNODB_MAX_PURGE_LAG,
@@ -631,7 +620,6 @@ enum options_xtrabackup
   OPT_INNODB_EXTRA_UNDOSLOTS,
   OPT_INNODB_DOUBLEWRITE_FILE,
   OPT_INNODB_BUFFER_POOL_FILENAME,
-  OPT_INNODB_FORCE_RECOVERY,
   OPT_INNODB_LOCK_WAIT_TIMEOUT,
   OPT_INNODB_LOG_BUFFER_SIZE,
   OPT_INNODB_LOG_FILE_SIZE,
@@ -642,9 +630,6 @@ enum options_xtrabackup
   OPT_INNODB_THREAD_CONCURRENCY,
   OPT_INNODB_THREAD_SLEEP_DELAY,
   OPT_XTRA_DEBUG_SYNC,
-  OPT_XTRA_COMPACT,
-  OPT_XTRA_REBUILD_INDEXES,
-  OPT_XTRA_REBUILD_THREADS,
   OPT_INNODB_CHECKSUM_ALGORITHM,
   OPT_INNODB_UNDO_DIRECTORY,
   OPT_INNODB_UNDO_TABLESPACES,
@@ -790,7 +775,8 @@ struct my_option xb_client_options[] =
    0, GET_BOOL, NO_ARG, 0, 0, 0, 0, 0, 0},
 
   {"stream", OPT_XTRA_STREAM, "Stream all backup files to the standard output "
-   "in the specified format. Currently the only supported format is 'tar'.",
+   "in the specified format. Currently the only supported formats are 'tar' "
+   "and 'xbstream'.",
    (G_PTR*) &xtrabackup_stream_str, (G_PTR*) &xtrabackup_stream_str, 0, GET_STR,
    REQUIRED_ARG, 0, 0, 0, 0, 0, 0},
 
@@ -833,23 +819,6 @@ struct my_option xb_client_options[] =
    "Size of working buffer(S) for encryption threads in bytes. The default value is 64K.",
    (G_PTR*) &xtrabackup_encrypt_chunk_size, (G_PTR*) &xtrabackup_encrypt_chunk_size,
    0, GET_ULL, REQUIRED_ARG, (1 << 16), 1024, ULLONG_MAX, 0, 0, 0},
-
-  {"compact", OPT_XTRA_COMPACT,
-   "Create a compact backup by skipping secondary index pages.",
-   (G_PTR*) &xtrabackup_compact, (G_PTR*) &xtrabackup_compact,
-   0, GET_BOOL, NO_ARG, 0, 0, 0, 0, 0, 0},
-
-  {"rebuild_indexes", OPT_XTRA_REBUILD_INDEXES,
-   "Rebuild secondary indexes in InnoDB tables after applying the log. "
-   "Only has effect with --prepare.",
-   (G_PTR*) &xtrabackup_rebuild_indexes, (G_PTR*) &xtrabackup_rebuild_indexes,
-   0, GET_BOOL, NO_ARG, 0, 0, 0, 0, 0, 0},
-
-  {"rebuild_threads", OPT_XTRA_REBUILD_THREADS,
-   "Use this number of threads to rebuild indexes in a compact backup. "
-   "Only has effect with --prepare and --rebuild-indexes.",
-   (G_PTR*) &xtrabackup_rebuild_threads, (G_PTR*) &xtrabackup_rebuild_threads,
-   0, GET_UINT, REQUIRED_ARG, 1, 1, UINT_MAX, 0, 0, 0},
 
   {"incremental-force-scan", OPT_XTRA_INCREMENTAL_FORCE_SCAN,
    "Perform a full-scan incremental backup even in the presence of changed "
@@ -1000,8 +969,7 @@ struct my_option xb_client_options[] =
   {"no-backup-locks", OPT_NO_BACKUP_LOCKS, "This option controls if "
    "backup locks should be used instead of FLUSH TABLES WITH READ LOCK "
    "on the backup stage. The option has no effect when backup locks are "
-   "not supported by the server. This option is enabled by default, "
-   "disable with --no-backup-locks.",
+   "not supported by the server.",
    (uchar *) &opt_no_backup_locks,
    (uchar *) &opt_no_backup_locks,
    0, GET_BOOL, NO_ARG, 0, 0, 0, 0, 0, 0},
@@ -1059,10 +1027,11 @@ struct my_option xb_client_options[] =
   {"incremental-history-uuid", OPT_INCREMENTAL_HISTORY_UUID,
    "This option specifies the UUID of the specific history record "
    "stored in the PERCONA_SCHEMA.xtrabackup_history to base an "
-   "incremental backup on. --incremental-history-name, "
-   "--incremental-basedir and --incremental-lsn. If no valid lsn can be "
+   "incremental backup on. This will be mutually "
+   "exclusive with --incremental-history-name, --incremental-basedir "
+   "and --incremental-lsn. If no valid lsn can be "
    "found (no success record with that uuid) xtrabackup will return "
-   "with an error. It is used with the --incremental option.",
+   "with an error.",
    (uchar*) &opt_incremental_history_uuid,
    (uchar*) &opt_incremental_history_uuid, 0, GET_STR,
    REQUIRED_ARG, 0, 0, 0, 0, 0, 0},
@@ -1271,16 +1240,6 @@ Disable with --skip-innodb-doublewrite.", (G_PTR*) &innobase_use_doublewrite,
    "With which method to flush data.", (G_PTR*) &innobase_unix_file_flush_method,
    (G_PTR*) &innobase_unix_file_flush_method, 0, GET_STR, REQUIRED_ARG, 0, 0, 0,
    0, 0, 0},
-
-/* ####### Should we use this option? ####### */
-  {"innodb_force_recovery", OPT_INNODB_FORCE_RECOVERY,
-   "Helps to save your data in case the disk image of the database becomes corrupt.",
-   (G_PTR*) &innobase_force_recovery, (G_PTR*) &innobase_force_recovery, 0,
-   GET_LONG, REQUIRED_ARG, 0, 0, 6, 0, 1, 0},
-
-  {"innodb_log_arch_dir", OPT_INNODB_LOG_ARCH_DIR,
-   "Where full logs should be archived.", (G_PTR*) &innobase_log_arch_dir,
-   (G_PTR*) &innobase_log_arch_dir, 0, GET_STR, REQUIRED_ARG, 0, 0, 0, 0, 0, 0},
   {"innodb_log_buffer_size", OPT_INNODB_LOG_BUFFER_SIZE,
    "The size of the buffer which InnoDB uses to write log to the log files on disk.",
    (G_PTR*) &innobase_log_buffer_size, (G_PTR*) &innobase_log_buffer_size, 0,
@@ -2215,12 +2174,6 @@ xtrabackup_read_metadata(char *filename)
 	}
 	/* Optional fields */
 
-	if (fscanf(fp, "compact = %d\n", &t) == 1) {
-		xtrabackup_compact = (t == 1);
-	} else {
-		xtrabackup_compact = 0;
-	}
-
 	if (fscanf(fp, "recover_binlog_info = %d\n", &t) == 1) {
 		recover_binlog_info = (t == 1);
 	}
@@ -2246,14 +2199,12 @@ xtrabackup_print_metadata(char *buf, size_t buf_len)
 		 "from_lsn = " LSN_PF "\n"
 		 "to_lsn = " LSN_PF "\n"
 		 "last_lsn = " LSN_PF "\n"
-		 "compact = %d\n"
 		 "recover_binlog_info = %d\n"
 		 "flushed_lsn = " LSN_PF "\n",
 		 metadata_type,
 		 metadata_from_lsn,
 		 metadata_to_lsn,
 		 metadata_last_lsn,
-		 MY_TEST(xtrabackup_compact == TRUE),
 		 MY_TEST((xtrabackup_backup &&
 			  (opt_binlog_info == BINLOG_INFO_LOCKLESS)) ||
 			 (xtrabackup_prepare && recover_binlog_info)),
@@ -2806,8 +2757,6 @@ xtrabackup_copy_datafile(fil_node_t* node, uint thread_n)
 	/* Setup the page write filter */
 	if (xtrabackup_incremental) {
 		write_filter = &wf_incremental;
-	} else if (xtrabackup_compact) {
-		write_filter = &wf_compact;
 	} else {
 		write_filter = &wf_write_through;
 	}
@@ -7466,76 +7415,6 @@ reencrypt_tablespace_keys(
 	return(ret);
 }
 
-#if 0
-/********************************************************************//**
-Searches archived log files in archived log directory. The min and max
-LSN's of found files as well as archived log file size are stored in
-xtrabackup_arch_first_file_lsn, xtrabackup_arch_last_file_lsn and
-xtrabackup_arch_file_size respectively.
-@return true on success
-*/
-static
-bool
-xtrabackup_arch_search_files(
-/*=========================*/
-	ib_uint64_t	start_lsn)		/*!< in: filter out log files
-						witch does not contain data
-						with lsn < start_lsn */
-{
-	os_file_dir_t	dir;
-	os_file_stat_t	fileinfo;
-	ut_ad(innobase_log_arch_dir);
-
-	dir = os_file_opendir(innobase_log_arch_dir, FALSE);
-	if (!dir) {
-		msg("xtrabackup: error: cannot open archived log directory %s\n",
-		    innobase_log_arch_dir);
-		return false;
-	}
-
-	while(!os_file_readdir_next_file(innobase_log_arch_dir,
-					 dir,
-					 &fileinfo) ) {
-		lsn_t	log_file_lsn;
-		char*	log_str_end_lsn_ptr;
-
-		if (strncmp(fileinfo.name,
-			    IB_ARCHIVED_LOGS_PREFIX,
-			    sizeof(IB_ARCHIVED_LOGS_PREFIX) - 1)) {
-			continue;
-		}
-
-		log_file_lsn = strtoll(fileinfo.name +
-				       sizeof(IB_ARCHIVED_LOGS_PREFIX) - 1,
-				       &log_str_end_lsn_ptr, 10);
-
-		if (*log_str_end_lsn_ptr) {
-			continue;
-		}
-
-		if (log_file_lsn + (fileinfo.size - LOG_FILE_HDR_SIZE)	< start_lsn) {
-			continue;
-		}
-
-		if (!xtrabackup_arch_first_file_lsn ||
-		    log_file_lsn < xtrabackup_arch_first_file_lsn) {
-			xtrabackup_arch_first_file_lsn = log_file_lsn;
-		}
-		if (log_file_lsn > xtrabackup_arch_last_file_lsn) {
-			xtrabackup_arch_last_file_lsn = log_file_lsn;
-		}
-
-		//TODO: find the more suitable way to extract archived log file
-		//size
-		if (fileinfo.size > (int64_t)xtrabackup_arch_file_size) {
-			xtrabackup_arch_file_size = fileinfo.size;
-		}
-	}
-
-	return xtrabackup_arch_first_file_lsn != 0;
-}
-#endif
-
 static
 void
 innodb_free_param()
@@ -7640,41 +7519,37 @@ xtrabackup_prepare_func(int argc, char **argv)
 		exit(EXIT_FAILURE);
 	}
 
-	if (!innobase_log_arch_dir)
-	{
-		if (!strcmp(metadata_type, "full-backuped")) {
-			msg("xtrabackup: This target seems to be not prepared "
-			    "yet.\n");
-		} else if (!strcmp(metadata_type, "log-applied")) {
-			msg("xtrabackup: This target seems to be already "
-			    "prepared with --apply-log-only.\n");
-			goto skip_check;
-		} else if (!strcmp(metadata_type, "full-prepared")) {
-			msg("xtrabackup: This target seems to be already "
-			    "prepared.\n");
-		} else {
-			msg("xtrabackup: This target seems not to have correct "
-			    "metadata...\n");
-			exit(EXIT_FAILURE);
-		}
-
-		if (xtrabackup_incremental) {
-			msg("xtrabackup: error: applying incremental backup "
-			    "needs target prepared with --apply-log-only.\n");
-			exit(EXIT_FAILURE);
-		}
-skip_check:
-		if (xtrabackup_incremental
-		    && metadata_to_lsn != incremental_lsn) {
-			msg("xtrabackup: error: This incremental backup seems "
-			    "not to be proper for the target.\n"
-			    "xtrabackup:  Check 'to_lsn' of the target and "
-			    "'from_lsn' of the incremental.\n");
-			exit(EXIT_FAILURE);
-		}
+	if (!strcmp(metadata_type, "full-backuped")) {
+		msg("xtrabackup: This target seems to be not prepared "
+		    "yet.\n");
+	} else if (!strcmp(metadata_type, "log-applied")) {
+		msg("xtrabackup: This target seems to be already "
+		    "prepared with --apply-log-only.\n");
+		goto skip_check;
+	} else if (!strcmp(metadata_type, "full-prepared")) {
+		msg("xtrabackup: This target seems to be already "
+		    "prepared.\n");
+	} else {
+		msg("xtrabackup: This target seems not to have correct "
+		    "metadata...\n");
+		exit(EXIT_FAILURE);
 	}
 
-        if (xtrabackup_incremental) {
+	if (xtrabackup_incremental) {
+		msg("xtrabackup: error: applying incremental backup "
+		    "needs target prepared with --apply-log-only.\n");
+		exit(EXIT_FAILURE);
+	}
+skip_check:
+	if (xtrabackup_incremental && metadata_to_lsn != incremental_lsn) {
+		msg("xtrabackup: error: This incremental backup seems "
+		    "not to be proper for the target.\n"
+		    "xtrabackup:  Check 'to_lsn' of the target and "
+		    "'from_lsn' of the incremental.\n");
+		exit(EXIT_FAILURE);
+	}
+
+	if (xtrabackup_incremental) {
 		backup_redo_log_flushed_lsn = incremental_flushed_lsn;
         }
 
@@ -7693,7 +7568,7 @@ skip_check:
 
 	xb_filters_init();
 
-	if(!innobase_log_arch_dir && xtrabackup_init_temp_log())
+	if(xtrabackup_init_temp_log())
 		goto error_cleanup;
 
 	if(innodb_init_param()) {
@@ -7732,36 +7607,16 @@ skip_check:
 		}
 	}
 
-	/* Expand compacted datafiles */
-
-	if (xtrabackup_compact) {
-		srv_compact_backup = TRUE;
-
-		if (!xb_expand_datafiles()) {
-			goto error_cleanup;
-		}
-
-		/* Reset the 'compact' flag in xtrabackup_checkpoints so we
-		don't expand on subsequent invocations. */
-		xtrabackup_compact = FALSE;
-		if (!xtrabackup_write_metadata(metadata_path)) {
-			msg("xtrabackup: error: xtrabackup_write_metadata() "
-			    "failed\n");
-			goto error_cleanup;
-		}
-	}
-
 	xb_normalize_init_values();
 
-	if (xtrabackup_incremental || innobase_log_arch_dir) {
+	if (xtrabackup_incremental) {
 		err = xb_data_files_init();
 		if (err != DB_SUCCESS) {
 			msg("xtrabackup: error: xb_data_files_init() failed "
 			    "with error code %lu\n", err);
 			goto error_cleanup;
 		}
-	}
-	if (xtrabackup_incremental) {
+
 		inc_dir_tables_hash = hash_create(1000);
 
 		if(!xtrabackup_apply_deltas()) {
@@ -7769,11 +7624,9 @@ skip_check:
 			xb_filter_hash_free(inc_dir_tables_hash);
 			goto error_cleanup;
 		}
-	}
-	if (xtrabackup_incremental || innobase_log_arch_dir) {
+
 		xb_data_files_close();
-	}
-	if (xtrabackup_incremental) {
+
 		/* Cleanup datadir from tablespaces deleted between full and
 		incremental backups */
 
@@ -7800,7 +7653,6 @@ skip_check:
 	}
 
 	srv_apply_log_only = (ibool) xtrabackup_apply_log_only;
-	srv_rebuild_indexes = (ibool) xtrabackup_rebuild_indexes;
 
 	/* increase IO threads */
 	if(srv_n_file_io_threads < 10) {
@@ -8032,9 +7884,6 @@ next_node:
 		exit(EXIT_FAILURE);
 	}
 
-	if (innobase_log_arch_dir)
-		srv_start_lsn = log_sys->lsn = recv_sys->recovered_lsn;
-
 	/* Check whether the log is applied enough or not. */
 	if ((xtrabackup_incremental
 	     && srv_start_lsn < incremental_to_lsn)
@@ -8137,7 +7986,6 @@ next_node:
 		}
 
 		srv_apply_log_only = FALSE;
-		srv_rebuild_indexes = FALSE;
 
 		/* increase IO threads */
 		if(srv_n_file_io_threads < 10) {
@@ -8257,6 +8105,29 @@ xb_init()
 		return(false);
 	}
 
+	n_mixed_options = 0;
+	if (opt_incremental_history_name != NULL) {
+		mixed_options[n_mixed_options++] = "--incremental-history-name";
+	}
+	if (opt_incremental_history_uuid != NULL) {
+		mixed_options[n_mixed_options++] = "--incremental-history-uuid";
+	}
+	if (xtrabackup_incremental_basedir != NULL) {
+		mixed_options[n_mixed_options++] = "--incremental-basedir";
+	}
+	if (xtrabackup_incremental != NULL &&
+	    xtrabackup_incremental != opt_incremental_history_name &&
+	    xtrabackup_incremental != opt_incremental_history_uuid &&
+	    xtrabackup_incremental != xtrabackup_incremental_basedir) {
+		mixed_options[n_mixed_options++] = "--incremental-lsn";
+	}
+
+	if (n_mixed_options > 1) {
+		msg("Error: %s and %s are mutually exclusive\n",
+			mixed_options[0], mixed_options[1]);
+		return(false);
+	}
+
 	if (opt_slave_info
 		&& opt_no_lock
 		&& !opt_safe_slave_backup) {
@@ -8278,6 +8149,7 @@ xb_init()
 	}
 
 	n_mixed_options = 0;
+	memset(mixed_options, 0, sizeof(mixed_options));
 
 	if (opt_decompress) {
 		mixed_options[n_mixed_options++] = "--decompress";
@@ -8961,27 +8833,10 @@ int main(int argc, char **argv)
 		exit(EXIT_FAILURE);
 	}
 
-	if (!xtrabackup_prepare &&
-	    (innobase_log_arch_dir || xtrabackup_archived_to_lsn)) {
-
-		/* Default my.cnf can contain innobase_log_arch_dir option set
-		for server, reset it to allow backup. */
-		innobase_log_arch_dir= NULL;
-		xtrabackup_archived_to_lsn= 0;
-		msg("xtrabackup: warning: "
-		    "as --innodb-log-arch-dir and --to-archived-lsn can be used "
-		    "only with --prepare they will be reset\n");
-	}
 	if (xtrabackup_throttle && !xtrabackup_backup) {
 		xtrabackup_throttle = 0;
 		msg("xtrabackup: warning: --throttle has effect "
 		    "only with --backup\n");
-	}
-
-	if (xtrabackup_backup && xtrabackup_compact) {
-		msg("xtrabackup: error: compact backups are not supported "
-		    "by this version of xtrabackup\n");
-		exit(EXIT_FAILURE);
 	}
 
 	/* cannot execute both for now */

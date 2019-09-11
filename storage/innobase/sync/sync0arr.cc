@@ -1088,13 +1088,6 @@ sync_array_print_long_waits_low(
 	ibool		fatal = FALSE;
 	double		longest_diff = 0;
 
-	if (srv_rebuild_indexes) {
-
-		/* Avoid long semaphore waits when rebuilding indexes */
-
-		return(FALSE);
-	}
-
 	/* For huge tables, skip the check during CHECK TABLE etc... */
 	if (fatal_timeout > SRV_SEMAPHORE_WAIT_EXTENSION) {
 		return(false);

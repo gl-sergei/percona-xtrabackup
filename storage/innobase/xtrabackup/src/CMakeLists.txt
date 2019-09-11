@@ -81,7 +81,6 @@ MYSQL_ADD_EXECUTABLE(xtrabackup
   xtrabackup.cc
   innobackupex.cc
   changed_page_bitmap.cc
-  compact.cc
   datasink.c
   ds_archive.c
   ds_buffer.c
