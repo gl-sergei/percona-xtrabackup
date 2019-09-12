@@ -4,9 +4,6 @@
 
 start_server
 
-require_server_version_higher_than 5.6.0
-require_xtradb
-
 for i in {1..10} ; do
     cat <<EOF
 CREATE TABLE sbtest$i (

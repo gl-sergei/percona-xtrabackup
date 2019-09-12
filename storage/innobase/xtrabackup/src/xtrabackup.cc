@@ -240,8 +240,6 @@ char *xtrabackup_encrypt_key_file = NULL;
 uint xtrabackup_encrypt_threads;
 ulonglong xtrabackup_encrypt_chunk_size = 0;
 
-ulint xtrabackup_rebuild_threads = 1;
-
 /* sleep interval beetween log copy iterations in log copying thread
 in milliseconds (default is 1 second) */
 ulint xtrabackup_log_copy_interval = 1000;
@@ -285,7 +283,6 @@ long innobase_buffer_pool_awe_mem_mb = 0;
 long innobase_file_io_threads = 4;
 long innobase_read_io_threads = 4;
 long innobase_write_io_threads = 4;
-long innobase_force_recovery = 0;
 long innobase_log_buffer_size = 16 * 1024 * 1024L;
 long innobase_log_files_in_group = 2;
 long innobase_open_files = 300L;
@@ -581,8 +578,6 @@ enum options_xtrabackup {
   OPT_INNODB_FILE_PER_TABLE,
   OPT_INNODB_FLUSH_LOG_AT_TRX_COMMIT,
   OPT_INNODB_FLUSH_METHOD,
-  OPT_INNODB_LOG_ARCH_DIR,
-  OPT_INNODB_LOG_ARCHIVE,
   OPT_INNODB_LOG_GROUP_HOME_DIR,
   OPT_INNODB_MAX_DIRTY_PAGES_PCT,
   OPT_INNODB_MAX_PURGE_LAG,
@@ -602,7 +597,6 @@ enum options_xtrabackup {
   OPT_INNODB_LOG_BLOCK_SIZE,
   OPT_INNODB_EXTRA_UNDOSLOTS,
   OPT_INNODB_BUFFER_POOL_FILENAME,
-  OPT_INNODB_FORCE_RECOVERY,
   OPT_INNODB_LOCK_WAIT_TIMEOUT,
   OPT_INNODB_LOG_BUFFER_SIZE,
   OPT_INNODB_LOG_FILE_SIZE,
@@ -615,9 +609,7 @@ enum options_xtrabackup {
   OPT_INNODB_REDO_LOG_ENCRYPT,
   OPT_INNODB_UNDO_LOG_ENCRYPT,
   OPT_XTRA_DEBUG_SYNC,
-  OPT_XTRA_COMPACT,
   OPT_XTRA_REBUILD_INDEXES,
-  OPT_XTRA_REBUILD_THREADS,
   OPT_INNODB_CHECKSUM_ALGORITHM,
   OPT_INNODB_UNDO_DIRECTORY,
   OPT_INNODB_DIRECTORIES,
@@ -812,7 +804,8 @@ struct my_option xb_client_options[] = {
 
     {"stream", OPT_XTRA_STREAM,
      "Stream all backup files to the standard output "
-     "in the specified format. Currently the only supported format is 'tar'.",
+     "in the specified format. Currently the only supported format is "
+     "'xbstream'.",
      (G_PTR *)&xtrabackup_stream_str, (G_PTR *)&xtrabackup_stream_str, 0,
      GET_STR, REQUIRED_ARG, 0, 0, 0, 0, 0, 0},
 
@@ -864,12 +857,6 @@ struct my_option xb_client_options[] = {
      (G_PTR *)&xtrabackup_encrypt_chunk_size,
      (G_PTR *)&xtrabackup_encrypt_chunk_size, 0, GET_ULL, REQUIRED_ARG,
      (1 << 16), 1024, ULLONG_MAX, 0, 0, 0},
-
-    {"rebuild_threads", OPT_XTRA_REBUILD_THREADS,
-     "Use this number of threads to rebuild indexes in a compact backup. "
-     "Only has effect with --prepare and --rebuild-indexes.",
-     (G_PTR *)&xtrabackup_rebuild_threads, (G_PTR *)&xtrabackup_rebuild_threads,
-     0, GET_UINT, REQUIRED_ARG, 1, 1, UINT_MAX, 0, 0, 0},
 
     {"incremental-force-scan", OPT_XTRA_INCREMENTAL_FORCE_SCAN,
      "Perform a full-scan incremental backup even in the presence of changed "
@@ -1039,8 +1026,7 @@ struct my_option xb_client_options[] = {
      "This option controls if "
      "backup locks should be used instead of FLUSH TABLES WITH READ LOCK "
      "on the backup stage. The option has no effect when backup locks are "
-     "not supported by the server. This option is enabled by default, "
-     "disable with --no-backup-locks.",
+     "not supported by the server.",
      (uchar *)&opt_no_backup_locks, (uchar *)&opt_no_backup_locks, 0, GET_BOOL,
      NO_ARG, 0, 0, 0, 0, 0, 0},
 
@@ -1106,10 +1092,11 @@ struct my_option xb_client_options[] = {
     {"incremental-history-uuid", OPT_INCREMENTAL_HISTORY_UUID,
      "This option specifies the UUID of the specific history record "
      "stored in the PERCONA_SCHEMA.xtrabackup_history to base an "
-     "incremental backup on. --incremental-history-name, "
-     "--incremental-basedir and --incremental-lsn. If no valid lsn can be "
+     "incremental backup on. This will be mutually "
+     "exclusive with --incremental-history-name, --incremental-basedir "
+     "and --incremental-lsn. If no valid lsn can be "
      "found (no success record with that uuid) xtrabackup will return "
-     "with an error. It is used with the --incremental option.",
+     "with an error.",
      (uchar *)&opt_incremental_history_uuid,
      (uchar *)&opt_incremental_history_uuid, 0, GET_STR, REQUIRED_ARG, 0, 0, 0,
      0, 0, 0},
@@ -1334,14 +1321,7 @@ Disable with --skip-innodb-checksums.",
     {"innodb_flush_method", OPT_INNODB_FLUSH_METHOD,
      "With which method to flush data.", &innodb_flush_method,
      &innodb_flush_method, &innodb_flush_method_typelib, GET_ENUM, REQUIRED_ARG,
-     ISO_REPEATABLE_READ, 0, 0, 0, 0, 0},
-
-    /* ####### Should we use this option? ####### */
-    {"innodb_force_recovery", OPT_INNODB_FORCE_RECOVERY,
-     "Helps to save your data in case the disk image of the database becomes "
-     "corrupt.",
-     (G_PTR *)&innobase_force_recovery, (G_PTR *)&innobase_force_recovery, 0,
-     GET_LONG, REQUIRED_ARG, 0, 0, 6, 0, 1, 0},
+     0, 0, 0, 0, 0, 0},
 
     {"innodb_log_buffer_size", OPT_INNODB_LOG_BUFFER_SIZE,
      "The size of the buffer which InnoDB uses to write log to the log files "
@@ -1999,8 +1979,6 @@ static bool innodb_init_param(void) {
   srv_n_file_io_threads = (ulint)innobase_file_io_threads;
   srv_n_read_io_threads = (ulint)innobase_read_io_threads;
   srv_n_write_io_threads = (ulint)innobase_write_io_threads;
-
-  srv_force_recovery = (ulint)innobase_force_recovery;
 
   srv_use_doublewrite_buf = false;
 
@@ -7234,6 +7212,29 @@ bool xb_init() {
     return (false);
   }
 
+  n_mixed_options = 0;
+  if (opt_incremental_history_name != NULL) {
+    mixed_options[n_mixed_options++] = "--incremental-history-name";
+  }
+  if (opt_incremental_history_uuid != NULL) {
+    mixed_options[n_mixed_options++] = "--incremental-history-uuid";
+  }
+  if (xtrabackup_incremental_basedir != NULL) {
+    mixed_options[n_mixed_options++] = "--incremental-basedir";
+  }
+  if (xtrabackup_incremental != NULL &&
+      xtrabackup_incremental != opt_incremental_history_name &&
+      xtrabackup_incremental != opt_incremental_history_uuid &&
+      xtrabackup_incremental != xtrabackup_incremental_basedir) {
+    mixed_options[n_mixed_options++] = "--incremental-lsn";
+  }
+
+  if (n_mixed_options > 1) {
+    msg("Error: %s and %s are mutually exclusive\n", mixed_options[0],
+        mixed_options[1]);
+    return (false);
+  }
+
   if (opt_slave_info && opt_no_lock && !opt_safe_slave_backup) {
     msg("Error: --slave-info is used with --no-lock but "
         "without --safe-slave-backup. The binlog position "
@@ -7253,6 +7254,7 @@ bool xb_init() {
   }
 
   n_mixed_options = 0;
+  memset(mixed_options, 0, sizeof(mixed_options));
 
   if (opt_decompress) {
     mixed_options[n_mixed_options++] = "--decompress";

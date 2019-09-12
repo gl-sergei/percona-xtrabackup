@@ -76,8 +76,6 @@ extern lsn_t checkpoint_lsn_start;
 
 extern xb_page_bitmap *changed_page_bitmap;
 
-extern ulint xtrabackup_rebuild_threads;
-
 extern char *xtrabackup_incremental;
 extern bool xtrabackup_incremental_force_scan;
 
