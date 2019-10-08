@@ -897,7 +897,18 @@ bool Redo_Log_Data_Manager::init() {
 
   ut_a(log_space != nullptr);
 
-  log_read_encryption();
+  if (!log_read_encryption()) {
+    return (false);
+  }
+
+  fil_space_t *space = fil_space_get(dict_sys_t::s_log_space_first_id);
+  ut_ad(space != nullptr);
+
+  if (FSP_FLAGS_GET_ENCRYPTION(space->flags) != srv_redo_log_encrypt) {
+    msg("xtrabackup: Error: encryption information in the redo log header "
+        "does not match the vaule of innodb-redo-log-encrypt.\n");
+    return (false);
+  }
 
   archived_log_state = ARCHIVED_LOG_NONE;
   archived_log_monitor.start();
