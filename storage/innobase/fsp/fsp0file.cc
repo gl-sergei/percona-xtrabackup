@@ -662,7 +662,8 @@ Datafile::validate_first_page(lsn_t*	flush_lsn,
 
 			bool found = false;
 
-                        if (srv_backup_mode) {
+			if (srv_backup_mode &&
+			    recv_sys->encryption_list != NULL) {
 				mutex_enter(&recv_sys->mutex);
 				encryption_list_t::iterator	it;
 				for (it = recv_sys->encryption_list->begin();
@@ -678,7 +679,7 @@ Datafile::validate_first_page(lsn_t*	flush_lsn,
 					}
 				}
 				mutex_exit(&recv_sys->mutex);
-                        }
+			}
 
 			if (!found) {
 				m_is_valid = false;
